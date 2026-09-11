@@ -43,7 +43,7 @@ compat(table): correct the short alias for --page-size
 ```
 
 Types: `feat`, `fix`, `compat`, `perf`, `docs`, `refactor`, `test`, `ci`, `build`, `chore`.
-Scopes: `cli`, `core`, `browser`, `pdf`, `table`, `docker`, `pkg`, `deps`.
+Scopes: `cli`, `core`, `browser`, `pdf`, `table`, `ci`, `docker`, `pkg`, `deps`.
 
 `compat` is specific to this project. Use it for any change driven by matching wkhtmltopdf
 behaviour, so the release notes can carry a compatibility section that migrating users read

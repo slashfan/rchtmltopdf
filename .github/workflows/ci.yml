@@ -137,6 +137,7 @@ jobs:
             build
             chore
           scopes: |
+            ci
             cli
             core
             browser

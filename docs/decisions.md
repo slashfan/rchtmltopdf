@@ -166,6 +166,46 @@ Décisions prises le 2026-09-11 lors de la revue du brief. Chaque entrée indiqu
 
 ---
 
+## D21 — Workflow Git : `main` protégée, pull request obligatoire, merge en squash
+
+**Choix.** Une seule branche longue, `main`. Toute modification passe par une branche courte et une pull request. Fusion en **squash uniquement** ; le titre de la PR devient le sujet du commit sur `main`. Les branches sont supprimées après fusion. Un ruleset GitHub impose la PR, les vérifications CI, l'historique linéaire, et interdit la suppression de `main`.
+
+**Pourquoi.** Le titre de la PR est le seul endroit où un développeur seul écrit systématiquement un message correct : linter le titre revient donc à linter le journal, tout en laissant les commits intermédiaires libres. Le squash garantit l'historique linéaire par construction et un commit par PR, ce que `git-cliff` lira sans bruit de merge.
+
+Le contournement du ruleset est accordé au rôle administrateur en mode `pull_request` et non `always` : un push direct sur `main` reste refusé, mais le propriétaire peut fusionner sa propre PR en cas de blocage. Le mode `always` a été essayé puis abandonné — il laissait passer les push directs, ce qui vidait le dispositif de son sens.
+
+Le nombre d'approbations requises est **0**. Un mainteneur seul ne peut pas approuver sa propre PR ; toute valeur supérieure est un verrouillage.
+
+**Écarté.** Merge commits et rebase-merge (désactivés au niveau du dépôt) ; approbation obligatoire ; `bypass_mode: always`.
+
+## D22 — CI : un job agrégateur `ci` comme seule vérification requise
+
+**Choix.** Les jobs `fmt`, `clippy`, `test`, `msrv`, `docs` et `pr-title` alimentent un job `ci` qui échoue si l'un d'eux a échoué. Le ruleset n'exige que `ci`.
+
+**Pourquoi.** Ajouter, renommer, scinder ou matricer un job ne demande alors aucune modification de la protection de branche. Cela évite surtout le blocage classique où une vérification requise n'est jamais rapportée — job ignoré par un filtre ou une condition — et rend la PR infusionnable indéfiniment. Le job `chromium` (D15) pourra être branché par une seule ligne.
+
+**Écarté.** Lister chaque job comme vérification requise.
+
+## D23 — Dépôt privé jusqu'à la première conversion V0
+
+**Choix.** Le dépôt reste privé jusqu'à ce que V0 produise un PDF. CI est limitée à Linux pendant cette période.
+
+**Pourquoi.** Sur un dépôt privé les minutes GitHub Actions sont décomptées du quota mensuel du plan, et les runners macOS sont facturés dix fois le tarif Linux. Une matrice trois OS coûterait cher pour un projet qui n'a encore aucune dépendance externe ni code spécifique à une plateforme.
+
+**Conséquence à ne pas oublier.** Au passage en public, élargir la matrice `test` à macOS et Windows : D09 résout des bundles macOS et le tokenizer manipule des chemins. Ajouter aussi un `CODE_OF_CONDUCT.md` et envisager la traduction de ce fichier en anglais, puisqu'il est le document le plus utile à un contributeur et le seul qu'il ne peut pas lire.
+
+**Écarté.** Public immédiatement ; privé jusqu'à V1.
+
+## D24 — Le paquet Cargo porte le nom du binaire
+
+**Choix.** Le crate qui contient le binaire s'appelle `rchtmltopdf`, pas `rchtmltopdf-cli`. Les crates de support gardent leur préfixe : `rchtmltopdf-core`, `rchtmltopdf-browser`, `rchtmltopdf-pdf`.
+
+**Pourquoi.** D13 impose un seul nom pour le dépôt, le crate et le binaire. Avec `rchtmltopdf-cli`, `cargo install rchtmltopdf` échoue et le meilleur nom reste libre sur crates.io. Corrigé à zéro commit publié, où cela ne coûte qu'une ligne d'import ; après publication d'un tag, ce serait un changement cassant.
+
+**Écarté.** Conserver `rchtmltopdf-cli`.
+
+---
+
 ## Conséquences transverses
 
 - **Le brief doit gagner une section « smart shrinking »** dans les contraintes, et un guide de migration (options à retirer, différences de taille attendues).
