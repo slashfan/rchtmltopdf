@@ -7,6 +7,7 @@
 use rchtmltopdf::table::{OptionSpec, SECTIONS, Support};
 use rchtmltopdf::tokenizer::{Input, ObjectKind, Output, find_meta_option, tokenize};
 use rchtmltopdf_core::ExitCode;
+use rchtmltopdf_core::settings::LogLevel;
 use std::io::Write;
 use std::process;
 
@@ -43,14 +44,25 @@ fn run(args: &[String]) -> ExitCode {
         }
     };
 
-    let quiet = parsed
-        .occurrences()
-        .any(|occurrence| matches!(occurrence.spec.long, "quiet"));
+    let log_level = match resolve_log_level(&parsed) {
+        Ok(level) => level,
+        Err(message) => {
+            eprintln!("{PROGRAM}: {message}");
+            return ExitCode::Failure;
+        }
+    };
 
-    if !quiet {
+    if log_level.shows_warnings() {
+        // One line per option, not per occurrence: repeating an option should
+        // not repeat the warning.
+        let mut already_said = Vec::new();
         for occurrence in parsed.occurrences() {
+            if already_said.contains(&occurrence.spec.long) {
+                continue;
+            }
             if let Some(warning) = occurrence.spec.support.warning(&occurrence.as_written) {
                 eprintln!("{PROGRAM}: warning: {warning}");
+                already_said.push(occurrence.spec.long);
             }
         }
     }
@@ -70,6 +82,31 @@ fn run(args: &[String]) -> ExitCode {
     );
     eprintln!("{PROGRAM}: run the same command with --dump-parse to see how it was understood.");
     ExitCode::Failure
+}
+
+/// Work out how much to say.
+///
+/// `-q` is defined as shorthand for `--log-level none`, so the two are resolved
+/// together and the last one written wins. Reading only `quiet`, as this used to,
+/// left `--log-level` marked as implemented in the option table while doing
+/// nothing at all.
+fn resolve_log_level(parsed: &rchtmltopdf::Tokenized) -> Result<LogLevel, String> {
+    let mut level = LogLevel::default();
+
+    for occurrence in parsed.occurrences() {
+        match occurrence.spec.long {
+            "quiet" => level = LogLevel::None,
+            "log-level" => {
+                let value = occurrence.values.first().map(String::as_str).unwrap_or("");
+                level = LogLevel::parse(value).ok_or_else(|| {
+                    format!("Unknown log level {value}, expected one of: none, error, warn, info")
+                })?;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(level)
 }
 
 /// Answer a meta option: the ones that report something and exit.
@@ -182,6 +219,17 @@ fn print_help(out: &mut impl Write, extended: bool) {
     let _ = writeln!(
         out,
         "  Chromium. The command line follows wkhtmltopdf; the rendering does not."
+    );
+    // Remove this once the command line drives a conversion. Until then, listing
+    // options without saying so would claim more than the program does.
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "  Conversion is not implemented yet. The options below describe what this"
+    );
+    let _ = writeln!(
+        out,
+        "  program is being built to accept, not what it currently does."
     );
 
     for (section, options) in SECTIONS {
