@@ -13,6 +13,7 @@
 //! grammar is tokenised by hand here.
 
 pub mod apply;
+pub mod convert;
 pub mod input;
 pub mod output;
 pub mod table;

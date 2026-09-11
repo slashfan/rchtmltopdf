@@ -81,7 +81,9 @@ dependencies = [
 name = "rchtmltopdf"
 version = "0.0.1"
 dependencies = [
+ "rchtmltopdf-browser",
  "rchtmltopdf-core",
+ "tokio",
 ]
 
 [[package]]

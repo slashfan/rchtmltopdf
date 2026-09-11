@@ -12,7 +12,10 @@ behaves. If you are migrating, that is the section to read.
 
 Nothing released yet.
 
-The command line grammar and the full wkhtmltopdf option table parse. The browser layer
-finds and launches Chromium, waits for a page to settle, and prints it to PDF. The
-translation from a command line into settings is not written, so the binary does not convert
-yet.
+The binary converts one document: a URL, a local file or standard input, to a file or
+standard output, with paper size, margins, orientation, backgrounds, stylesheets, headers
+and footers. Options with no Chromium equivalent are accepted and warned about rather than
+breaking a command line that uses them.
+
+Several documents, covers and a table of contents are not built. Neither is most of the
+option surface beyond what V0 needed.

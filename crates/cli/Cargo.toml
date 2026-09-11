@@ -15,4 +15,6 @@ name = "rchtmltopdf"
 path = "src/main.rs"
 
 [dependencies]
+rchtmltopdf-browser = { version = "0.0.1", path = "../browser" }
 rchtmltopdf-core.workspace = true
+tokio = { version = "1.53.1", features = ["rt", "macros"] }
