@@ -124,6 +124,25 @@ async fn serve(stream: &mut tokio::net::TcpStream, path: &str) -> std::io::Resul
              </script></body></html>"
                 .to_string(),
         ),
+        "/media" => (
+            "200 OK",
+            "text/html",
+            "<html><head><style>\
+             body { --which: none }\
+             @media screen { body { --which: screen } }\
+             @media print  { body { --which: print } }\
+             </style></head><body>media</body></html>"
+                .to_string(),
+        ),
+        "/painted" => (
+            "200 OK",
+            "text/html",
+            "<html><head><style>\
+             html, body { margin: 0; height: 100%; }\
+             body { background: repeating-linear-gradient(45deg, #333, #333 10px, #ccc 10px, #ccc 20px); }\
+             </style></head><body></body></html>"
+                .to_string(),
+        ),
         "/scripted" => (
             "200 OK",
             "text/html",

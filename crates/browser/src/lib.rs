@@ -11,6 +11,7 @@ pub mod cdp;
 pub mod error;
 pub mod launch;
 pub mod locate;
+pub mod print;
 pub mod render;
 
 pub use cdp::{Client, Event, Session, SessionId};
