@@ -68,6 +68,13 @@ jobs:
         # application bundles, and the tokenizer does path work on every platform.
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # The runner image ships a Chromium but cannot give it a sandbox: user
+      # namespaces are restricted, and Chromium refuses to start rather than run
+      # unsandboxed. Tests that launch a browser follow suit here. This is a
+      # property of the runner, not a default for the product, where the sandbox
+      # stays on unless a caller explicitly gives it up (D10).
+      RCHTMLTOPDF_TEST_NO_SANDBOX: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }

@@ -10,6 +10,25 @@ use rchtmltopdf_browser::locate::{Executable, SystemEnvironment, locate};
 use rchtmltopdf_browser::{Browser, LaunchOptions};
 use serde_json::{Value, json};
 
+/// How to launch here.
+///
+/// The sandbox is not available everywhere. A GitHub runner refuses it outright,
+/// and so does a default Docker container, which is the single most common thing
+/// people hit when moving a deployment into one. Where that is true the
+/// environment says so and these tests follow, rather than pretending the
+/// sandbox works and failing.
+///
+/// It stays on by default, because on a developer machine it does work and that
+/// is the path worth exercising. It is never turned on automatically in the
+/// product (D10): an unsandboxed browser rendering untrusted HTML is the thing
+/// being protected against.
+fn options() -> LaunchOptions {
+    LaunchOptions {
+        no_sandbox: std::env::var_os("RCHTMLTOPDF_TEST_NO_SANDBOX").is_some(),
+        ..LaunchOptions::default()
+    }
+}
+
 fn browser_or_skip() -> Option<Executable> {
     match locate(None, &SystemEnvironment) {
         Ok(executable) => Some(executable),
@@ -31,7 +50,7 @@ async fn a_launched_browser_answers() {
     let Some(executable) = browser_or_skip() else {
         return;
     };
-    let browser = Browser::launch(&executable, &LaunchOptions::default())
+    let browser = Browser::launch(&executable, &options())
         .await
         .unwrap_or_else(|error| panic!("{error}"));
 
@@ -55,9 +74,7 @@ async fn a_page_can_be_opened_and_driven() {
     let Some(executable) = browser_or_skip() else {
         return;
     };
-    let browser = Browser::launch(&executable, &LaunchOptions::default())
-        .await
-        .unwrap();
+    let browser = Browser::launch(&executable, &options()).await.unwrap();
 
     let page = browser.new_page().await.unwrap();
     assert!(!page.target_id().is_empty());
@@ -84,12 +101,8 @@ async fn two_browsers_can_run_at_the_same_time() {
     let Some(executable) = browser_or_skip() else {
         return;
     };
-    let first = Browser::launch(&executable, &LaunchOptions::default())
-        .await
-        .unwrap();
-    let second = Browser::launch(&executable, &LaunchOptions::default())
-        .await
-        .unwrap();
+    let first = Browser::launch(&executable, &options()).await.unwrap();
+    let second = Browser::launch(&executable, &options()).await.unwrap();
 
     for browser in [&first, &second] {
         let page = browser.new_page().await.unwrap();
@@ -114,9 +127,7 @@ async fn dropping_a_browser_cleans_up_after_itself() {
     let Some(executable) = browser_or_skip() else {
         return;
     };
-    let browser = Browser::launch(&executable, &LaunchOptions::default())
-        .await
-        .unwrap();
+    let browser = Browser::launch(&executable, &options()).await.unwrap();
     let pid = format!("{browser:?}");
     drop(browser);
 
@@ -150,7 +161,7 @@ async fn launching_something_that_is_not_a_browser_fails_with_its_output() {
         flavour: rchtmltopdf_browser::Flavour::HeadlessShell,
     };
 
-    let error = Browser::launch(&not_a_browser, &LaunchOptions::default())
+    let error = Browser::launch(&not_a_browser, &options())
         .await
         .expect_err("echo is not a browser");
     let message = error.to_string();
