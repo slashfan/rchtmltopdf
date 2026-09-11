@@ -8,8 +8,8 @@
 
 mod support;
 
-use rchtmltopdf_browser::locate::Executable;
 use rchtmltopdf_browser::Browser;
+use rchtmltopdf_browser::locate::Executable;
 use serde_json::{Value, json};
 use support::{browser_or_skip, one_at_a_time, options};
 
