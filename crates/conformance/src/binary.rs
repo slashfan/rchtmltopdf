@@ -88,6 +88,16 @@ impl Run {
     /// read, so the CI job exercises the cache rung that `fetch-chromium` fills
     /// rather than being handed an answer.
     pub fn output(self) -> Outcome {
+        // One conversion at a time. Every run cold-starts a Chromium, and a
+        // two-core runner asked to start six at once spends its time switching
+        // rather than rendering.
+        //
+        // The honest limit: this is a static, so there is one per test binary
+        // rather than one for the crate. It holds because cargo runs test
+        // binaries one after another.
+        static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _turn = TURN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
         let mut child = Command::new(path())
             .args(&self.args)
             .stdin(Stdio::piped())
