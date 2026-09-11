@@ -19,7 +19,7 @@
 //! ends option parsing. wkhtmltopdf supports neither, so both can only turn a
 //! command line it would reject into one that works.
 
-use crate::table::{OptionSpec, Scope, lookup_long, lookup_short};
+use crate::table::{OptionSpec, Scope, Support, lookup_long, lookup_short};
 use std::fmt;
 
 /// Where a document comes from.
@@ -209,6 +209,46 @@ where
     let argv: Vec<String> = args.into_iter().map(Into::into).collect();
     let tokens = classify(&argv)?;
     assemble(tokens)
+}
+
+/// Find the meta option on a command line, if there is one.
+///
+/// Meta options are the ones answered without converting anything: `--help`,
+/// `--version` and friends. They have to be recognised before the grammar is
+/// enforced, because `--help` on its own has neither an input nor an output and
+/// so can never satisfy it.
+///
+/// The recognition runs the **first tokenizing pass**, which knows how many
+/// values each option takes. That is the whole point. Option values are consumed
+/// positionally on purpose, so a plain scan of `argv` mistakes a *value* for a
+/// request:
+///
+/// ```text
+/// rchtmltopdf --footer-center -h page.html out.pdf   # a footer reading "-h"
+/// rchtmltopdf --custom-header X-Trace -V a.html b.pdf
+/// ```
+///
+/// When the first pass fails, the command line is malformed in some other way,
+/// and a plain scan is used as a fallback so that asking for help still works on
+/// a line that is otherwise broken.
+pub fn find_meta_option(args: &[String]) -> Option<&'static OptionSpec> {
+    let is_meta = |spec: &&'static OptionSpec| spec.support == Support::Meta;
+
+    match classify(args) {
+        Ok(tokens) => tokens.iter().find_map(|token| match token {
+            Token::Opt(occurrence) if occurrence.spec.support == Support::Meta => {
+                Some(occurrence.spec)
+            }
+            _ => None,
+        }),
+        Err(_) => args
+            .iter()
+            .filter(|arg| looks_like_option(arg))
+            .find_map(|arg| {
+                let (name, _) = split_inline_value(arg);
+                resolve(name, 0).ok().filter(is_meta)
+            }),
+    }
 }
 
 /// First pass: decide what each argument is, and pull option values out.

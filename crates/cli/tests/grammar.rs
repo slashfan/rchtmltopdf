@@ -3,7 +3,9 @@
 //! Each test is a command line someone actually writes, or an error someone
 //! actually hits. New compatibility findings belong here first.
 
-use rchtmltopdf::tokenizer::{Input, ObjectKind, Occurrence, Output, ParseError, tokenize};
+use rchtmltopdf::tokenizer::{
+    Input, ObjectKind, Occurrence, Output, ParseError, find_meta_option, tokenize,
+};
 use rchtmltopdf::{Scope, Tokenized};
 
 fn parse(line: &str) -> Tokenized {
@@ -413,4 +415,70 @@ fn a_knp_snappy_style_command_line() {
     assert!(names(&parsed.globals).contains(&"page-size"));
     assert!(names(&parsed.defaults).contains(&"footer-right"));
     assert!(names(&parsed.defaults).contains(&"enable-local-file-access"));
+}
+
+// --- meta options ------------------------------------------------------------
+
+fn meta(line: &str) -> Option<&'static str> {
+    find_meta_option(&split(line)).map(|spec| spec.long)
+}
+
+/// The bug this guards: option values are consumed positionally on purpose, so a
+/// plain scan of argv mistakes a *value* of `-h` for a request for help. Both of
+/// these used to print help or the version instead of converting.
+#[test]
+fn an_option_value_is_never_mistaken_for_a_meta_option() {
+    assert_eq!(meta("--footer-center -h page.html out.pdf"), None);
+    assert_eq!(meta("--custom-header X-Trace -V a.html b.pdf"), None);
+    assert_eq!(meta("--header-left --version a.html out.pdf"), None);
+    assert_eq!(meta("--cookie -h -V a.html out.pdf"), None);
+    // Even at the end of the line, and even though nothing else follows it,
+    // `--version` here is the value of `--margin-top`, not a request.
+    assert_eq!(meta("--margin-top --version"), None);
+
+    // And the values still arrive intact.
+    let parsed = parse("--footer-center -h page.html out.pdf");
+    assert_eq!(parsed.defaults[0].values, ["-h"]);
+    assert_eq!(page_input(&parsed, 0), &Input::Path("page.html".into()));
+}
+
+#[test]
+fn meta_options_are_found_when_they_really_are_options() {
+    assert_eq!(meta("--help"), Some("help"));
+    assert_eq!(meta("-h"), Some("help"));
+    assert_eq!(meta("--extended-help"), Some("extended-help"));
+    assert_eq!(meta("-H"), Some("extended-help"));
+    assert_eq!(meta("--version"), Some("version"));
+    assert_eq!(meta("-V"), Some("version"));
+    assert_eq!(meta("--license"), Some("license"));
+}
+
+#[test]
+fn a_meta_option_is_found_alongside_a_full_command_line() {
+    assert_eq!(
+        meta("--page-size A4 a.html out.pdf --version"),
+        Some("version")
+    );
+}
+
+#[test]
+fn an_ordinary_command_line_has_no_meta_option() {
+    assert_eq!(meta("--page-size A4 a.html out.pdf"), None);
+    assert_eq!(meta(""), None);
+}
+
+/// A command line too broken to tokenize still answers a request for help,
+/// rather than reporting the unknown option and leaving the user stuck.
+#[test]
+fn help_still_works_on_an_otherwise_broken_command_line() {
+    assert_eq!(meta("--bogus-option --help"), Some("help"));
+    assert_eq!(meta("--help --bogus-option"), Some("help"));
+    // A genuinely truncated line: `--cookie` needs two values and gets none.
+    assert_eq!(meta("--help --cookie"), Some("help"));
+}
+
+/// Positionals are never options, however they are spelled.
+#[test]
+fn a_file_named_like_a_meta_option_is_not_one() {
+    assert_eq!(meta("-- --help out.pdf"), None);
 }
