@@ -19,6 +19,7 @@ compile_error!(
 );
 
 pub mod cdp;
+pub mod deadline;
 pub mod error;
 pub mod launch;
 pub mod locate;

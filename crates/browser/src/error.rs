@@ -2,6 +2,7 @@
 
 use std::fmt;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// The error object a failed command reply carries.
 ///
@@ -43,6 +44,14 @@ pub enum Error {
     /// downloaded to recover from this (D09); the user is told how to do it.
     BrowserNotFound {
         attempts: Vec<SearchAttempt>,
+    },
+    /// The conversion ran out of time.
+    ///
+    /// Carries the rung the page was on, because "timed out" alone tells nobody
+    /// whether to raise the limit, fix the document, or look at the network.
+    Timeout {
+        after: Duration,
+        stage: &'static str,
     },
     /// The document could not be loaded.
     ///
@@ -94,6 +103,9 @@ impl fmt::Display for Error {
                     f,
                     "Pass --chromium-path, set CHROME_PATH, or run `rchtmltopdf fetch-chromium` to download a pinned build."
                 )
+            }
+            Error::Timeout { after, stage } => {
+                write!(f, "timed out after {}s while {stage}", after.as_secs())
             }
             Error::Navigation { url, reason } => {
                 write!(f, "could not load {url}: {reason}")

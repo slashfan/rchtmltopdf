@@ -84,6 +84,14 @@ pub struct LaunchOptions {
     /// Extra flags, appended verbatim after the baseline so a caller can
     /// override any of it.
     pub extra_args: Vec<String>,
+    /// Let a slow script keep running.
+    ///
+    /// Chromium's hang monitor is what interrupts one, so this turns that off.
+    /// It is what `--no-stop-slow-scripts` asks for, and it is safe here in a way
+    /// it would not be in a browser somebody is sitting in front of: the
+    /// conversion deadline is the real bound, so a script that never returns
+    /// costs the deadline rather than for ever.
+    pub allow_slow_scripts: bool,
     /// Use this profile directory instead of a throwaway one.
     pub user_data_dir: Option<PathBuf>,
     /// Override how long to wait for the browser to answer after starting.
@@ -168,19 +176,7 @@ impl Browser {
             .unwrap_or_else(|| profile.as_ref().expect("just created").path.clone());
 
         let mut command = std::process::Command::new(&executable.path);
-        command.arg(format!("--user-data-dir={}", profile_path.display()));
-        command.args(BASELINE_FLAGS);
-
-        // The shell is already headless; telling it to be headless is an error.
-        // A full browser has to be told.
-        if executable.flavour == Flavour::FullBrowser {
-            command.arg("--headless=new");
-        }
-        if options.no_sandbox {
-            command.arg("--no-sandbox");
-        }
-        // Last, so a caller can override anything above.
-        command.args(&options.extra_args);
+        command.args(build_args(executable, options, &profile_path));
 
         command.stdin(Stdio::null());
         command.stdout(Stdio::null());
@@ -404,6 +400,36 @@ impl Drop for Page {
     }
 }
 
+/// The command line the browser is started with.
+///
+/// Split out so it can be read and tested on its own. Three of these choices are
+/// wrong in a way that produces a browser which starts and then misbehaves
+/// quietly, which is the hardest kind of mistake to find by running it.
+pub fn build_args(
+    executable: &Executable,
+    options: &LaunchOptions,
+    profile: &std::path::Path,
+) -> Vec<String> {
+    let mut args = vec![format!("--user-data-dir={}", profile.display())];
+    args.extend(BASELINE_FLAGS.iter().map(|flag| (*flag).to_string()));
+
+    // The shell is already headless and rejects being told to be. A full browser
+    // has to be told, or it tries to open a window.
+    if executable.flavour == Flavour::FullBrowser {
+        args.push("--headless=new".to_string());
+    }
+    if options.no_sandbox {
+        args.push("--no-sandbox".to_string());
+    }
+    if options.allow_slow_scripts {
+        args.push("--disable-hang-monitor".to_string());
+    }
+
+    // Last, so a caller can override anything above.
+    args.extend(options.extra_args.iter().cloned());
+    args
+}
+
 /// Read the browser's error stream into a capped buffer.
 ///
 /// Draining it matters beyond diagnostics: an undrained pipe fills, and a
@@ -565,5 +591,107 @@ pub mod testing {
         let (sender, receiver) = attach_pipes(&mut command)?;
         let child = Command::from(command).spawn()?;
         Ok((child, sender, receiver))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::locate::Origin;
+
+    fn executable(flavour: Flavour) -> Executable {
+        Executable {
+            path: PathBuf::from("/somewhere/browser"),
+            origin: Origin::Flag,
+            flavour,
+        }
+    }
+
+    fn args(flavour: Flavour, options: &LaunchOptions) -> Vec<String> {
+        build_args(
+            &executable(flavour),
+            options,
+            std::path::Path::new("/tmp/p"),
+        )
+    }
+
+    /// Telling the headless shell to be headless is an error, and telling a full
+    /// browser nothing makes it try to open a window. Both produce a browser that
+    /// starts and then misbehaves, which is why the flavour is decided when the
+    /// executable is found rather than guessed at here.
+    #[test]
+    fn the_headless_switch_goes_only_to_a_full_browser() {
+        let plain = LaunchOptions::default();
+        assert!(
+            args(Flavour::FullBrowser, &plain)
+                .iter()
+                .any(|a| a == "--headless=new"),
+            "a full browser must be told"
+        );
+        assert!(
+            !args(Flavour::HeadlessShell, &plain)
+                .iter()
+                .any(|a| a.starts_with("--headless")),
+            "the shell must not be"
+        );
+    }
+
+    /// The threat model is untrusted HTML (D10), so this is never on unless a
+    /// caller says so.
+    #[test]
+    fn the_sandbox_is_given_up_only_when_asked() {
+        assert!(
+            !args(Flavour::HeadlessShell, &LaunchOptions::default())
+                .contains(&"--no-sandbox".to_string())
+        );
+        let asked = LaunchOptions {
+            no_sandbox: true,
+            ..LaunchOptions::default()
+        };
+        assert!(args(Flavour::HeadlessShell, &asked).contains(&"--no-sandbox".to_string()));
+    }
+
+    /// What --no-stop-slow-scripts asks for. Safe here in a way it would not be
+    /// in a browser somebody is sitting in front of, because the conversion
+    /// deadline is the real bound.
+    #[test]
+    fn a_slow_script_is_allowed_to_run_only_when_asked() {
+        assert!(
+            !args(Flavour::HeadlessShell, &LaunchOptions::default())
+                .contains(&"--disable-hang-monitor".to_string())
+        );
+        let asked = LaunchOptions {
+            allow_slow_scripts: true,
+            ..LaunchOptions::default()
+        };
+        assert!(
+            args(Flavour::HeadlessShell, &asked).contains(&"--disable-hang-monitor".to_string())
+        );
+    }
+
+    /// A caller's own flags come after the baseline, which is what lets them
+    /// override any of it.
+    #[test]
+    fn extra_arguments_come_last() {
+        let options = LaunchOptions {
+            extra_args: vec!["--lang=fr".to_string(), "--disable-gpu=false".to_string()],
+            ..LaunchOptions::default()
+        };
+        let args = args(Flavour::HeadlessShell, &options);
+        assert_eq!(args.last().unwrap(), "--disable-gpu=false");
+
+        let baseline = args.iter().position(|a| a == "--disable-gpu").unwrap();
+        let override_at = args
+            .iter()
+            .position(|a| a == "--disable-gpu=false")
+            .unwrap();
+        assert!(baseline < override_at, "an override has to come after");
+    }
+
+    #[test]
+    fn the_profile_directory_is_always_passed() {
+        let args = args(Flavour::HeadlessShell, &LaunchOptions::default());
+        assert_eq!(args[0], "--user-data-dir=/tmp/p");
+        assert!(args.contains(&"--remote-debugging-pipe".to_string()));
     }
 }

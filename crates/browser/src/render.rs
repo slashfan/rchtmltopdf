@@ -94,6 +94,13 @@ impl Progress {
     fn enter(&self, stage: Stage) {
         *self.0.lock().unwrap() = stage;
     }
+
+    /// Move the rung along from outside, so a deadline can be tested against a
+    /// known rung without driving a real page there.
+    #[doc(hidden)]
+    pub fn enter_for_test(&self, stage: Stage) {
+        self.enter(stage);
+    }
 }
 
 impl Page {
