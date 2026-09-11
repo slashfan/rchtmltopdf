@@ -355,3 +355,91 @@ async fn a_subscription_can_name_several_methods() {
     assert_eq!(traffic.next().await.unwrap().params["seq"], 2);
     assert_eq!(traffic.next().await.unwrap().params["seq"], 4);
 }
+
+// --- the ways a connection can end -------------------------------------------
+
+/// A stream that can no longer be framed has desynchronised, which is a
+/// different diagnosis from the browser going away. The caller has to be able to
+/// tell them apart, or the size limit's message can never reach anyone.
+#[tokio::test]
+async fn a_framing_error_reaches_the_caller_as_itself() {
+    let (ours, theirs) = tokio::io::duplex(1024 * 1024);
+    let (our_read, our_write) = tokio::io::split(ours);
+    let (_their_read, mut their_write) = tokio::io::split(theirs);
+
+    tokio::spawn(async move {
+        // Endless bytes with no terminator: the framer gives up at its limit.
+        let flood = vec![b'x'; 8192];
+        loop {
+            if their_write.write_all(&flood).await.is_err() {
+                return;
+            }
+        }
+    });
+
+    let client = Client::new(our_read, our_write);
+
+    // Whatever we ask, the answer is that the stream is unusable.
+    match client.send("Page.enable", Value::Null).await {
+        Err(Error::MessageTooLarge { limit }) => assert!(limit > 0),
+        other => panic!("expected MessageTooLarge, got {other:?}"),
+    }
+}
+
+/// Arriving after the connection has gone must give the same diagnosis as being
+/// present when it went, not a generic one.
+#[tokio::test]
+async fn the_reason_survives_for_callers_that_arrive_later() {
+    let (ours, theirs) = tokio::io::duplex(4096);
+    let (our_read, our_write) = tokio::io::split(ours);
+    let (_their_read, mut their_write) = tokio::io::split(theirs);
+
+    tokio::spawn(async move {
+        let flood = vec![b'x'; 8192];
+        loop {
+            if their_write.write_all(&flood).await.is_err() {
+                return;
+            }
+        }
+    });
+
+    let client = Client::new(our_read, our_write);
+    let first = client.send("Page.enable", Value::Null).await;
+    assert!(matches!(first, Err(Error::MessageTooLarge { .. })));
+
+    // Long after the fact, a second caller gets told the same thing.
+    let second = client.send("Page.enable", Value::Null).await;
+    assert!(
+        matches!(second, Err(Error::MessageTooLarge { .. })),
+        "got {second:?}"
+    );
+}
+
+/// The race the pending map was restructured to make impossible: a request
+/// registering itself just as the connection is torn down. Nothing here proves
+/// the interleaving directly, but every one of these must come back rather than
+/// hang, and before the change some of them could wait for ever.
+#[tokio::test]
+async fn requests_racing_a_teardown_all_come_back() {
+    let (ours, theirs) = tokio::io::duplex(4096);
+    let (our_read, our_write) = tokio::io::split(ours);
+
+    let client = std::sync::Arc::new(Client::new(our_read, our_write));
+
+    let mut tasks = Vec::new();
+    for _ in 0..25 {
+        let client = std::sync::Arc::clone(&client);
+        tasks.push(tokio::spawn(async move {
+            client.send("Page.enable", Value::Null).await
+        }));
+    }
+
+    // Hang up while they are in flight.
+    drop(theirs);
+
+    for task in tasks {
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), task).await;
+        let outcome = outcome.expect("a request hung instead of failing").unwrap();
+        assert!(outcome.is_err(), "should not have succeeded: {outcome:?}");
+    }
+}
