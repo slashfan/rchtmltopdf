@@ -28,6 +28,15 @@ fn first_media_box(pdf: &[u8]) -> Option<(f64, f64)> {
     }
 }
 
+/// How many times a PDF object type is named in the file.
+///
+/// Crude, like `first_media_box`, and for the same reason: proper inspection
+/// arrives with the PDF crate. It is enough to tell whether a kind of object is
+/// present at all.
+fn objects_named(kind: &str, pdf: &[u8]) -> usize {
+    String::from_utf8_lossy(pdf).matches(kind).count()
+}
+
 fn approx(actual: f64, expected: f64, tolerance: f64, what: &str) {
     assert!(
         (actual - expected).abs() <= tolerance,
@@ -184,14 +193,25 @@ async fn backgrounds_can_be_turned_off() {
     .await
     .unwrap();
 
-    // A full-bleed painted background is a lot of content; dropping it should be
-    // visible in the size of the file.
+    assert!(with.starts_with(b"%PDF-") && without.starts_with(b"%PDF-"));
+
+    // Structural, not a size comparison. The fixture's background is a repeating
+    // gradient, which Chromium writes as shading and pattern objects. Turning
+    // backgrounds off removes them outright, so their presence is the behaviour
+    // rather than a proxy for it. Comparing file sizes would be a compression
+    // proxy, and the two happen to sit within a factor of two of each other, so
+    // a threshold on that would be guesswork.
     assert!(
-        without.len() < with.len(),
-        "background off produced {} bytes, on produced {}",
-        without.len(),
-        with.len()
+        objects_named("/Shading", &with) > 0,
+        "the painted background should produce shading objects"
     );
+    assert_eq!(
+        objects_named("/Shading", &without),
+        0,
+        "backgrounds off should leave no shading behind"
+    );
+    assert!(objects_named("/Pattern", &with) > 0);
+    assert_eq!(objects_named("/Pattern", &without), 0);
 }
 
 /// Writes a PDF out so it can be checked by something other than this test

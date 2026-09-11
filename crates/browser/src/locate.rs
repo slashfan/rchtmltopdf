@@ -661,15 +661,20 @@ mod host_tests {
     /// Runs the real ladder against whatever machine this is.
     ///
     /// Deliberately tolerant: a machine with no browser is a legitimate outcome
-    /// and must produce a good error rather than a panic. What it pins is that
-    /// a success is coherent, and that a failure explains itself.
+    /// and must produce a good error rather than a panic.
+    ///
+    /// The success arm asks the filesystem directly rather than re-running the
+    /// predicate the ladder used to choose the answer, which could only fail in
+    /// a race and therefore told us nothing.
     #[test]
     fn resolving_on_this_machine_either_finds_something_or_explains_itself() {
-        let env = SystemEnvironment;
-        match locate(None, &env) {
+        match locate(None, &SystemEnvironment) {
             Ok(browser) => {
                 println!("found {} via {}", browser.path.display(), browser.origin);
-                assert!(env.is_executable_file(&browser.path));
+                let metadata = std::fs::metadata(&browser.path)
+                    .expect("the resolved path should exist on disk");
+                assert!(metadata.is_file(), "a browser should be a file");
+                assert!(browser.path.is_absolute(), "the path should be absolute");
             }
             Err(error) => {
                 println!("{error}");
@@ -677,5 +682,54 @@ mod host_tests {
                 assert!(message.contains("fetch-chromium"));
             }
         }
+    }
+
+    /// The only part of the ladder that touches a disk, and the only one with a
+    /// permission check. A symbolic link must be followed: on a Linux runner
+    /// `/usr/bin/google-chrome` is a link into `/opt`, so rejecting links would
+    /// break every browser test with a "not found" message and no unit test
+    /// would flag it.
+    #[test]
+    #[cfg(unix)]
+    fn executability_is_judged_by_the_filesystem() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!("rch-exec-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let env = SystemEnvironment;
+
+        let runnable = root.join("runnable");
+        std::fs::write(&runnable, b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&runnable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(env.is_executable_file(&runnable));
+
+        let plain = root.join("plain");
+        std::fs::write(&plain, b"data").unwrap();
+        std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(!env.is_executable_file(&plain), "not executable");
+
+        let directory = root.join("a-directory");
+        std::fs::create_dir(&directory).unwrap();
+        assert!(
+            !env.is_executable_file(&directory),
+            "a directory is not a browser"
+        );
+
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&runnable, &link).unwrap();
+        assert!(
+            env.is_executable_file(&link),
+            "a link to an executable must be followed"
+        );
+
+        let dangling = root.join("dangling");
+        std::os::unix::fs::symlink(root.join("nothing"), &dangling).unwrap();
+        assert!(!env.is_executable_file(&dangling), "a dangling link");
+
+        assert!(!env.is_executable_file(&root.join("absent")));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

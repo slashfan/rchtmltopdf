@@ -130,6 +130,10 @@ async fn dropping_a_browser_cleans_up_after_itself() {
 /// hang waiting for a handshake that will never come.
 #[tokio::test]
 async fn launching_something_that_is_not_a_browser_fails_with_its_output() {
+    // Takes a turn like every other launching test. Without it, this one creates
+    // a profile directory with the same prefix the cleanup test counts, and the
+    // two can overlap.
+    let _turn = one_at_a_time().await;
     let not_a_browser = Executable {
         path: "/bin/echo".into(),
         origin: rchtmltopdf_browser::Origin::Flag,

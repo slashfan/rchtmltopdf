@@ -314,6 +314,11 @@ impl Browser {
         Ok(())
     }
 
+    /// The browser's process identifier, while it is running.
+    pub fn process_id(&self) -> Option<u32> {
+        self.child.id()
+    }
+
     /// The throwaway profile directory, when this browser owns one.
     ///
     /// `None` when the caller supplied their own, which is theirs to manage.
@@ -359,6 +364,21 @@ pub struct Page {
 }
 
 impl Page {
+    /// Build a page over an existing session.
+    ///
+    /// Exists so the printing and stream-reading paths can be driven by the
+    /// stand-in browser the protocol tests already use. Without it those error
+    /// branches are unreachable without a real Chromium, which means in practice
+    /// they are never exercised at all: a browser cannot be asked to return
+    /// invalid base64, or to stop a stream without ending it.
+    #[doc(hidden)]
+    pub fn over_session(session: crate::cdp::Session, target_id: impl Into<String>) -> Self {
+        Self {
+            session,
+            target_id: target_id.into(),
+        }
+    }
+
     pub fn session(&self) -> &crate::cdp::Session {
         &self.session
     }

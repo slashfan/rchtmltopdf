@@ -41,6 +41,12 @@ pub fn options() -> LaunchOptions {
 
 /// Starting a browser is expensive; these take turns so a small runner is not
 /// asked to cold-start several at once.
+///
+/// The honest limit: this module is compiled separately into each test binary,
+/// so there is one of these per binary, not one for the crate. It holds only
+/// because cargo runs test binaries one after another. Under a runner that gives
+/// each test its own process it would stop holding, and the browser tests would
+/// need a real cross-process lock.
 pub async fn one_at_a_time() -> tokio::sync::SemaphorePermit<'static> {
     static TURN: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
     TURN.acquire().await.expect("the semaphore is never closed")
@@ -71,12 +77,40 @@ impl TestServer {
                     return;
                 };
                 tokio::spawn(async move {
-                    let mut buffer = vec![0u8; 2048];
-                    let Ok(read) = stream.read(&mut buffer).await else {
+                    // Read until the headers end rather than taking one chunk.
+                    // A request split across segments, or one carrying enough
+                    // headers to pass 2 KiB, would otherwise yield a truncated
+                    // path and a 404, failing a test for a reason unrelated to
+                    // itself. That matters more once cookies and custom headers
+                    // are under test.
+                    let mut request = Vec::new();
+                    let mut chunk = [0u8; 1024];
+                    loop {
+                        let Ok(read) = stream.read(&mut chunk).await else {
+                            return;
+                        };
+                        if read == 0 {
+                            break;
+                        }
+                        request.extend_from_slice(&chunk[..read]);
+                        if request.windows(4).any(|w| w == b"\r\n\r\n") {
+                            break;
+                        }
+                        if request.len() > 64 * 1024 {
+                            break;
+                        }
+                    }
+
+                    let text = String::from_utf8_lossy(&request);
+                    let path = text.split_whitespace().nth(1).unwrap_or("/").to_string();
+
+                    // Hanging up without answering is how a request is reported
+                    // as failed rather than finished. A 404 with a body is a
+                    // completed request, so it never reaches that branch.
+                    if path == "/reset" {
                         return;
-                    };
-                    let request = String::from_utf8_lossy(&buffer[..read]).to_string();
-                    let path = request.split_whitespace().nth(1).unwrap_or("/").to_string();
+                    }
+
                     let _ = serve(&mut stream, &path).await;
                 });
             }
@@ -111,6 +145,13 @@ async fn serve(stream: &mut tokio::net::TcpStream, path: &str) -> std::io::Resul
                 "body { color: rebeccapurple }".to_string(),
             )
         }
+        // Points at a resource whose connection is dropped, which is reported as
+        // a failed load rather than a finished one.
+        "/broken-image" => (
+            "200 OK",
+            "text/html",
+            "<html><body><img src=/reset></body></html>".to_string(),
+        ),
         "/missing-image" => (
             "200 OK",
             "text/html",
