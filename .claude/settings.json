@@ -36,8 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "if": "Bash(git commit*)",
-            "command": "cargo fmt --all --check >/dev/null 2>&1 || echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Formatting gate: cargo fmt --all --check failed. Run cargo fmt --all, then commit.\"}}'",
+            "command": "cmd=$(jq -r '.tool_input.command // \"\"'); case \"$cmd\" in *'git commit'*) ;; *) exit 0 ;; esac; cargo fmt --all --check >/dev/null 2>&1 || echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Formatting gate: cargo fmt --all --check failed. Run cargo fmt --all, then commit.\"}}'",
             "timeout": 60,
             "statusMessage": "Checking formatting"
           }

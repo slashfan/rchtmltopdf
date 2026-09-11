@@ -16,38 +16,29 @@ GitHub are in English.
 
 ## State
 
-Early. The pieces work; **the command line does not drive them yet**, so the binary still
-refuses to convert.
+**It converts.** One document at a time, with the paper, margins, orientation, stylesheets
+and headers you ask for.
+
+```bash
+rchtmltopdf --page-size A4 --margin-top 15mm \
+    --footer-center 'Page [page] / [topage]' invoice.html invoice.pdf
+```
+
+A URL, a local file or standard input goes in; a file or standard output comes out. You need
+a Chromium on the machine, which it finds without ever downloading one.
 
 | Layer | Crate | State |
 | --- | --- | --- |
-| Grammar and option table | `crates/cli` | Working |
-| Command line to settings | `crates/cli` | Not started |
+| Grammar, option table, translation | `crates/cli` | Working |
 | Units, page sizes, settings model | `crates/core` | Working |
-| Chrome DevTools Protocol client | `crates/browser` | Working |
-| Finding and launching Chromium | `crates/browser` | Working |
-| Waiting for a page to settle | `crates/browser` | Working |
-| Printing to PDF | `crates/browser` | Working |
+| Finding, launching and driving Chromium | `crates/browser` | Working |
+| Several documents, cover, table of contents | | V2 and V3 |
 | Merge, metadata, outlines | `crates/pdf` | Not started |
 
-The browser layer produces real PDFs today, with the right paper size, margins, orientation
-and stylesheets. What is missing is the translation from a command line into the settings
-that drive it, which is why `rchtmltopdf page.html out.pdf` still tells you conversion is
-not implemented.
-
-`--help` lists the options the parser accepts. Until the translation layer lands, options
-marked as implemented describe the target rather than current behaviour; `--extended-help`
-flags the ones that are accepted and ignored on purpose.
-
-What you can do today:
-
-```bash
-cargo run -- --page-size A4 --footer-center 'Page [page] / [topage]' \
-    https://example.com/invoice/42 invoice.pdf --dump-parse
-```
-
-`--dump-parse` prints how a command line was understood and exits. It is the quickest
-way to check that an existing `wkhtmltopdf` invocation will be accepted.
+Still early. Many wkhtmltopdf options are recognised and ignored with a warning rather than
+honoured; `--extended-help` marks which. `--dump-parse` prints how a command line was
+understood and exits, which is the quickest way to check an existing invocation before
+running it.
 
 ## Why the parser is hand-written
 

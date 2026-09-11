@@ -67,11 +67,16 @@ fn extended_help_lists_more_than_short_help() {
     assert!(stdout(&run(&["--extended-help"])).contains("[accepted, ignored]"));
 }
 
-/// Until the command line drives a conversion, listing options without saying so
-/// claims more than the program does.
+/// The help describes what the program does. It used to carry a note saying
+/// conversion was not implemented; that note came out when it was.
 #[test]
-fn help_says_conversion_is_not_implemented_yet() {
-    assert!(stdout(&run(&["--help"])).contains("not implemented yet"));
+fn help_describes_what_the_program_does() {
+    let help = stdout(&run(&["--help"]));
+    assert!(help.contains("Chromium"), "{help}");
+    assert!(
+        !help.contains("not implemented yet"),
+        "the note should be gone"
+    );
 }
 
 #[test]
@@ -259,10 +264,53 @@ fn diagnostics_never_reach_stdout() {
     assert!(stderr(&output).contains("warning"));
 }
 
+/// Fails before a browser is involved at all, which is why this test needs none.
+/// Starting one to discover a file is missing costs a second and produces a PDF
+/// of an error page rather than an error.
 #[test]
-fn conversion_is_refused_clearly_rather_than_silently() {
-    let output = run(&["a.html", "out.pdf"]);
+fn a_missing_document_fails_by_name_before_anything_starts() {
+    let output = run(&["definitely-not-here.html", "out.pdf"]);
     assert_outcome(&output, 1, false);
-    assert!(stderr(&output).contains("not implemented yet"));
+    assert!(
+        stderr(&output).contains("definitely-not-here.html"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("no such file"),
+        "{}",
+        stderr(&output)
+    );
     assert!(stdout(&output).is_empty());
+    assert!(
+        !std::path::Path::new("out.pdf").exists(),
+        "a failure must leave no document behind"
+    );
+}
+
+/// Also browser-free: what is supported is settled before one is started.
+/// Converting the first of several and saying nothing would produce a document
+/// that looks right and is missing most of itself.
+#[test]
+fn what_is_not_supported_yet_is_refused_by_name() {
+    let several = run(&["a.html", "b.html", "out.pdf"]);
+    assert_outcome(&several, 1, false);
+    assert!(
+        stderr(&several).contains("only one is supported"),
+        "{}",
+        stderr(&several)
+    );
+    assert!(stderr(&several).contains("V2"), "{}", stderr(&several));
+
+    let cover = run(&["cover", "a.html", "out.pdf"]);
+    assert_outcome(&cover, 1, false);
+    assert!(stderr(&cover).contains("cover"), "{}", stderr(&cover));
+
+    let toc = run(&["toc", "out.pdf"]);
+    assert_outcome(&toc, 1, false);
+    assert!(
+        stderr(&toc).contains("table of contents"),
+        "{}",
+        stderr(&toc)
+    );
 }

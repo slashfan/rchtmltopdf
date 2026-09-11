@@ -5,6 +5,7 @@
 //! how a command line was understood.
 
 use rchtmltopdf::apply::apply;
+use rchtmltopdf::convert::convert;
 use rchtmltopdf::table::{OptionSpec, SECTIONS, Support};
 use rchtmltopdf::tokenizer::{Input, ObjectKind, Output, find_meta_option, tokenize};
 use rchtmltopdf_core::ExitCode;
@@ -15,12 +16,17 @@ const PROGRAM: &str = "rchtmltopdf";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
 
-fn main() {
+/// Returns rather than exiting, so every destructor runs: a browser to stop, a
+/// profile directory to remove, a document read from standard input to delete.
+/// Exiting from inside would skip all of it.
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    process::exit(run(&args).as_i32());
+    let outcome = run(&args).await;
+    process::ExitCode::from(u8::try_from(outcome.as_i32()).unwrap_or(1))
 }
 
-fn run(args: &[String]) -> ExitCode {
+async fn run(args: &[String]) -> ExitCode {
     if args.is_empty() {
         print_usage(&mut std::io::stderr());
         return ExitCode::Failure;
@@ -79,7 +85,7 @@ fn run(args: &[String]) -> ExitCode {
         return ExitCode::Success;
     }
 
-    let _settings = match translated {
+    let settings = match translated {
         Ok(settings) => settings,
         Err(error) => {
             eprintln!("{PROGRAM}: {error}");
@@ -87,11 +93,13 @@ fn run(args: &[String]) -> ExitCode {
         }
     };
 
-    eprintln!(
-        "{PROGRAM}: conversion is not implemented yet; only the command line layer is in place."
-    );
-    eprintln!("{PROGRAM}: run the same command with --dump-parse to see how it was understood.");
-    ExitCode::Failure
+    match convert(&settings).await {
+        Ok(()) => ExitCode::Success,
+        Err(error) => {
+            eprintln!("{PROGRAM}: {error}");
+            ExitCode::Failure
+        }
+    }
 }
 
 /// Answer a meta option: the ones that report something and exit.
@@ -204,17 +212,6 @@ fn print_help(out: &mut impl Write, extended: bool) {
     let _ = writeln!(
         out,
         "  Chromium. The command line follows wkhtmltopdf; the rendering does not."
-    );
-    // Remove this once the command line drives a conversion. Until then, listing
-    // options without saying so would claim more than the program does.
-    let _ = writeln!(out);
-    let _ = writeln!(
-        out,
-        "  Conversion is not implemented yet. The options below describe what this"
-    );
-    let _ = writeln!(
-        out,
-        "  program is being built to accept, not what it currently does."
     );
 
     for (section, options) in SECTIONS {
