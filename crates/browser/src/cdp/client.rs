@@ -45,11 +45,64 @@ impl Subscriber {
     }
 }
 
+/// Why a connection ended, kept so a caller arriving afterwards is told
+/// something better than "it closed".
+///
+/// Not the error itself: several callers may be waiting and [`Error`] cannot be
+/// cloned, so enough is kept to rebuild the same error for each of them.
+#[derive(Debug, Clone)]
+enum Ended {
+    /// The browser closed its end. The ordinary case.
+    EndOfStream,
+    /// The stream could no longer be framed, which means it desynchronised.
+    MessageTooLarge { limit: usize },
+    /// Reading or writing failed.
+    Io(String),
+}
+
+impl Ended {
+    fn as_error(&self) -> Error {
+        match self {
+            Ended::EndOfStream => Error::ConnectionClosed,
+            Ended::MessageTooLarge { limit } => Error::MessageTooLarge { limit: *limit },
+            Ended::Io(detail) => Error::Io(std::io::Error::other(detail.clone())),
+        }
+    }
+}
+
+/// Closes the connection however a task ends: normally, by panic, or by being
+/// aborted.
+///
+/// Putting this in each task is what makes the guarantee unconditional. A close
+/// written as the last line of a task body is skipped by both a panic and an
+/// abort, and an abort is exactly what dropping the client does, so every caller
+/// would wait for ever on a path nobody tests.
+struct CloseOnDrop {
+    inner: Arc<Inner>,
+    reason: Ended,
+}
+
+impl Drop for CloseOnDrop {
+    fn drop(&mut self) {
+        self.inner.close(self.reason.clone());
+    }
+}
+
 struct Inner {
     next_id: AtomicU64,
     outgoing: mpsc::UnboundedSender<Vec<u8>>,
-    pending: Mutex<HashMap<u64, oneshot::Sender<Result<Value>>>>,
+    /// `None` once the connection has gone.
+    ///
+    /// The map is the flag. Keeping a separate boolean meant a request could
+    /// check it, then insert its channel *after* the map had been drained, and
+    /// wait for a reply nobody would ever deliver. Here that is unrepresentable
+    /// rather than merely unlikely.
+    pending: Mutex<Option<HashMap<u64, oneshot::Sender<Result<Value>>>>>,
+    /// Why it ended, once it has.
+    ended: Mutex<Option<Ended>>,
     subscribers: Mutex<Vec<Subscriber>>,
+    /// A lock-free hint for [`Client::is_closed`]. Never used to decide whether
+    /// a request may proceed; the map decides that.
     closed: AtomicBool,
 }
 
@@ -67,7 +120,15 @@ impl Inner {
 
         match incoming.id {
             Some(id) => {
-                let Some(sender) = self.pending.lock().unwrap().remove(&id) else {
+                let Some(sender) = self
+                    .pending
+                    .lock()
+                    .unwrap()
+                    .as_mut()
+                    .and_then(|waiting| waiting.remove(&id))
+                else {
+                    // Nobody is waiting: the caller gave up, or the connection
+                    // has already been torn down.
                     return;
                 };
                 let outcome = match incoming.error {
@@ -103,15 +164,37 @@ impl Inner {
         });
     }
 
-    /// Tear the connection down: every waiting caller is told, every subscriber
-    /// sees the end of its stream.
-    fn close(&self) {
+    /// Tear the connection down: every waiting caller is told why, every
+    /// subscriber sees the end of its stream.
+    ///
+    /// Safe to call more than once; the first reason recorded is the one kept,
+    /// because it is the one that actually explains what happened.
+    fn close(&self, reason: Ended) {
         self.closed.store(true, Ordering::SeqCst);
-        let waiting: Vec<_> = self.pending.lock().unwrap().drain().collect();
-        for (_, sender) in waiting {
-            let _ = sender.send(Err(Error::ConnectionClosed));
+
+        {
+            let mut ended = self.ended.lock().unwrap();
+            if ended.is_none() {
+                *ended = Some(reason.clone());
+            }
+        }
+
+        let waiting = self.pending.lock().unwrap().take();
+        if let Some(waiting) = waiting {
+            for (_, sender) in waiting {
+                let _ = sender.send(Err(reason.as_error()));
+            }
         }
         self.subscribers.lock().unwrap().clear();
+    }
+
+    /// The error to hand a caller that arrives after the connection has gone.
+    fn ended_error(&self) -> Error {
+        self.ended
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map_or(Error::ConnectionClosed, Ended::as_error)
     }
 
     async fn request(
@@ -120,10 +203,6 @@ impl Inner {
         method: &str,
         params: Value,
     ) -> Result<Value> {
-        if self.closed.load(Ordering::SeqCst) {
-            return Err(Error::ConnectionClosed);
-        }
-
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let payload = serde_json::to_vec(&Command {
             id,
@@ -137,14 +216,25 @@ impl Inner {
         })?;
 
         let (sender, receiver) = oneshot::channel();
-        self.pending.lock().unwrap().insert(id, sender);
+        // Registering and finding the connection closed are the same operation,
+        // so there is no window between them.
+        match self.pending.lock().unwrap().as_mut() {
+            Some(waiting) => waiting.insert(id, sender),
+            None => return Err(self.ended_error()),
+        };
 
         if self.outgoing.send(frame(&payload)).is_err() {
-            self.pending.lock().unwrap().remove(&id);
-            return Err(Error::ConnectionClosed);
+            if let Some(waiting) = self.pending.lock().unwrap().as_mut() {
+                waiting.remove(&id);
+            }
+            return Err(self.ended_error());
         }
 
-        receiver.await.map_err(|_| Error::ConnectionClosed)?
+        match receiver.await {
+            Ok(outcome) => outcome,
+            // The sender was dropped without answering, which only close() does.
+            Err(_) => Err(self.ended_error()),
+        }
     }
 
     fn subscribe(&self, session: Option<SessionId>, methods: Option<Vec<String>>) -> Events {
@@ -183,35 +273,68 @@ impl Client {
         let inner = Arc::new(Inner {
             next_id: AtomicU64::new(1),
             outgoing,
-            pending: Mutex::new(HashMap::new()),
+            pending: Mutex::new(Some(HashMap::new())),
+            ended: Mutex::new(None),
             subscribers: Mutex::new(Vec::new()),
             closed: AtomicBool::new(false),
         });
 
-        let reader_inner = Arc::clone(&inner);
-        let reader_task = tokio::spawn(async move {
-            let mut framed = Framed::new(reader);
-            // Stops on end of stream, and equally on a framing error: a stream we
-            // can no longer parse is a stream we can no longer trust, and carrying
-            // on would silently mismatch replies to callers.
-            while let Ok(Some(message)) = framed.next_message().await {
-                reader_inner.dispatch(&message);
-            }
-            reader_inner.close();
-        });
+        let reader_task = tokio::spawn({
+            let inner = Arc::clone(&inner);
+            async move {
+                // Closes the connection whichever way this task ends, including
+                // a panic and the abort that dropping the client performs.
+                let mut guard = CloseOnDrop {
+                    inner,
+                    reason: Ended::EndOfStream,
+                };
+                let mut framed = Framed::new(reader);
 
-        let writer_inner = Arc::clone(&inner);
-        let writer_task = tokio::spawn(async move {
-            let mut writer = writer;
-            while let Some(message) = queue.recv().await {
-                if writer.write_all(&message).await.is_err() || writer.flush().await.is_err() {
-                    break;
+                loop {
+                    match framed.next_message().await {
+                        Ok(Some(message)) => guard.inner.dispatch(&message),
+                        Ok(None) => break,
+                        // A stream that can no longer be framed has
+                        // desynchronised, and carrying on would mismatch replies
+                        // to callers. Report that rather than letting it look
+                        // like the browser simply went away.
+                        Err(Error::MessageTooLarge { limit }) => {
+                            guard.reason = Ended::MessageTooLarge { limit };
+                            break;
+                        }
+                        Err(error) => {
+                            guard.reason = Ended::Io(error.to_string());
+                            break;
+                        }
+                    }
                 }
             }
-            // Dropping the writer closes the underlying descriptor, which is what
-            // tells the browser to exit.
-            drop(writer);
-            writer_inner.close();
+        });
+
+        let writer_task = tokio::spawn({
+            let inner = Arc::clone(&inner);
+            async move {
+                let mut guard = CloseOnDrop {
+                    inner,
+                    reason: Ended::EndOfStream,
+                };
+                let mut writer = writer;
+
+                while let Some(message) = queue.recv().await {
+                    if let Err(error) = writer.write_all(&message).await {
+                        guard.reason = Ended::Io(error.to_string());
+                        break;
+                    }
+                    if let Err(error) = writer.flush().await {
+                        guard.reason = Ended::Io(error.to_string());
+                        break;
+                    }
+                }
+
+                // Dropping the writer closes the descriptor, which is what tells
+                // the browser to exit.
+                drop(writer);
+            }
         });
 
         Self {
@@ -298,7 +421,8 @@ impl Drop for Client {
     /// browser down gracefully, send the closing command and await its reply
     /// before dropping this.
     fn drop(&mut self) {
-        self.inner.close();
+        self.inner.close(Ended::EndOfStream);
+        // Each task holds its own guard, so aborting mid-await still closes.
         self.reader_task.abort();
         self.writer_task.abort();
     }
@@ -337,6 +461,28 @@ impl Session {
     /// Subscribe to every event from this session.
     pub fn subscribe_all(&self) -> Events {
         self.inner.subscribe(Some(self.id.clone()), None)
+    }
+
+    /// Send a command without waiting for its reply.
+    ///
+    /// For shutdown, where there is nothing left to await on and no caller to
+    /// report to. Nothing else should use it: a dropped reply is a dropped
+    /// error.
+    pub fn send_detached(&self, method: &str, params: Value) {
+        let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
+        let Ok(payload) = serde_json::to_vec(&Command {
+            id,
+            method,
+            params: if params.is_null() {
+                None
+            } else {
+                Some(&params)
+            },
+            session_id: Some(&self.id),
+        }) else {
+            return;
+        };
+        let _ = self.inner.outgoing.send(frame(&payload));
     }
 }
 

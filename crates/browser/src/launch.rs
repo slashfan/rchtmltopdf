@@ -303,7 +303,14 @@ impl Browser {
     /// Dropping works too, but abruptly. Prefer this where the outcome matters.
     pub async fn close(mut self) -> Result<()> {
         let _ = self.client.send("Browser.close", Value::Null).await;
-        let _ = tokio::time::timeout(Duration::from_secs(5), self.child.wait()).await;
+        if tokio::time::timeout(Duration::from_secs(5), self.child.wait())
+            .await
+            .is_ok()
+        {
+            // Reaped. The identifier is now the kernel's to hand out again, so
+            // Drop must not signal it.
+            self.process_group = None;
+        }
         Ok(())
     }
 
@@ -358,6 +365,22 @@ impl Page {
 
     pub fn target_id(&self) -> &str {
         &self.target_id
+    }
+}
+
+impl Drop for Page {
+    /// Give the target back.
+    ///
+    /// Costs nothing in the one-browser-per-conversion model, where the whole
+    /// process is about to be killed anyway. It matters for the pooled model
+    /// D11 is keeping the door open for, where a page left open is a renderer
+    /// process leaked per conversion.
+    ///
+    /// Sent without waiting: there is no caller left to report to, and if the
+    /// connection has already gone the command is simply dropped.
+    fn drop(&mut self) {
+        self.session
+            .send_detached("Target.closeTarget", json!({ "targetId": self.target_id }));
     }
 }
 
