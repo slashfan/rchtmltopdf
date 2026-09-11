@@ -122,11 +122,22 @@ pub fn all_names() -> impl Iterator<Item = &'static str> {
 mod tests {
     use super::*;
 
+    /// Compare lengths with a tolerance. Never assert exact float equality on a
+    /// converted length: the result depends on whether the compiler contracts a
+    /// multiply and an add into a single fused instruction, which differs
+    /// between architectures.
+    fn approx(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 1e-9,
+            "{actual} is not approximately {expected}"
+        );
+    }
+
     #[test]
     fn a4_is_210_by_297() {
         let a4 = lookup("A4").unwrap();
-        assert_eq!(a4.width.to_mm(), 210.0);
-        assert_eq!(a4.height.to_mm(), 297.0);
+        approx(a4.width.to_mm(), 210.0);
+        approx(a4.height.to_mm(), 297.0);
     }
 
     #[test]
@@ -139,8 +150,8 @@ mod tests {
     #[test]
     fn letter_is_8_5_by_11_inches() {
         let letter = lookup("Letter").unwrap();
-        assert!((letter.width.to_inches() - 8.5).abs() < 1e-6);
-        assert!((letter.height.to_inches() - 11.0).abs() < 1e-6);
+        approx(letter.width.to_inches(), 8.5);
+        approx(letter.height.to_inches(), 11.0);
     }
 
     #[test]
@@ -152,8 +163,8 @@ mod tests {
     #[test]
     fn landscape_swaps_axes() {
         let a4 = lookup("A4").unwrap().landscape();
-        assert_eq!(a4.width.to_mm(), 297.0);
-        assert_eq!(a4.height.to_mm(), 210.0);
+        approx(a4.width.to_mm(), 297.0);
+        approx(a4.height.to_mm(), 210.0);
     }
 
     #[test]

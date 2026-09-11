@@ -65,12 +65,30 @@ impl Length {
         Self::new(value, Unit::Inch)
     }
 
+    /// The length in inches, which is what `Page.printToPDF` takes.
+    ///
+    /// A length already written in inches is returned unchanged rather than
+    /// multiplied by one, so no precision is lost on the way through.
     pub fn to_inches(self) -> f64 {
-        self.value * self.unit.inches_per_unit()
+        match self.unit {
+            Unit::Inch => self.value,
+            _ => self.value * self.unit.inches_per_unit(),
+        }
     }
 
+    /// The length in millimetres.
+    ///
+    /// Millimetres and centimetres are converted directly. Going via inches
+    /// would round-trip through a non-representable factor, so `15mm` would not
+    /// come back as exactly `15.0`, and the error differs between architectures
+    /// depending on whether the compiler contracts the two operations into a
+    /// fused multiply-add.
     pub fn to_mm(self) -> f64 {
-        self.to_inches() * 25.4
+        match self.unit {
+            Unit::Millimeter => self.value,
+            Unit::Centimeter => self.value * 10.0,
+            _ => self.to_inches() * 25.4,
+        }
     }
 
     /// Parse a wkhtmltopdf `<unitreal>`.
