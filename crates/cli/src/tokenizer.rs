@@ -1,0 +1,416 @@
+//! Turning `argv` into objects, options and an output path.
+//!
+//! # The grammar
+//!
+//! ```text
+//! rchtmltopdf [GLOBAL OPTION]... [OBJECT]... <output file>
+//! ```
+//!
+//! An object is `page <input>`, `cover <input>`, `toc`, or a bare input. The
+//! last positional argument is always the output, and everything positional
+//! before it is an input. Options may appear anywhere; a global option applies
+//! to the whole run wherever it sits, while an object option applies to the
+//! object it follows. Object options written before the first object become
+//! defaults inherited by every object.
+//!
+//! # Two deliberate departures from wkhtmltopdf
+//!
+//! `--option=value` is accepted for options taking exactly one value, and `--`
+//! ends option parsing. wkhtmltopdf supports neither, so both can only turn a
+//! command line it would reject into one that works.
+
+use crate::table::{OptionSpec, Scope, lookup_long, lookup_short};
+use std::fmt;
+
+/// Where a document comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Input {
+    /// The literal argument `-`.
+    Stdin,
+    /// Something with a URL scheme, such as `https://` or `file://`.
+    Url(String),
+    /// Anything else, treated as a filesystem path.
+    Path(String),
+}
+
+impl Input {
+    pub fn classify(raw: &str) -> Self {
+        if raw == "-" {
+            return Input::Stdin;
+        }
+        if has_url_scheme(raw) {
+            return Input::Url(raw.to_string());
+        }
+        Input::Path(raw.to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Input::Stdin => "-",
+            Input::Url(value) | Input::Path(value) => value,
+        }
+    }
+}
+
+/// Does this look like `scheme://...` rather than a path?
+///
+/// A single-letter scheme is rejected so a Windows path such as `C:\tmp\a.html`
+/// is not mistaken for a URL.
+fn has_url_scheme(raw: &str) -> bool {
+    let Some(colon) = raw.find(':') else {
+        return false;
+    };
+    let scheme = &raw[..colon];
+    scheme.len() > 1
+        && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
+/// Where the PDF goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Output {
+    /// The literal argument `-`.
+    Stdout,
+    Path(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ObjectKind {
+    Page(Input),
+    Cover(Input),
+    Toc,
+}
+
+/// One object on the command line, with the options written after it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Object {
+    pub kind: ObjectKind,
+    pub options: Vec<Occurrence>,
+}
+
+/// One option as it was actually written, with the values it consumed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Occurrence {
+    pub spec: &'static OptionSpec,
+    /// Exactly how the user wrote it, such as `--margin-top` or `-T`.
+    pub as_written: String,
+    pub values: Vec<String>,
+    /// Position in `argv`, for error messages.
+    pub index: usize,
+}
+
+/// A command line, taken apart but not yet interpreted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tokenized {
+    /// Options applying to the whole run.
+    pub globals: Vec<Occurrence>,
+    /// Object options written before the first object, inherited by all of them.
+    pub defaults: Vec<Occurrence>,
+    pub objects: Vec<Object>,
+    pub output: Output,
+}
+
+impl Tokenized {
+    /// Every option occurrence, in the order it was written.
+    pub fn occurrences(&self) -> impl Iterator<Item = &Occurrence> {
+        self.globals
+            .iter()
+            .chain(self.defaults.iter())
+            .chain(self.objects.iter().flat_map(|object| object.options.iter()))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParseError {
+    UnknownOption {
+        as_written: String,
+        index: usize,
+    },
+    MissingValues {
+        as_written: String,
+        wanted: usize,
+        got: usize,
+        index: usize,
+    },
+    /// `--flag=value` where the flag takes no value.
+    UnexpectedValue {
+        as_written: String,
+        index: usize,
+    },
+    /// `--cookie=a` where the option needs two values.
+    InlineValueNotAllowed {
+        as_written: String,
+        wanted: usize,
+        index: usize,
+    },
+    /// `page` or `cover` with nothing after it to use as the input.
+    ObjectWithoutInput {
+        keyword: String,
+        index: usize,
+    },
+    /// Fewer than one input and one output.
+    NotEnoughArguments,
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ParseError::UnknownOption { as_written, .. } => {
+                write!(f, "Unknown long argument {as_written}")
+            }
+            ParseError::MissingValues {
+                as_written,
+                wanted,
+                got,
+                ..
+            } => write!(
+                f,
+                "{as_written} needs {wanted} value(s), but only {got} were given"
+            ),
+            ParseError::UnexpectedValue { as_written, .. } => {
+                write!(f, "{as_written} takes no value")
+            }
+            ParseError::InlineValueNotAllowed {
+                as_written, wanted, ..
+            } => write!(
+                f,
+                "{as_written} needs {wanted} values, so they must be written as separate arguments"
+            ),
+            ParseError::ObjectWithoutInput { keyword, .. } => {
+                write!(f, "`{keyword}` must be followed by an input")
+            }
+            ParseError::NotEnoughArguments => write!(
+                f,
+                "You need to specify at least one input file, and exactly one output file"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ParseError {}
+
+/// A single argument, once classified.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Token {
+    Opt(Occurrence),
+    Positional { value: String, index: usize },
+}
+
+/// Split a command line into objects, options and an output.
+///
+/// `args` must not include the program name.
+pub fn tokenize<I, S>(args: I) -> Result<Tokenized, ParseError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let argv: Vec<String> = args.into_iter().map(Into::into).collect();
+    let tokens = classify(&argv)?;
+    assemble(tokens)
+}
+
+/// First pass: decide what each argument is, and pull option values out.
+fn classify(argv: &[String]) -> Result<Vec<Token>, ParseError> {
+    let mut tokens = Vec::with_capacity(argv.len());
+    let mut index = 0;
+    let mut options_ended = false;
+
+    while index < argv.len() {
+        let arg = &argv[index];
+
+        if options_ended || !looks_like_option(arg) {
+            tokens.push(Token::Positional {
+                value: arg.clone(),
+                index,
+            });
+            index += 1;
+            continue;
+        }
+
+        if arg == "--" {
+            options_ended = true;
+            index += 1;
+            continue;
+        }
+
+        let (name_part, inline_value) = split_inline_value(arg);
+        let spec = resolve(name_part, index)?;
+        let arity = spec.arity();
+        let mut values = Vec::with_capacity(arity);
+
+        if let Some(inline) = inline_value {
+            match arity {
+                0 => {
+                    return Err(ParseError::UnexpectedValue {
+                        as_written: name_part.to_string(),
+                        index,
+                    });
+                }
+                1 => values.push(inline.to_string()),
+                wanted => {
+                    return Err(ParseError::InlineValueNotAllowed {
+                        as_written: name_part.to_string(),
+                        wanted,
+                        index,
+                    });
+                }
+            }
+        }
+
+        // Values are taken positionally, even if they look like options. That is
+        // what wkhtmltopdf does, and it is what makes `--margin-top -5mm` work.
+        while values.len() < arity {
+            index += 1;
+            match argv.get(index) {
+                Some(value) => values.push(value.clone()),
+                None => {
+                    return Err(ParseError::MissingValues {
+                        as_written: name_part.to_string(),
+                        wanted: arity,
+                        got: values.len(),
+                        index,
+                    });
+                }
+            }
+        }
+
+        tokens.push(Token::Opt(Occurrence {
+            spec,
+            as_written: name_part.to_string(),
+            values,
+            index,
+        }));
+        index += 1;
+    }
+
+    Ok(tokens)
+}
+
+/// `-` on its own is stdin, not an option.
+fn looks_like_option(arg: &str) -> bool {
+    arg.starts_with('-') && arg != "-"
+}
+
+/// Split `--name=value` into its two halves. Only the first `=` counts.
+fn split_inline_value(arg: &str) -> (&str, Option<&str>) {
+    match arg.find('=') {
+        Some(position) => (&arg[..position], Some(&arg[position + 1..])),
+        None => (arg, None),
+    }
+}
+
+/// Look an argument up in the option table.
+fn resolve(as_written: &str, index: usize) -> Result<&'static OptionSpec, ParseError> {
+    let unknown = || ParseError::UnknownOption {
+        as_written: as_written.to_string(),
+        index,
+    };
+
+    if let Some(long) = as_written.strip_prefix("--") {
+        return lookup_long(long).ok_or_else(unknown);
+    }
+
+    let short = as_written.strip_prefix('-').ok_or_else(unknown)?;
+    let mut letters = short.chars();
+    match (letters.next(), letters.next()) {
+        (Some(letter), None) => lookup_short(letter).ok_or_else(unknown),
+        // No clustering: `-qg` is reported as unknown rather than guessed at.
+        _ => Err(unknown()),
+    }
+}
+
+/// Second pass: attach options to objects and pick out the output.
+fn assemble(tokens: Vec<Token>) -> Result<Tokenized, ParseError> {
+    let positional_count = tokens
+        .iter()
+        .filter(|token| matches!(token, Token::Positional { .. }))
+        .count();
+    if positional_count < 2 {
+        return Err(ParseError::NotEnoughArguments);
+    }
+
+    // The output is the last positional. Removing it first means the remaining
+    // positionals form a clean sequence of objects.
+    let last_positional = tokens
+        .iter()
+        .rposition(|token| matches!(token, Token::Positional { .. }))
+        .expect("checked there are at least two positionals");
+
+    let mut tokens = tokens;
+    let Token::Positional {
+        value: output_raw, ..
+    } = tokens.remove(last_positional)
+    else {
+        unreachable!("index came from rposition over positionals")
+    };
+    let output = if output_raw == "-" {
+        Output::Stdout
+    } else {
+        Output::Path(output_raw)
+    };
+
+    let mut globals = Vec::new();
+    let mut defaults = Vec::new();
+    let mut objects: Vec<Object> = Vec::new();
+    // Set once `page` or `cover` has been seen and is waiting for its input.
+    let mut pending_keyword: Option<(String, usize)> = None;
+
+    for token in tokens {
+        match token {
+            Token::Opt(occurrence) => {
+                let bucket = match occurrence.spec.scope {
+                    Scope::Global => &mut globals,
+                    Scope::Object | Scope::Toc => match objects.last_mut() {
+                        Some(object) => &mut object.options,
+                        None => &mut defaults,
+                    },
+                };
+                bucket.push(occurrence);
+            }
+            Token::Positional { value, index } => {
+                if let Some((keyword, _)) = pending_keyword.take() {
+                    let input = Input::classify(&value);
+                    let kind = if keyword == "cover" {
+                        ObjectKind::Cover(input)
+                    } else {
+                        ObjectKind::Page(input)
+                    };
+                    objects.push(Object {
+                        kind,
+                        options: Vec::new(),
+                    });
+                    continue;
+                }
+
+                match value.as_str() {
+                    "page" | "cover" => pending_keyword = Some((value, index)),
+                    "toc" => objects.push(Object {
+                        kind: ObjectKind::Toc,
+                        options: Vec::new(),
+                    }),
+                    _ => objects.push(Object {
+                        kind: ObjectKind::Page(Input::classify(&value)),
+                        options: Vec::new(),
+                    }),
+                }
+            }
+        }
+    }
+
+    if let Some((keyword, index)) = pending_keyword {
+        return Err(ParseError::ObjectWithoutInput { keyword, index });
+    }
+
+    if objects.is_empty() {
+        return Err(ParseError::NotEnoughArguments);
+    }
+
+    Ok(Tokenized {
+        globals,
+        defaults,
+        objects,
+        output,
+    })
+}

@@ -55,7 +55,7 @@ emitting an unexpected flag must not break a production application.
 ## Development
 
 ```bash
-cargo test        # 55 tests
+cargo test --workspace
 cargo clippy --all-targets
 cargo fmt --all
 ```
