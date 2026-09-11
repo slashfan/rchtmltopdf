@@ -44,6 +44,13 @@ pub enum Error {
     BrowserNotFound {
         attempts: Vec<SearchAttempt>,
     },
+    /// The browser would not start, or started and never answered.
+    ///
+    /// Carries the browser's own diagnostics, because that is where a missing
+    /// shared library or a refused sandbox actually shows up.
+    Launch {
+        detail: String,
+    },
     /// The browser answered the command with an error.
     Protocol(ProtocolError),
     /// The connection went away before the reply arrived. Usually means the
@@ -79,6 +86,7 @@ impl fmt::Display for Error {
                     "Pass --chromium-path, set CHROME_PATH, or run `rchtmltopdf fetch-chromium` to download a pinned build."
                 )
             }
+            Error::Launch { detail } => write!(f, "{detail}"),
             Error::Protocol(error) => write!(f, "the browser rejected the command: {error}"),
             Error::ConnectionClosed => write!(f, "the connection to the browser closed"),
             Error::MessageTooLarge { limit } => write!(

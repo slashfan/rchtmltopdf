@@ -56,15 +56,15 @@ pub enum Flavour {
     FullBrowser,
 }
 
-/// A browser, and how it was found.
+/// A browser executable, and how it was found.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Browser {
+pub struct Executable {
     pub path: PathBuf,
     pub origin: Origin,
     pub flavour: Flavour,
 }
 
-impl Browser {
+impl Executable {
     fn at(path: PathBuf, origin: Origin) -> Self {
         let flavour = if file_name(&path).contains("headless-shell") {
             Flavour::HeadlessShell
@@ -189,12 +189,12 @@ const EXECUTABLE_NAMES: &[&str] = &[
 ];
 
 /// Find a browser, or explain everywhere that was looked.
-pub fn locate(flag: Option<&Path>, env: &dyn Environment) -> Result<Browser> {
+pub fn locate(flag: Option<&Path>, env: &dyn Environment) -> Result<Executable> {
     let mut attempts = Vec::new();
 
     if let Some(path) = flag {
         if env.is_executable_file(path) {
-            return Ok(Browser::at(path.to_path_buf(), Origin::Flag));
+            return Ok(Executable::at(path.to_path_buf(), Origin::Flag));
         }
         attempts.push(SearchAttempt {
             source: "--chromium-path".into(),
@@ -208,7 +208,7 @@ pub fn locate(flag: Option<&Path>, env: &dyn Environment) -> Result<Browser> {
         };
         let path = PathBuf::from(value);
         if env.is_executable_file(&path) {
-            return Ok(Browser::at(path, Origin::Environment { variable }));
+            return Ok(Executable::at(path, Origin::Environment { variable }));
         }
         attempts.push(SearchAttempt {
             source: (*variable).to_string(),
@@ -218,14 +218,14 @@ pub fn locate(flag: Option<&Path>, env: &dyn Environment) -> Result<Browser> {
 
     for (source, path) in system_candidates(env) {
         if env.is_executable_file(&path) {
-            return Ok(Browser::at(path, Origin::SystemLocation));
+            return Ok(Executable::at(path, Origin::SystemLocation));
         }
         attempts.push(SearchAttempt { source, path });
     }
 
     for path in cache_candidates(env) {
         if env.is_executable_file(&path) {
-            return Ok(Browser::at(path, Origin::Cache));
+            return Ok(Executable::at(path, Origin::Cache));
         }
         attempts.push(SearchAttempt {
             source: "download cache".into(),
@@ -503,13 +503,13 @@ mod tests {
 
     #[test]
     fn flavour_is_read_from_the_file_name() {
-        let shell = Browser::at("/x/chrome-headless-shell".into(), Origin::Flag);
+        let shell = Executable::at("/x/chrome-headless-shell".into(), Origin::Flag);
         assert_eq!(shell.flavour, Flavour::HeadlessShell);
-        let full = Browser::at("/x/google-chrome".into(), Origin::Flag);
+        let full = Executable::at("/x/google-chrome".into(), Origin::Flag);
         assert_eq!(full.flavour, Flavour::FullBrowser);
         // A launcher must not pass a headless switch to the shell, so this
         // distinction has to survive an unusual path.
-        let renamed = Browser::at("/opt/Chrome-Headless-Shell".into(), Origin::Flag);
+        let renamed = Executable::at("/opt/Chrome-Headless-Shell".into(), Origin::Flag);
         assert_eq!(renamed.flavour, Flavour::HeadlessShell);
     }
 
