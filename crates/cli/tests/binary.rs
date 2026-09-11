@@ -137,7 +137,10 @@ fn too_few_arguments_fails_with_wkhtmltopdfs_wording() {
 fn an_unknown_log_level_is_reported_rather_than_ignored() {
     let output = run(&["--log-level", "shout", "a.html", "out.pdf"]);
     assert_outcome(&output, 1, false);
-    assert!(stderr(&output).contains("Unknown log level shout"));
+    // Names the option as written, and says what was expected.
+    let message = stderr(&output);
+    assert!(message.contains("--log-level"), "{message}");
+    assert!(message.contains("unknown log level `shout`"), "{message}");
 }
 
 // --- warnings, and how much is said ------------------------------------------
