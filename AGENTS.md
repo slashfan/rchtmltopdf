@@ -34,7 +34,7 @@ cargo fmt --all && cargo clippy --workspace --all-targets --all-features -- -D w
 Committing first and checking second costs a CI round trip every time. It has already cost
 three.
 
-## Four rules the code will not tell you
+## Five rules the code will not tell you
 
 **Decisions are append-only.** `docs/decisions.md` holds D01 onward, and they are binding.
 Amend one by adding a new numbered entry. The record of what was rejected, and why, is the
@@ -44,9 +44,16 @@ point of the file.
 `crates/cli/tests/grammar.rs`. That file is the specification; the parser is an attempt at
 it.
 
-**`Support::Implemented` in the option table means targeted, not working.** Nothing
-translates a command line into settings yet, so sixty-one options claim more than they do.
-Treat the marker as a plan until that layer lands.
+**`Support::Implemented` in the option table is not yet audited.** The translation layer
+exists now (`apply.rs`) and the binary converts, but nobody has checked the marker against
+what each option actually does end to end. That audit is #19. Until it lands, treat
+`Implemented` as a claim rather than a guarantee.
+
+**The option table has been reconciled against a real binary, and stays that way.**
+`crates/cli/tests/fixtures/wkhtmltopdf-0.12.6.1-extended-help.txt` is the verbatim help of
+wkhtmltopdf 0.12.6.1, and `reference_help.rs` holds the table to it: every long name, short
+alias, arity, scope and section. Adding an option wkhtmltopdf does not have now fails a test.
+Re-capture the fixture only from a real binary, following `fixtures/README.md`.
 
 **The sandbox stays on.** The threat model is untrusted HTML with filesystem reach (D10).
 Only the environment says when a sandbox is unavailable, through
@@ -113,7 +120,7 @@ Read these before changing behaviour they describe. Both are in French; the code
 and everything on GitHub are in English.
 
 - `docs/brief.md` — scope, V0 through V3, and what compatibility does and does not mean
-- `docs/decisions.md` — D01 to D25, binding, with the alternatives that were rejected
+- `docs/decisions.md` — D01 to D26, binding, with the alternatives that were rejected
 - `docs/migration.md` — why a migrated document changes size, for anything touching layout
 - `CONTRIBUTING.md` — the branch, pull request and Conventional Commit workflow
 
