@@ -163,53 +163,26 @@ fn an_ignored_option_warns_but_does_not_fail() {
 /// Only `quiet` was ever checked.
 #[test]
 fn log_level_decides_whether_warnings_are_shown() {
-    let noisy = ["--grayscale", "a.html", "out.pdf", "--dump-parse"];
+    let noisy = |level: &str| -> usize {
+        warnings(&[
+            "--log-level",
+            level,
+            "--grayscale",
+            "a.html",
+            "out.pdf",
+            "--dump-parse",
+        ])
+    };
 
-    assert_eq!(warnings(&noisy), 1, "the default should warn");
     assert_eq!(
-        warnings(&[
-            "--log-level",
-            "info",
-            &noisy[0],
-            "a.html",
-            "out.pdf",
-            "--dump-parse"
-        ]),
-        1
+        warnings(&["--grayscale", "a.html", "out.pdf", "--dump-parse"]),
+        1,
+        "the default should warn"
     );
-    assert_eq!(
-        warnings(&[
-            "--log-level",
-            "warn",
-            &noisy[0],
-            "a.html",
-            "out.pdf",
-            "--dump-parse"
-        ]),
-        1
-    );
-    assert_eq!(
-        warnings(&[
-            "--log-level",
-            "error",
-            &noisy[0],
-            "a.html",
-            "out.pdf",
-            "--dump-parse"
-        ]),
-        0
-    );
-    assert_eq!(
-        warnings(&[
-            "--log-level",
-            "none",
-            &noisy[0],
-            "a.html",
-            "out.pdf",
-            "--dump-parse"
-        ]),
-        0
-    );
+    assert_eq!(noisy("info"), 1);
+    assert_eq!(noisy("warn"), 1);
+    assert_eq!(noisy("error"), 0);
+    assert_eq!(noisy("none"), 0);
 }
 
 /// wkhtmltopdf documents `-q` as shorthand for `--log-level none`.
