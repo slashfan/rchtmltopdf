@@ -17,5 +17,6 @@ pub mod tokenizer;
 
 pub use table::{OptionSpec, Scope, Support, lookup_long, lookup_short};
 pub use tokenizer::{
-    Input, Object, ObjectKind, Occurrence, Output, ParseError, Tokenized, tokenize,
+    Input, Object, ObjectKind, Occurrence, Output, ParseError, Tokenized, find_meta_option,
+    tokenize,
 };

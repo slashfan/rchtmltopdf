@@ -4,14 +4,15 @@
 //! the grammar is parsed, unimplemented options warn, and `--dump-parse` shows
 //! how a command line was understood.
 
-use rchtmltopdf::table::{SECTIONS, Support};
-use rchtmltopdf::tokenizer::{Input, ObjectKind, Output, tokenize};
+use rchtmltopdf::table::{OptionSpec, SECTIONS, Support};
+use rchtmltopdf::tokenizer::{Input, ObjectKind, Output, find_meta_option, tokenize};
 use rchtmltopdf_core::ExitCode;
 use std::io::Write;
 use std::process;
 
 const PROGRAM: &str = "rchtmltopdf";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -24,25 +25,14 @@ fn run(args: &[String]) -> ExitCode {
         return ExitCode::Failure;
     }
 
-    // Meta options short-circuit: `--help` on its own has no input or output, so
-    // it has to be handled before the grammar is enforced.
-    for arg in args {
-        match arg.as_str() {
-            "-h" | "--help" => {
-                print_help(&mut std::io::stdout(), false);
-                return ExitCode::Success;
-            }
-            "-H" | "--extended-help" => {
-                print_help(&mut std::io::stdout(), true);
-                return ExitCode::Success;
-            }
-            "-V" | "--version" => {
-                println!("{PROGRAM} {VERSION}");
-                println!("wkhtmltopdf-compatible CLI, modern Chromium rendering");
-                return ExitCode::Success;
-            }
-            _ => {}
-        }
+    // Meta options short-circuit: `--help` on its own has neither an input nor an
+    // output, so it can never satisfy the grammar and has to be answered first.
+    //
+    // Recognising them goes through the tokenizer rather than scanning argv,
+    // because option values are consumed positionally and a scan would mistake a
+    // value for a request. See `find_meta_option`.
+    if let Some(spec) = find_meta_option(args) {
+        return run_meta(spec);
     }
 
     let parsed = match tokenize(args.to_vec()) {
@@ -80,6 +70,46 @@ fn run(args: &[String]) -> ExitCode {
     );
     eprintln!("{PROGRAM}: run the same command with --dump-parse to see how it was understood.");
     ExitCode::Failure
+}
+
+/// Answer a meta option: the ones that report something and exit.
+///
+/// Dispatching on the table rather than on literal strings means every option
+/// marked `Support::Meta` arrives here, so a new one cannot silently fall through
+/// to "you need to specify at least one input file". One that has no arm yet is
+/// reported as not implemented.
+fn run_meta(spec: &'static OptionSpec) -> ExitCode {
+    match spec.long {
+        "help" => {
+            print_help(&mut std::io::stdout(), false);
+            ExitCode::Success
+        }
+        "extended-help" => {
+            print_help(&mut std::io::stdout(), true);
+            ExitCode::Success
+        }
+        "version" => {
+            println!("{PROGRAM} {VERSION}");
+            println!("wkhtmltopdf-compatible CLI, modern Chromium rendering");
+            ExitCode::Success
+        }
+        "license" => {
+            println!("{PROGRAM} {VERSION}");
+            println!();
+            println!("Licensed under either of Apache License, Version 2.0 or the MIT license,");
+            println!("at your option. SPDX-License-Identifier: MIT OR Apache-2.0");
+            println!();
+            println!("{REPOSITORY}");
+            ExitCode::Success
+        }
+        // wkhtmltopdf could print its own manual, readme and HTML help. Those are
+        // documentation generators we have not built. Say so plainly rather than
+        // exiting zero having produced nothing that was asked for.
+        other => {
+            eprintln!("{PROGRAM}: --{other} is not implemented; see {REPOSITORY}");
+            ExitCode::Failure
+        }
+    }
 }
 
 /// Print the parsed command line in a stable, greppable shape.
