@@ -143,6 +143,17 @@ async fn serve(stream: &mut tokio::net::TcpStream, path: &str) -> std::io::Resul
              </style></head><body></body></html>"
                 .to_string(),
         ),
+        // Emits a session event every 100ms without touching the network, which
+        // is what a scroll or analytics handler does.
+        "/ticking" => (
+            "200 OK",
+            "text/html",
+            "<html><body>tick<script>\
+             let n = 0;\
+             setInterval(() => { history.replaceState(null, '', '#' + (n++)); }, 100);\
+             </script></body></html>"
+                .to_string(),
+        ),
         "/scripted" => (
             "200 OK",
             "text/html",

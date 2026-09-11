@@ -162,3 +162,71 @@ async fn scripting_can_be_disabled_and_the_ladder_still_completes() {
 
     browser.close().await.unwrap();
 }
+
+/// A dead address must fail, not quietly produce the browser's error page.
+///
+/// Before this was checked, the ladder returned success in under a second for a
+/// URL that could not be reached, and printing would have produced a PDF of
+/// Chromium's own "site can't be reached" screen. D14 says a main document that
+/// fails to load is exit 1 with no PDF.
+#[tokio::test]
+async fn an_unreachable_url_fails_rather_than_printing_an_error_page() {
+    let _turn = one_at_a_time().await;
+    let Some(browser) = launch().await else {
+        return;
+    };
+    let page = browser.new_page().await.unwrap();
+    page.prepare(&WebSettings::default()).await.unwrap();
+
+    // Port 1 is reserved and nothing listens there.
+    let outcome = page
+        .load(
+            "http://127.0.0.1:1/nothing",
+            &LoadSettings::default(),
+            &Progress::new(),
+        )
+        .await;
+
+    match outcome {
+        Err(rchtmltopdf_browser::Error::Navigation { url, reason }) => {
+            assert!(url.contains("127.0.0.1:1"), "{url}");
+            assert!(!reason.is_empty(), "the reason should name the failure");
+        }
+        other => panic!("expected a navigation failure, got {other:?}"),
+    }
+
+    browser.close().await.unwrap();
+}
+
+/// A page that emits events on a timer must still settle.
+///
+/// The quiet period used to be reset by any event at all, so anything ticking
+/// faster than twice a second kept the page from ever being considered done.
+/// Analytics and scroll handlers calling history.replaceState do exactly that.
+#[tokio::test]
+async fn a_page_that_ticks_still_settles() {
+    let _turn = one_at_a_time().await;
+    let Some(browser) = launch().await else {
+        return;
+    };
+    let server = TestServer::start().await;
+    let page = browser.new_page().await.unwrap();
+    page.prepare(&WebSettings::default()).await.unwrap();
+
+    let settled = tokio::time::timeout(
+        Duration::from_secs(15),
+        page.load(
+            &server.url("/ticking"),
+            &LoadSettings::default(),
+            &Progress::new(),
+        ),
+    )
+    .await;
+
+    assert!(
+        settled.is_ok(),
+        "a page emitting events on a timer never settled"
+    );
+    settled.unwrap().unwrap();
+    browser.close().await.unwrap();
+}

@@ -25,7 +25,7 @@ impl Events {
 
 struct Subscriber {
     /// `None` matches every method.
-    method: Option<String>,
+    methods: Option<Vec<String>>,
     /// `None` matches events from any session, and from the browser itself.
     session: Option<SessionId>,
     sender: mpsc::UnboundedSender<Event>,
@@ -33,7 +33,10 @@ struct Subscriber {
 
 impl Subscriber {
     fn matches(&self, event: &Event) -> bool {
-        let method_matches = self.method.as_deref().is_none_or(|m| m == event.method);
+        let method_matches = self
+            .methods
+            .as_ref()
+            .is_none_or(|wanted| wanted.contains(&event.method));
         let session_matches = match &self.session {
             None => true,
             Some(wanted) => event.session_id.as_ref() == Some(wanted),
@@ -144,10 +147,10 @@ impl Inner {
         receiver.await.map_err(|_| Error::ConnectionClosed)?
     }
 
-    fn subscribe(&self, session: Option<SessionId>, method: Option<&str>) -> Events {
+    fn subscribe(&self, session: Option<SessionId>, methods: Option<Vec<String>>) -> Events {
         let (sender, receiver) = mpsc::unbounded_channel();
         self.subscribers.lock().unwrap().push(Subscriber {
-            method: method.map(str::to_owned),
+            methods,
             session,
             sender,
         });
@@ -225,7 +228,20 @@ impl Client {
 
     /// Subscribe to one event method, from the browser or any session.
     pub fn subscribe(&self, method: &str) -> Events {
-        self.inner.subscribe(None, Some(method))
+        self.inner.subscribe(None, Some(vec![method.to_owned()]))
+    }
+
+    /// Subscribe to several event methods at once.
+    ///
+    /// Worth having rather than falling back to every event: a subscription
+    /// receives what it asks for and nothing else, so a caller measuring quiet
+    /// periods is not woken by unrelated chatter, and the queue does not fill
+    /// with events nobody reads.
+    pub fn subscribe_many(&self, methods: &[&str]) -> Events {
+        self.inner.subscribe(
+            None,
+            Some(methods.iter().map(|m| (*m).to_owned()).collect()),
+        )
     }
 
     /// Subscribe to every event, which is mostly useful for diagnostics.
@@ -306,7 +322,16 @@ impl Session {
 
     /// Subscribe to one event method, from this session only.
     pub fn subscribe(&self, method: &str) -> Events {
-        self.inner.subscribe(Some(self.id.clone()), Some(method))
+        self.inner
+            .subscribe(Some(self.id.clone()), Some(vec![method.to_owned()]))
+    }
+
+    /// Subscribe to several event methods from this session.
+    pub fn subscribe_many(&self, methods: &[&str]) -> Events {
+        self.inner.subscribe(
+            Some(self.id.clone()),
+            Some(methods.iter().map(|m| (*m).to_owned()).collect()),
+        )
     }
 
     /// Subscribe to every event from this session.
