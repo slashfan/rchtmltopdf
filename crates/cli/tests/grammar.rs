@@ -250,6 +250,55 @@ fn double_dash_ends_option_parsing() {
     );
 }
 
+/// `Occurrence.index` is documented as the position of the option in `argv`.
+/// It is the anchor every future error message will quote, so it has to point at
+/// the option the user typed, not at whatever the option happened to consume.
+#[test]
+fn occurrence_index_points_at_the_option_not_its_value() {
+    // argv: 0 --margin-top  1 15mm  2 --cookie  3 session  4 abc  5 a.html  6 out.pdf
+    let parsed = parse("--margin-top 15mm --cookie session abc a.html out.pdf");
+    assert_eq!(parsed.globals[0].as_written, "--margin-top");
+    assert_eq!(parsed.globals[0].index, 0);
+    assert_eq!(parsed.defaults[0].as_written, "--cookie");
+    assert_eq!(parsed.defaults[0].index, 2);
+}
+
+#[test]
+fn occurrence_index_is_right_for_flags_and_inline_values() {
+    // argv: 0 a.html  1 --quiet  2 --page-size=A4  3 out.pdf
+    let parsed = parse("a.html --quiet --page-size=A4 out.pdf");
+    assert_eq!(parsed.globals[0].as_written, "--quiet");
+    assert_eq!(parsed.globals[0].index, 1);
+    assert_eq!(parsed.globals[1].as_written, "--page-size");
+    assert_eq!(parsed.globals[1].index, 2);
+}
+
+#[test]
+fn missing_value_error_points_at_the_option() {
+    // argv: 0 a.html  1 out.pdf  2 --margin-top   <- the option is at 2
+    match parse_err("a.html out.pdf --margin-top") {
+        ParseError::MissingValues { index, .. } => assert_eq!(index, 2),
+        other => panic!("expected MissingValues, got {other:?}"),
+    }
+    // argv: 0 a.html  1 out.pdf  2 --cookie  3 name   <- still the option at 2
+    match parse_err("a.html out.pdf --cookie name") {
+        ParseError::MissingValues { index, .. } => assert_eq!(index, 2),
+        other => panic!("expected MissingValues, got {other:?}"),
+    }
+}
+
+#[test]
+fn positional_index_survives_a_preceding_two_value_option() {
+    // A value cursor that leaked into the outer loop would misplace or skip the
+    // arguments that follow a multi-value option.
+    let parsed = parse("--cookie a 1 --custom-header X 2 in.html out.pdf");
+    assert_eq!(names(&parsed.defaults), ["cookie", "custom-header"]);
+    assert_eq!(parsed.defaults[0].index, 0);
+    assert_eq!(parsed.defaults[1].index, 3);
+    assert_eq!(page_input(&parsed, 0), &Input::Path("in.html".into()));
+    assert_eq!(parsed.output, Output::Path("out.pdf".into()));
+}
+
 #[test]
 fn as_written_records_how_the_user_typed_it() {
     let parsed = parse("-T 1mm --margin-left 2mm a.html out.pdf");

@@ -261,9 +261,14 @@ fn classify(argv: &[String]) -> Result<Vec<Token>, ParseError> {
 
         // Values are taken positionally, even if they look like options. That is
         // what wkhtmltopdf does, and it is what makes `--margin-top -5mm` work.
+        //
+        // The cursor that walks the values is separate from the option's own
+        // position, so that both the occurrence and any error report where the
+        // *option* was written rather than where its last value landed.
+        let mut value_index = index;
         while values.len() < arity {
-            index += 1;
-            match argv.get(index) {
+            value_index += 1;
+            match argv.get(value_index) {
                 Some(value) => values.push(value.clone()),
                 None => {
                     return Err(ParseError::MissingValues {
@@ -282,7 +287,7 @@ fn classify(argv: &[String]) -> Result<Vec<Token>, ParseError> {
             values,
             index,
         }));
-        index += 1;
+        index = value_index + 1;
     }
 
     Ok(tokens)
