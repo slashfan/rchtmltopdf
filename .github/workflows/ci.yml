@@ -1,0 +1,187 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    # `edited` matters: without it, fixing a bad PR title never re-runs the
+    # title check, and a required check that never re-reports is a deadlock.
+    types: [opened, edited, reopened, synchronize]
+
+# Least privilege. No job here needs more; `pr-title` adds one read at job level.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Cancel superseded pull request runs, never a push to main. A cancelled main
+  # run leaves a half-written cache entry and an ambiguous commit status.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      # `-D warnings` belongs on the invocation, not in a global RUSTFLAGS.
+      # Global RUSTFLAGS splits the cache and makes cargo test fail on a
+      # dependency's warnings.
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  test:
+    name: test
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux only while the repository is private: macOS runners bill at ten
+        # times the Linux rate against the plan's monthly quota. When this repo
+        # goes public, runners are free, so widen this to:
+        #   os: [ubuntu-latest, macos-latest, windows-latest]
+        # macOS and Windows are not decoration here. D09 resolves macOS
+        # application bundles, and the tokenizer does path work on every platform.
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with: { toolchain: stable }
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - run: cargo test --workspace --all-features --locked
+
+  msrv:
+    name: msrv
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      # Must match `rust-version` in the workspace Cargo.toml.
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with: { toolchain: "1.85.0" }
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # `check`, not `test`: dev-dependencies routinely need a newer compiler
+      # than the library itself, and pinning the test tooling to the MSRV is not
+      # the promise being made.
+      - run: cargo check --workspace --all-targets --locked
+
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with: { toolchain: stable }
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo doc --workspace --no-deps
+
+  pr-title:
+    name: pr-title
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      # Merges are squashed with the pull request title as the commit subject,
+      # so linting the title is how the commit log stays conventional. Commits
+      # inside a branch stay unconstrained on purpose.
+      - uses: amannn/action-semantic-pull-request@e32d7e603df1aa1ba07e981f2a23455dee596825 # v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            compat
+            perf
+            docs
+            refactor
+            test
+            ci
+            build
+            chore
+          scopes: |
+            cli
+            core
+            browser
+            pdf
+            table
+            docker
+            pkg
+            deps
+          requireScope: false
+
+  # The single required status check. Every other job feeds this one, so the
+  # branch ruleset never has to be edited when a job is added, renamed or split.
+  # `if: always()` plus the explicit result test is what makes skipped jobs (such
+  # as pr-title on a push) pass rather than deadlock the merge button.
+  ci:
+    name: ci
+    if: always()
+    needs: [fmt, clippy, test, msrv, docs, pr-title]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check that every required job succeeded
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
+
+# --- Not enabled yet -------------------------------------------------------
+#
+# A `chromium` job will run the conversion conformance tests (D15) once the
+# browser crate exists. Its shape is settled so adding it is additive:
+#
+#   chromium:
+#     needs: [clippy]            # do not download a browser for code that fails to compile
+#     runs-on: ubuntu-latest
+#     env:
+#       RCHTMLTOPDF_REQUIRE_CHROMIUM: "1"   # turn a local "skip" into a CI failure
+#       RCHTMLTOPDF_CACHE_DIR: ${{ github.workspace }}/.chromium-cache
+#     steps:
+#       - actions/cache keyed on hashFiles('.chromium-version')
+#       - apt-get install fonts-liberation fonts-dejavu-core fonts-noto-core
+#       - cargo run --locked -- fetch-chromium    # dogfoods D09's resolution order
+#       - cargo test -p rchtmltopdf-conformance --locked
+#
+# Then add `chromium` to the `ci` job's `needs:` list. The ruleset does not change.
+#
+# A `deny` job (cargo-deny: bans, licenses, sources) lands in the same pull
+# request that introduces the first external dependency. `deny.toml` already
+# holds the policy. Advisories run on a schedule, never as a blocking check:
+# a RUSTSEC entry published on a Tuesday must not turn every unrelated pull
+# request red.

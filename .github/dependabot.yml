@@ -1,0 +1,34 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    # Grouping is not optional on a one-maintainer project. Ungrouped, this
+    # opens several pull requests a week and they stop being read. Major bumps
+    # stay ungrouped on purpose so they get individual attention.
+    groups:
+      cargo:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "chore(ci)"
+    # Dependabot updates SHA-pinned actions and rewrites the version comment,
+    # so pinning costs nothing in maintenance.
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Add once a Dockerfile exists (D19):
+  # - package-ecosystem: docker
+  #   directory: "/docker"

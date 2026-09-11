@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Output does not match wkhtmltopdf visually
+    url: https://github.com/slashfan/rchtmltopdf/blob/main/docs/migration.md
+    about: >-
+      Different page sizes, font metrics, line wrapping or pagination are
+      expected. This project promises functional CLI compatibility, not
+      pixel-identical output. Read the migration guide first.

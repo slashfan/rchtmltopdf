@@ -1,0 +1,8 @@
+/target
+**/*.rs.bk
+.DS_Store
+
+# CI points RCHTMLTOPDF_CACHE_DIR here so the pinned browser can be cached with
+# a repo-relative path. Locally the cache defaults to the platform location
+# (~/Library/Caches/rchtmltopdf, $XDG_CACHE_HOME/rchtmltopdf), never in the repo.
+/.chromium-cache

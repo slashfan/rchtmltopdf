@@ -1,0 +1,93 @@
+name: Compatibility report
+description: A wkhtmltopdf command line behaves differently under rchtmltopdf
+labels: ["compatibility"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        These reports are the most valuable thing you can send. They become rows
+        in the compatibility matrix that the project is tested against.
+
+  - type: textarea
+    id: command
+    attributes:
+      label: The exact wkhtmltopdf command line
+      description: Copy it verbatim, including every option.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: dump_parse
+    attributes:
+      label: Output of the same command with --dump-parse
+      description: >-
+        Run `rchtmltopdf <your same arguments> --dump-parse`. It prints how the
+        command line was understood and exits without converting. This single
+        field resolves most reports without any back and forth.
+      render: text
+    validations:
+      required: true
+
+  - type: dropdown
+    id: invoked_by
+    attributes:
+      label: How is it invoked?
+      options:
+        - Raw command line
+        - KnpSnappy (Symfony)
+        - Laravel Snappy
+        - Another wrapper or language binding
+        - A library binding to libwkhtmltox
+    validations:
+      required: true
+
+  - type: input
+    id: wk_version
+    attributes:
+      label: wkhtmltopdf version it works with
+      placeholder: "0.12.6 (with patched qt)"
+    validations:
+      required: true
+
+  - type: input
+    id: our_version
+    attributes:
+      label: rchtmltopdf version
+      description: Output of `rchtmltopdf --version`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproducer
+    attributes:
+      label: Minimal HTML or a public URL that reproduces it
+    validations:
+      required: true
+
+  - type: textarea
+    id: difference
+    attributes:
+      label: What wkhtmltopdf produced, and what rchtmltopdf produced
+      description: >-
+        Be concrete: page count, page size, missing content, a broken header, a
+        different exit code, unexpected output on stderr.
+    validations:
+      required: true
+
+  - type: input
+    id: chromium
+    attributes:
+      label: Chromium version, and how it was found
+      description: Command line flag, environment variable, system path, or fetch-chromium.
+
+  - type: checkboxes
+    id: acknowledgement
+    attributes:
+      label: Before submitting
+      options:
+        - label: >-
+            I understand this project promises functional CLI compatibility, not
+            pixel-identical output, and I have read the smart shrinking section
+            of the migration guide.
+          required: true

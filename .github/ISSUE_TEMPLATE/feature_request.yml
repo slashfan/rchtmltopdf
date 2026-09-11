@@ -1,0 +1,22 @@
+name: Feature request
+description: Suggest something the project should do
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        If you are asking for a wkhtmltopdf option to be implemented, check
+        `rchtmltopdf --extended-help` first. Options marked "accepted, ignored"
+        have no Chromium equivalent and are not expected to change.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What should it do?
+    validations:
+      required: true

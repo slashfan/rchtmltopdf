@@ -1,0 +1,46 @@
+# cargo-deny policy.
+#
+# The workspace currently has no external dependencies, so every check here is
+# trivially green. The policy is written now, while it costs nothing, because
+# the licence rule is the one that matters: this project is MIT OR Apache-2.0
+# (D18) and must not acquire a copyleft transitive dependency. D18 also
+# anticipates a libwkhtmltox-compatible C API in V3, which would make an
+# accidental copyleft dependency far more expensive to unwind than to prevent.
+#
+# The CI job lands in the same pull request that introduces the first
+# dependency. Split it in two when it does:
+#   - blocking on pull requests:  cargo deny check bans licenses sources
+#   - on a weekly schedule only:  cargo deny check advisories
+# Advisories are time-dependent. A new entry published on a Tuesday must not
+# turn every unrelated pull request red.
+
+[graph]
+all-features = true
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+]
+confidence-threshold = 0.93
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[advisories]
+version = 2
+yanked = "deny"
