@@ -44,6 +44,15 @@ pub enum Error {
     BrowserNotFound {
         attempts: Vec<SearchAttempt>,
     },
+    /// The document could not be loaded.
+    ///
+    /// Kept apart from every other failure because D14 turns on it: a main
+    /// document that fails to load is exit 1 with no PDF, not a PDF of the
+    /// browser's own error page.
+    Navigation {
+        url: String,
+        reason: String,
+    },
     /// The browser would not start, or started and never answered.
     ///
     /// Carries the browser's own diagnostics, because that is where a missing
@@ -85,6 +94,9 @@ impl fmt::Display for Error {
                     f,
                     "Pass --chromium-path, set CHROME_PATH, or run `rchtmltopdf fetch-chromium` to download a pinned build."
                 )
+            }
+            Error::Navigation { url, reason } => {
+                write!(f, "could not load {url}: {reason}")
             }
             Error::Launch { detail } => write!(f, "{detail}"),
             Error::Protocol(error) => write!(f, "the browser rejected the command: {error}"),

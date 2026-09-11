@@ -34,6 +34,18 @@ const QUIET_PERIOD: Duration = Duration::from_millis(500);
 /// How often to look at `window.status`.
 const STATUS_POLL: Duration = Duration::from_millis(50);
 
+/// The only events that say anything about whether the network is busy.
+///
+/// Subscribing to exactly these matters twice over. A subscription that took
+/// everything would have its quiet period reset by unrelated chatter, so a page
+/// emitting any event on a timer would never settle. And it would queue every
+/// event on the session from before navigation until the delay ends, unread.
+const TRAFFIC_EVENTS: &[&str] = &[
+    "Network.requestWillBeSent",
+    "Network.loadingFinished",
+    "Network.loadingFailed",
+];
+
 /// Where a page has got to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Stage {
@@ -120,10 +132,21 @@ impl Page {
         // Subscribe before navigating. The load event for a small document can
         // arrive before the navigate call has even returned.
         let mut loaded = session.subscribe("Page.loadEventFired");
-        let mut traffic = session.subscribe_all();
+        let mut traffic = session.subscribe_many(TRAFFIC_EVENTS);
 
         progress.enter(Stage::Navigating);
-        session.send("Page.navigate", json!({ "url": url })).await?;
+        let outcome = session.send("Page.navigate", json!({ "url": url })).await?;
+
+        // A navigation that fails still answers, and the failure is a field in
+        // the reply rather than a protocol error. Ignoring it means a dead
+        // address loads the browser's own error page and reports success, which
+        // would then be printed. D14 says that is exit 1 and no PDF.
+        if let Some(reason) = outcome.get("errorText").and_then(Value::as_str) {
+            return Err(crate::error::Error::Navigation {
+                url: url.to_string(),
+                reason: reason.to_string(),
+            });
+        }
 
         progress.enter(Stage::AwaitingLoad);
         if loaded.next().await.is_none() {

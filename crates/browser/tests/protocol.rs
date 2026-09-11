@@ -330,3 +330,28 @@ async fn sending_after_the_connection_closed_fails_fast() {
         other => panic!("expected ConnectionClosed, got {other:?}"),
     }
 }
+
+/// Asking for several methods gets those and nothing else.
+///
+/// The alternative was subscribing to everything and filtering, which is how a
+/// caller measuring quiet periods ends up woken by unrelated chatter.
+#[tokio::test]
+async fn a_subscription_can_name_several_methods() {
+    let client = connect(Box::new(|request| {
+        vec![
+            json!({ "id": request["id"], "result": {} }),
+            json!({ "method": "Runtime.consoleAPICalled", "params": { "seq": 1 } }),
+            json!({ "method": "Network.loadingFinished", "params": { "seq": 2 } }),
+            json!({ "method": "Page.frameNavigated", "params": { "seq": 3 } }),
+            json!({ "method": "Network.requestWillBeSent", "params": { "seq": 4 } }),
+        ]
+    }));
+
+    let mut traffic =
+        client.subscribe_many(&["Network.requestWillBeSent", "Network.loadingFinished"]);
+    client.send("Network.enable", Value::Null).await.unwrap();
+
+    // The console and navigation events in between must not arrive at all.
+    assert_eq!(traffic.next().await.unwrap().params["seq"], 2);
+    assert_eq!(traffic.next().await.unwrap().params["seq"], 4);
+}
