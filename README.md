@@ -16,15 +16,28 @@ GitHub are in English.
 
 ## State
 
-Early. The command line layer parses; **nothing converts yet**.
+Early. The pieces work; **the command line does not drive them yet**, so the binary still
+refuses to convert.
 
 | Layer | Crate | State |
 | --- | --- | --- |
-| Grammar, option table | `crates/cli` | Working |
-| Units, page sizes, exit codes | `crates/core` | Working |
+| Grammar and option table | `crates/cli` | Working |
+| Command line to settings | `crates/cli` | Not started |
+| Units, page sizes, settings model | `crates/core` | Working |
 | Chrome DevTools Protocol client | `crates/browser` | Working |
-| Chromium launch | `crates/browser` | Not started |
+| Finding and launching Chromium | `crates/browser` | Working |
+| Waiting for a page to settle | `crates/browser` | Working |
+| Printing to PDF | `crates/browser` | Working |
 | Merge, metadata, outlines | `crates/pdf` | Not started |
+
+The browser layer produces real PDFs today, with the right paper size, margins, orientation
+and stylesheets. What is missing is the translation from a command line into the settings
+that drive it, which is why `rchtmltopdf page.html out.pdf` still tells you conversion is
+not implemented.
+
+`--help` lists the options the parser accepts. Until the translation layer lands, options
+marked as implemented describe the target rather than current behaviour; `--extended-help`
+flags the ones that are accepted and ignored on purpose.
 
 What you can do today:
 

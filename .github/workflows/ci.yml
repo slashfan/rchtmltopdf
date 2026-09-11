@@ -75,6 +75,11 @@ jobs:
       # property of the runner, not a default for the product, where the sandbox
       # stays on unless a caller explicitly gives it up (D10).
       RCHTMLTOPDF_TEST_NO_SANDBOX: "1"
+      # Turn "no browser here, skipping" into a failure. The runner image ships
+      # a Chromium, and browser-backed tests silently skipping when it stops
+      # doing so is exactly the rot this variable exists to prevent: eighteen
+      # tests would stop running and CI would stay green.
+      RCHTMLTOPDF_REQUIRE_CHROMIUM: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
