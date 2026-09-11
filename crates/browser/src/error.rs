@@ -1,6 +1,7 @@
 //! Errors from driving a browser.
 
 use std::fmt;
+use std::path::PathBuf;
 
 /// The error object a failed command reply carries.
 ///
@@ -26,8 +27,23 @@ impl fmt::Display for ProtocolError {
 
 impl std::error::Error for ProtocolError {}
 
+/// One place the search for a browser looked, and did not find one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchAttempt {
+    /// Where the candidate came from, for example `--chromium-path` or `PATH`.
+    pub source: String,
+    pub path: PathBuf,
+}
+
 #[derive(Debug)]
 pub enum Error {
+    /// No browser anywhere the resolution order looks.
+    ///
+    /// Carries every path tried so the message can name them. Nothing is ever
+    /// downloaded to recover from this (D09); the user is told how to do it.
+    BrowserNotFound {
+        attempts: Vec<SearchAttempt>,
+    },
     /// The browser answered the command with an error.
     Protocol(ProtocolError),
     /// The connection went away before the reply arrived. Usually means the
@@ -50,6 +66,19 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Error::BrowserNotFound { attempts } => {
+                writeln!(f, "could not find Chromium. Tried, in order:")?;
+                if attempts.is_empty() {
+                    writeln!(f, "  (nothing: no candidate locations for this platform)")?;
+                }
+                for attempt in attempts {
+                    writeln!(f, "  {:<24} {}", attempt.source, attempt.path.display())?;
+                }
+                write!(
+                    f,
+                    "Pass --chromium-path, set CHROME_PATH, or run `rchtmltopdf fetch-chromium` to download a pinned build."
+                )
+            }
             Error::Protocol(error) => write!(f, "the browser rejected the command: {error}"),
             Error::ConnectionClosed => write!(f, "the connection to the browser closed"),
             Error::MessageTooLarge { limit } => write!(

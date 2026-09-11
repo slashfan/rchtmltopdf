@@ -9,6 +9,8 @@
 
 pub mod cdp;
 pub mod error;
+pub mod locate;
 
 pub use cdp::{Client, Event, Session, SessionId};
 pub use error::{Error, ProtocolError, Result};
+pub use locate::{Browser, Flavour, Origin, Platform, locate};
