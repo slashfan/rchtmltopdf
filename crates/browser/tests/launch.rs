@@ -6,54 +6,12 @@
 //! CI does, so a pinned browser quietly going missing is caught rather than
 //! silently skipped forever.
 
-use rchtmltopdf_browser::locate::{Executable, SystemEnvironment, locate};
-use rchtmltopdf_browser::{Browser, LaunchOptions};
+mod support;
+
+use rchtmltopdf_browser::Browser;
+use rchtmltopdf_browser::locate::Executable;
 use serde_json::{Value, json};
-
-/// How to launch here.
-///
-/// The sandbox is not available everywhere. A GitHub runner refuses it outright,
-/// and so does a default Docker container, which is the single most common thing
-/// people hit when moving a deployment into one. Where that is true the
-/// environment says so and these tests follow, rather than pretending the
-/// sandbox works and failing.
-///
-/// It stays on by default, because on a developer machine it does work and that
-/// is the path worth exercising. It is never turned on automatically in the
-/// product (D10): an unsandboxed browser rendering untrusted HTML is the thing
-/// being protected against.
-fn options() -> LaunchOptions {
-    LaunchOptions {
-        no_sandbox: std::env::var_os("RCHTMLTOPDF_TEST_NO_SANDBOX").is_some(),
-        // A shared CI runner starting a browser cold is far slower than a
-        // developer machine. The default is a backstop for real use, not a
-        // statement about how fast a loaded runner ought to be.
-        handshake_timeout: Some(std::time::Duration::from_secs(60)),
-        ..LaunchOptions::default()
-    }
-}
-
-/// Starting a browser is expensive. Running several of these at once on a small
-/// runner makes each of them slow enough to look broken, so they take turns.
-/// Concurrency *within* a test is unaffected, which is what the two-browser test
-/// is actually about.
-async fn one_at_a_time() -> tokio::sync::SemaphorePermit<'static> {
-    static TURN: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
-    TURN.acquire().await.expect("the semaphore is never closed")
-}
-
-fn browser_or_skip() -> Option<Executable> {
-    match locate(None, &SystemEnvironment) {
-        Ok(executable) => Some(executable),
-        Err(error) => {
-            if std::env::var_os("RCHTMLTOPDF_REQUIRE_CHROMIUM").is_some() {
-                panic!("RCHTMLTOPDF_REQUIRE_CHROMIUM is set but no browser was found:\n{error}");
-            }
-            eprintln!("skipping: no browser on this machine");
-            None
-        }
-    }
-}
+use support::{browser_or_skip, one_at_a_time, options};
 
 /// The whole point of the descriptor plumbing: a browser that actually answers.
 /// If the pipe were misplaced this would hang rather than fail, which is why the
