@@ -1,0 +1,21 @@
+[package]
+name = "rchtmltopdf-conformance"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "rchtmltopdf conformance harness: browser-backed tests against a pinned Chromium"
+# A harness, not a product. Nothing here ships to crates.io.
+publish = false
+
+[dependencies]
+# Resolved the way the product resolves it, so the harness cannot drift from
+# D09's ladder by testing against a browser the product would not have found.
+rchtmltopdf-browser = { version = "0.0.1", path = "../browser" }
+rchtmltopdf-core.workspace = true
+# Already in the lock through `browser`. The vendored font rides inside each
+# fixture as a `data:` URI, which has to be base64.
+base64 = "0.23.1"
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["rt", "macros", "time"] }
