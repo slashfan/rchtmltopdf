@@ -109,7 +109,12 @@ jobs:
       # `check`, not `test`: dev-dependencies routinely need a newer compiler
       # than the library itself, and pinning the test tooling to the MSRV is not
       # the promise being made.
-      - run: cargo check --workspace --all-targets --locked
+      #
+      # Conformance is excluded for that same reason, and it is not hypothetical:
+      # lopdf declares `rust-version = "1.85"` and then uses let-chains, which
+      # need 1.88. The MSRV promise is about what a user compiles, and nobody
+      # compiles the harness.
+      - run: cargo check --workspace --all-targets --locked --exclude rchtmltopdf-conformance
 
   docs:
     name: docs
@@ -173,6 +178,7 @@ jobs:
             browser
             pdf
             table
+            conformance
             docker
             pkg
             deps
