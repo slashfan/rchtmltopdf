@@ -142,7 +142,7 @@ fn print_parse(parsed: &rchtmltopdf::Tokenized) {
 
     match &parsed.output {
         Output::Stdout => println!("output: <stdout>"),
-        Output::Path(path) => println!("output: {path}"),
+        Output::Path(path) => println!("output: {}", path.display()),
     }
 }
 
@@ -150,7 +150,7 @@ fn describe_input(input: &Input) -> String {
     match input {
         Input::Stdin => "<stdin>".to_string(),
         Input::Url(url) => format!("url {url}"),
-        Input::Path(path) => format!("file {path}"),
+        Input::Path(path) => format!("file {}", path.display()),
     }
 }
 
