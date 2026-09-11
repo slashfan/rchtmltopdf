@@ -10,4 +10,9 @@ behaves. If you are migrating, that is the section to read.
 
 ## [Unreleased]
 
-Nothing released yet. The command line layer parses; conversion is not implemented.
+Nothing released yet.
+
+The command line grammar and the full wkhtmltopdf option table parse. The browser layer
+finds and launches Chromium, waits for a page to settle, and prints it to PDF. The
+translation from a command line into settings is not written, so the binary does not convert
+yet.

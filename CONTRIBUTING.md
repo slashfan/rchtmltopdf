@@ -16,11 +16,17 @@ cargo run -- --extended-help    # every option the parser accepts
 cargo run -- <args> --dump-parse  # how a command line was understood
 ```
 
-Tests that need a real browser resolve one the same way the product does: the
-`RCHTMLTOPDF_TEST_CHROMIUM` variable, then the system locations described in D09. Without a
-browser they print a skip line and pass, so `cargo test` works anywhere. CI sets
-`RCHTMLTOPDF_REQUIRE_CHROMIUM=1`, which turns that skip into a failure, so a pinned browser
-that quietly disappears is caught rather than ignored.
+Tests that need a real browser resolve one the same way the product does. In order:
+`--chromium-path`, then `RCHTMLTOPDF_CHROMIUM`, `CHROME_PATH`, `CHROMIUM_PATH` or
+`PUPPETEER_EXECUTABLE_PATH`, then the system locations described in D09.
+
+Without a browser they print a skip line and pass, so `cargo test` works anywhere. CI sets
+`RCHTMLTOPDF_REQUIRE_CHROMIUM=1`, which turns that skip into a failure, so a browser that
+quietly disappears is caught rather than ignored for months.
+
+CI also sets `RCHTMLTOPDF_TEST_NO_SANDBOX=1`, because a GitHub runner cannot give Chromium a
+sandbox and it refuses to start rather than run without one. That is a property of the
+runner. The product never gives the sandbox up on its own (D10).
 
 ## Before you open a pull request
 
