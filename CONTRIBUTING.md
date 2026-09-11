@@ -1,5 +1,7 @@
 # Contributing
 
+Working with a coding agent: `AGENTS.md` carries what it needs and points back here.
+
 ## The one rule that matters
 
 **A compatibility finding becomes a test before it becomes a fix.** The command line
