@@ -25,8 +25,21 @@ use serde_json::{Value, json};
 fn options() -> LaunchOptions {
     LaunchOptions {
         no_sandbox: std::env::var_os("RCHTMLTOPDF_TEST_NO_SANDBOX").is_some(),
+        // A shared CI runner starting a browser cold is far slower than a
+        // developer machine. The default is a backstop for real use, not a
+        // statement about how fast a loaded runner ought to be.
+        handshake_timeout: Some(std::time::Duration::from_secs(60)),
         ..LaunchOptions::default()
     }
+}
+
+/// Starting a browser is expensive. Running several of these at once on a small
+/// runner makes each of them slow enough to look broken, so they take turns.
+/// Concurrency *within* a test is unaffected, which is what the two-browser test
+/// is actually about.
+async fn one_at_a_time() -> tokio::sync::SemaphorePermit<'static> {
+    static TURN: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+    TURN.acquire().await.expect("the semaphore is never closed")
 }
 
 fn browser_or_skip() -> Option<Executable> {
@@ -47,6 +60,7 @@ fn browser_or_skip() -> Option<Executable> {
 /// launch has its own handshake timeout.
 #[tokio::test]
 async fn a_launched_browser_answers() {
+    let _turn = one_at_a_time().await;
     let Some(executable) = browser_or_skip() else {
         return;
     };
@@ -71,6 +85,7 @@ async fn a_launched_browser_answers() {
 
 #[tokio::test]
 async fn a_page_can_be_opened_and_driven() {
+    let _turn = one_at_a_time().await;
     let Some(executable) = browser_or_skip() else {
         return;
     };
@@ -98,6 +113,7 @@ async fn a_page_can_be_opened_and_driven() {
 /// over a debugging port, where concurrent conversions race for a number.
 #[tokio::test]
 async fn two_browsers_can_run_at_the_same_time() {
+    let _turn = one_at_a_time().await;
     let Some(executable) = browser_or_skip() else {
         return;
     };
@@ -124,6 +140,7 @@ async fn two_browsers_can_run_at_the_same_time() {
 /// Dropping must leave nothing behind: no process, no profile directory.
 #[tokio::test]
 async fn dropping_a_browser_cleans_up_after_itself() {
+    let _turn = one_at_a_time().await;
     let Some(executable) = browser_or_skip() else {
         return;
     };

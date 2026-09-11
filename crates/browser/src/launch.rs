@@ -40,8 +40,14 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
 
-/// How long to wait for a freshly started browser to answer.
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long to wait for a freshly started browser to answer, by default.
+///
+/// A browser that has not answered in this long on a normal machine is broken,
+/// not slow. It is only a backstop: the conversion deadline is the real bound
+/// and will usually cut in well before this. Overridable, because a heavily
+/// loaded machine starting several browsers at once is genuinely slower than
+/// one that is not.
+const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// How much of the browser's own diagnostics to keep for error reports.
 const STDERR_KEPT_BYTES: usize = 16 * 1024;
@@ -80,6 +86,8 @@ pub struct LaunchOptions {
     pub extra_args: Vec<String>,
     /// Use this profile directory instead of a throwaway one.
     pub user_data_dir: Option<PathBuf>,
+    /// Override how long to wait for the browser to answer after starting.
+    pub handshake_timeout: Option<Duration>,
 }
 
 /// A directory that deletes itself.
@@ -199,14 +207,21 @@ impl Browser {
             diagnostics,
         };
 
-        browser.handshake(executable).await?;
+        browser
+            .handshake(
+                executable,
+                options
+                    .handshake_timeout
+                    .unwrap_or(DEFAULT_HANDSHAKE_TIMEOUT),
+            )
+            .await?;
         Ok(browser)
     }
 
     /// Confirm the browser is really talking before handing it to a caller.
-    async fn handshake(&self, executable: &Executable) -> Result<()> {
+    async fn handshake(&self, executable: &Executable, patience: Duration) -> Result<()> {
         let version = tokio::time::timeout(
-            HANDSHAKE_TIMEOUT,
+            patience,
             self.client.send("Browser.getVersion", Value::Null),
         )
         .await;
@@ -221,7 +236,7 @@ impl Browser {
                     format!(
                         "{} did not answer within {}s",
                         executable.path.display(),
-                        HANDSHAKE_TIMEOUT.as_secs()
+                        patience.as_secs()
                     ),
                 )),
             )),
