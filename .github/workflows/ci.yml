@@ -208,11 +208,25 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
 
+      # Naming the browser explicitly is not belt and braces, it is required.
+      # D09 puts system locations *above* the download cache, and this runner
+      # ships its own `/usr/bin/chromium`, so without this the job downloads the
+      # pin and then resolves past it — which is what happened the first time
+      # this job ran. `RCHTMLTOPDF_CHROMIUM` is D09's second rung, so the ladder
+      # is still what resolves the browser; it is only being told which one.
+      #
+      # The harness checks the resolved browser's version against the pin
+      # whenever RCHTMLTOPDF_REQUIRE_CHROMIUM is set, so this line rotting is a
+      # test failure rather than a suite that quietly stops being pinned.
       - name: Read the pin
         id: pin
-        run: echo "version=$(cat .chromium-version)" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          version="$(cat .chromium-version)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "RCHTMLTOPDF_CHROMIUM=${RCHTMLTOPDF_CACHE_DIR}/${version}/chrome-headless-shell-linux64/chrome-headless-shell" >> "$GITHUB_ENV"
 
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: browser
         with:
           path: ${{ github.workspace }}/.chromium-cache

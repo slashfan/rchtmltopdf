@@ -76,6 +76,13 @@ cargo test -p rchtmltopdf-conformance
 builds the cli *library* and not its binary, so the harness says which command is missing
 rather than failing with "file not found".
 
+**In CI the browser must be the pinned one, and the harness checks.** D09 puts system
+locations above the download cache, so a runner that ships its own Chromium wins over a
+freshly downloaded pin. `RCHTMLTOPDF_CHROMIUM` names the pinned build, and when
+`RCHTMLTOPDF_REQUIRE_CHROMIUM` is set the harness compares the browser's reported version
+against `.chromium-version` and fails if they differ. A wrong browser used to be as quiet as
+a missing one.
+
 **Fixtures carry their own font, and must keep doing so.** Line wrapping follows font
 metrics, so a fixture asking for `sans-serif` is measured against a different typeface on a
 runner, on a Mac and in the Docker image, and a page count that passes locally fails in CI
