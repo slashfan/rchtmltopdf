@@ -89,7 +89,10 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
-      - run: cargo test --workspace --all-features --locked
+      # Conformance is excluded and runs in `chromium` instead. It asserts on
+      # rendered output, so it insists on the pinned browser, and this job is
+      # deliberately pointed at whatever Chromium the runner image ships.
+      - run: cargo test --workspace --all-features --locked --exclude rchtmltopdf-conformance
 
   msrv:
     name: msrv
@@ -175,6 +178,93 @@ jobs:
             deps
           requireScope: false
 
+  # Conformance: the real binary, a real browser, a pinned one (D15).
+  #
+  # Separate from `test` on purpose. `test` runs against whatever Chromium the
+  # runner image happens to ship, which is right for the browser crate's own
+  # tests — they assert on behaviour any Chromium has. This job pins the version
+  # instead, because the conformance suite asserts on rendered output, and page
+  # count moves with the renderer.
+  chromium:
+    name: chromium
+    # Do not spend a browser download on code that does not compile.
+    needs: [clippy]
+    runs-on: ubuntu-latest
+    env:
+      # Turn "no browser here, skipping" into a failure. Without it a pin that
+      # stopped arriving would make the whole suite pass by not running.
+      RCHTMLTOPDF_REQUIRE_CHROMIUM: "1"
+      # The runner restricts user namespaces, so Chromium refuses to start rather
+      # than run unsandboxed. A property of the runner, never a default for the
+      # product (D10).
+      RCHTMLTOPDF_TEST_NO_SANDBOX: "1"
+      # Points D09's last rung at a path inside the workspace, so the browser can
+      # be cached between runs and so the cache rung is what gets exercised.
+      RCHTMLTOPDF_CACHE_DIR: ${{ github.workspace }}/.chromium-cache
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with: { toolchain: stable }
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+
+      # Naming the browser explicitly is not belt and braces, it is required.
+      # D09 puts system locations *above* the download cache, and this runner
+      # ships its own `/usr/bin/chromium`, so without this the job downloads the
+      # pin and then resolves past it — which is what happened the first time
+      # this job ran. `RCHTMLTOPDF_CHROMIUM` is D09's second rung, so the ladder
+      # is still what resolves the browser; it is only being told which one.
+      #
+      # The harness checks the resolved browser's version against the pin
+      # whenever RCHTMLTOPDF_REQUIRE_CHROMIUM is set, so this line rotting is a
+      # test failure rather than a suite that quietly stops being pinned.
+      - name: Read the pin
+        id: pin
+        run: |
+          set -euo pipefail
+          version="$(cat .chromium-version)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "RCHTMLTOPDF_CHROMIUM=${RCHTMLTOPDF_CACHE_DIR}/${version}/chrome-headless-shell-linux64/chrome-headless-shell" >> "$GITHUB_ENV"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: browser
+        with:
+          path: ${{ github.workspace }}/.chromium-cache
+          key: chromium-${{ runner.os }}-${{ hashFiles('.chromium-version') }}
+
+      # TEMPORARY. This belongs in `rchtmltopdf fetch-chromium` (#33), which will
+      # replace this step with a single `cargo run --locked -- fetch-chromium`,
+      # so that D09's download path is exercised on every run instead of being
+      # reimplemented here. Until that subcommand exists, the unpacked layout
+      # below is the contract: `locate` looks for exactly this path, and the
+      # archive already has the versioned folder inside it.
+      - name: Download the pinned Chrome for Testing
+        if: steps.browser.outputs.cache-hit != 'true'
+        env:
+          VERSION: ${{ steps.pin.outputs.version }}
+        run: |
+          set -euo pipefail
+          target="${RCHTMLTOPDF_CACHE_DIR}/${VERSION}"
+          mkdir -p "$target"
+          curl --fail --silent --show-error --location --retry 3 \
+            -o /tmp/headless-shell.zip \
+            "https://storage.googleapis.com/chrome-for-testing-public/${VERSION}/linux64/chrome-headless-shell-linux64.zip"
+          unzip -q /tmp/headless-shell.zip -d "$target"
+          chmod +x "$target/chrome-headless-shell-linux64/chrome-headless-shell"
+
+      # No fonts are installed on purpose. Every fixture carries its own font as
+      # a data: URI, so what this runner has installed is deliberately not part
+      # of the contract; a fixture that started depending on a system font should
+      # become visible rather than be propped up here.
+
+      # `cargo test -p` builds that package's dependencies as libraries and not
+      # their binaries, so the binary under test has to be asked for by name.
+      - run: cargo build -p rchtmltopdf --locked
+      - run: cargo test -p rchtmltopdf-conformance --locked
+
   # The single required status check. Every other job feeds this one, so the
   # branch ruleset never has to be edited when a job is added, renamed or split.
   # `if: always()` plus the explicit result test is what makes skipped jobs (such
@@ -182,31 +272,9 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [fmt, clippy, test, msrv, docs, deny, pr-title]
+    needs: [fmt, clippy, test, chromium, msrv, docs, deny, pr-title]
     runs-on: ubuntu-latest
     steps:
       - name: Check that every required job succeeded
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: exit 1
-
-# --- Not enabled yet -------------------------------------------------------
-#
-# A `chromium` job will run the conversion conformance tests (D15) once the
-# browser crate exists. Its shape is settled so adding it is additive:
-#
-#   chromium:
-#     needs: [clippy]            # do not download a browser for code that fails to compile
-#     runs-on: ubuntu-latest
-#     env:
-#       RCHTMLTOPDF_REQUIRE_CHROMIUM: "1"   # turn a local "skip" into a CI failure
-#       RCHTMLTOPDF_CACHE_DIR: ${{ github.workspace }}/.chromium-cache
-#     steps:
-#       - actions/cache keyed on hashFiles('.chromium-version')
-#       - apt-get install fonts-liberation fonts-dejavu-core fonts-noto-core
-#       - cargo run --locked -- fetch-chromium    # dogfoods D09's resolution order
-#       - cargo test -p rchtmltopdf-conformance --locked
-#
-# Then add `chromium` to the `ci` job's `needs:` list. The ruleset does not change.
-#
-# The `deny` job landed with the first external dependencies (tokio, serde,
-# serde_json), as planned.

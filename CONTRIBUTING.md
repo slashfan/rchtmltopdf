@@ -18,6 +18,14 @@ cargo run -- --extended-help    # every option the parser accepts
 cargo run -- <args> --dump-parse  # how a command line was understood
 ```
 
+The conformance suite runs the built binary against a real browser, so it needs the binary
+to exist. `cargo test --workspace` builds it for you; running the package on its own does
+not, because cargo builds a dependency's library and not its binaries:
+
+```bash
+cargo build -p rchtmltopdf && cargo test -p rchtmltopdf-conformance
+```
+
 Tests that need a real browser resolve one the same way the product does. In order:
 `--chromium-path`, then `RCHTMLTOPDF_CHROMIUM`, `CHROME_PATH`, `CHROMIUM_PATH` or
 `PUPPETEER_EXECUTABLE_PATH`, then the system locations described in D09.
