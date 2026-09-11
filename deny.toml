@@ -1,16 +1,13 @@
 # cargo-deny policy.
 #
-# The workspace currently has no external dependencies, so every check here is
-# trivially green. The policy is written now, while it costs nothing, because
-# the licence rule is the one that matters: this project is MIT OR Apache-2.0
+# The licence rule is the one that matters: this project is MIT OR Apache-2.0
 # (D18) and must not acquire a copyleft transitive dependency. D18 also
 # anticipates a libwkhtmltox-compatible C API in V3, which would make an
 # accidental copyleft dependency far more expensive to unwind than to prevent.
 #
-# The CI job lands in the same pull request that introduces the first
-# dependency. Split it in two when it does:
-#   - blocking on pull requests:  cargo deny check bans licenses sources
-#   - on a weekly schedule only:  cargo deny check advisories
+# Enforcement is split in two, on purpose:
+#   - blocking on pull requests, in ci.yml:  check bans licenses sources
+#   - on a weekly schedule, in audit.yml:    check advisories
 # Advisories are time-dependent. A new entry published on a Tuesday must not
 # turn every unrelated pull request red.
 

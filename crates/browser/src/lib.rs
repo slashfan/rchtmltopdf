@@ -1,4 +1,14 @@
-//! Chromium launch and Chrome DevTools Protocol client.
+//! Driving a headless Chromium.
 //!
-//! Not implemented yet. The interface will be session-oriented so a pooled or
-//! daemon mode can be added later without changing the CLI layer.
+//! Today this is the protocol client in [`cdp`]. Launching a browser, waiting
+//! for a page to settle and printing it follow.
+//!
+//! The interface is session-oriented on purpose. One browser per conversion is
+//! the current model, but nothing here assumes it, so a pooled or long-running
+//! mode can be added later without the command line layer noticing.
+
+pub mod cdp;
+pub mod error;
+
+pub use cdp::{Client, Event, Session, SessionId};
+pub use error::{Error, ProtocolError, Result};

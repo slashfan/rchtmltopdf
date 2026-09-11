@@ -111,6 +111,21 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo doc --workspace --no-deps
 
+  deny:
+    name: deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      # Bans, licences and sources only. These are a pure function of
+      # Cargo.lock, so they are deterministic and safe to require on a pull
+      # request. Advisories are deliberately NOT here: they are time-dependent,
+      # and a new entry published on a Tuesday must not turn every unrelated
+      # pull request red. They run on a schedule in audit.yml instead.
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
+        with:
+          command: check bans licenses sources
+
   pr-title:
     name: pr-title
     if: github.event_name == 'pull_request'
@@ -155,7 +170,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [fmt, clippy, test, msrv, docs, pr-title]
+    needs: [fmt, clippy, test, msrv, docs, deny, pr-title]
     runs-on: ubuntu-latest
     steps:
       - name: Check that every required job succeeded
@@ -181,8 +196,5 @@ jobs:
 #
 # Then add `chromium` to the `ci` job's `needs:` list. The ruleset does not change.
 #
-# A `deny` job (cargo-deny: bans, licenses, sources) lands in the same pull
-# request that introduces the first external dependency. `deny.toml` already
-# holds the policy. Advisories run on a schedule, never as a blocking check:
-# a RUSTSEC entry published on a Tuesday must not turn every unrelated pull
-# request red.
+# The `deny` job landed with the first external dependencies (tokio, serde,
+# serde_json), as planned.

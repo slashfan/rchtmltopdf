@@ -22,8 +22,9 @@ Early. The command line layer parses; **nothing converts yet**.
 | --- | --- | --- |
 | Grammar, option table | `crates/cli` | Working |
 | Units, page sizes, exit codes | `crates/core` | Working |
-| Chromium launch, CDP client | `crates/browser` | Empty |
-| Merge, metadata, outlines | `crates/pdf` | Empty |
+| Chrome DevTools Protocol client | `crates/browser` | Working |
+| Chromium launch | `crates/browser` | Not started |
+| Merge, metadata, outlines | `crates/pdf` | Not started |
 
 What you can do today:
 

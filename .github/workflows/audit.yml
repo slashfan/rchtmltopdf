@@ -1,0 +1,23 @@
+name: Audit
+
+# Advisories are time-dependent: an entry published today can fail a build that
+# passed yesterday, through no fault of any change. So this runs on a schedule
+# rather than on pull requests, where it would block unrelated work.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  advisories:
+    name: advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
+        with:
+          command: check advisories
