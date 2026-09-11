@@ -94,6 +94,10 @@ impl Page {
         session.send("Page.enable", Value::Null).await?;
         session.send("Network.enable", Value::Null).await?;
 
+        // Before the document arrives, not after: media queries decide which
+        // resources are fetched at all.
+        self.emulate_media(web).await?;
+
         if !web.javascript {
             session
                 .send(
