@@ -292,6 +292,13 @@ impl Browser {
         Ok(())
     }
 
+    /// The throwaway profile directory, when this browser owns one.
+    ///
+    /// `None` when the caller supplied their own, which is theirs to manage.
+    pub fn profile_path(&self) -> Option<&std::path::Path> {
+        self._profile.as_ref().map(|profile| profile.path.as_path())
+    }
+
     /// Whatever the browser has written to its own error stream so far.
     pub fn diagnostics(&self) -> String {
         self.diagnostics.lock().unwrap().clone()
