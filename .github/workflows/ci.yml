@@ -89,7 +89,10 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
-      - run: cargo test --workspace --all-features --locked
+      # Conformance is excluded and runs in `chromium` instead. It asserts on
+      # rendered output, so it insists on the pinned browser, and this job is
+      # deliberately pointed at whatever Chromium the runner image ships.
+      - run: cargo test --workspace --all-features --locked --exclude rchtmltopdf-conformance
 
   msrv:
     name: msrv
