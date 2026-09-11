@@ -19,3 +19,4 @@ rchtmltopdf-core.workspace = true
 base64 = "0.23.1"
 serde_json = "1.0.151"
 tokio = { version = "1.53.1", features = ["rt", "macros", "time"] }
+lopdf = { version = "0.45", default-features = false }

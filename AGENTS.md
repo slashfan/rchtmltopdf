@@ -83,6 +83,22 @@ freshly downloaded pin. `RCHTMLTOPDF_CHROMIUM` names the pinned build, and when
 against `.chromium-version` and fails if they differ. A wrong browser used to be as quiet as
 a missing one.
 
+**`inspect` is the only module that knows lopdf exists (D25).** Test bodies see `Rect`, a page
+count and a `String`. `crates/pdf` stays empty until the product needs it (#29), so its first
+public API is shaped by merging and metadata rather than by what a test wanted to measure.
+
+**Two things a PDF will not tell you.** A margin has no entry of its own — it is an offset
+applied to content — so a fixture paints a block filling its content area and where that
+block lands *is* the margin. And `re` operands are in the current transformation matrix, not
+in page space, so `inspect` tracks the matrix stack; reading the operands raw gives numbers
+that look plausible and are wrong.
+
+**Chromium does not print the paper size it was asked for.** Every media box it writes is a
+multiple of 0.24 pt (one device unit at 300 dpi), and millimetre-defined sizes land slightly
+large — up to 0.80 pt across the sizes asserted here, while Letter and Legal are exact. That
+is what `inspect::TOLERANCE` is for; it is not licence to be vague, and a size a millimetre
+out still fails.
+
 **Fixtures carry their own font, and must keep doing so.** Line wrapping follows font
 metrics, so a fixture asking for `sans-serif` is measured against a different typeface on a
 runner, on a Mac and in the Docker image, and a page count that passes locally fails in CI
@@ -97,7 +113,7 @@ Read these before changing behaviour they describe. Both are in French; the code
 and everything on GitHub are in English.
 
 - `docs/brief.md` — scope, V0 through V3, and what compatibility does and does not mean
-- `docs/decisions.md` — D01 to D24, binding, with the alternatives that were rejected
+- `docs/decisions.md` — D01 to D25, binding, with the alternatives that were rejected
 - `docs/migration.md` — why a migrated document changes size, for anything touching layout
 - `CONTRIBUTING.md` — the branch, pull request and Conventional Commit workflow
 

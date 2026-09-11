@@ -18,6 +18,8 @@
 
 pub mod binary;
 pub mod fixture;
+pub mod inspect;
+pub mod server;
 
 use rchtmltopdf_browser::locate::{Executable, PINNED_VERSION, SystemEnvironment, locate};
 use std::path::Path;

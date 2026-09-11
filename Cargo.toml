@@ -18,10 +18,6 @@ description = "wkhtmltopdf-compatible CLI, modern Chromium rendering"
 
 [workspace.dependencies]
 rchtmltopdf-core = { path = "crates/core", version = "0.0.1" }
-rchtmltopdf = { path = "crates/cli", version = "0.0.1" }
-rchtmltopdf-browser = { path = "crates/browser", version = "0.0.1" }
-rchtmltopdf-pdf = { path = "crates/pdf", version = "0.0.1" }
-rchtmltopdf-conformance = { path = "crates/conformance", version = "0.0.1" }
 
 [profile.release]
 lto = "thin"

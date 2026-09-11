@@ -204,6 +204,14 @@ Le nombre d'approbations requises est **0**. Un mainteneur seul ne peut pas appr
 
 **Écarté.** Conserver `rchtmltopdf-cli`.
 
+## D25 — lopdf dans le harnais de conformité, derrière un module `inspect`
+
+**Choix.** Le crate `conformance` dépend directement de lopdf et confine ses types dans un seul module, `inspect`. Aucun corps de test ne manipule un type lopdf : ils voient `Rect`, un nombre de pages, du texte. `crates/pdf` reste vide jusqu'à ce que le produit en ait besoin (#29). Amende D12.
+
+**Pourquoi.** D12 isole lopdf pour que la bibliothèque reste remplaçable et que le produit n'en dépende pas. Un harnais de test n'est pas le produit. Ce qu'il lui faut — la MediaBox d'une page, un nombre de pages, du texte extrait, les coordonnées d'un rectangle dessiné — sont des primitives d'inspection que la fusion, les métadonnées et les outlines n'appelleront jamais. Donner à `crates/pdf` sa première API publique dessinée par les besoins des tests, des mois avant que le produit en ait une, inverse l'ordre de conception. La garantie de D12 est tenue là où elle compte : de chaque côté, un seul module connaît lopdf.
+
+**Écarté.** Construire la surface de lecture dans `crates/pdf` dès #17 ; lire les objets PDF à la main dans les tests.
+
 ---
 
 ## Conséquences transverses
