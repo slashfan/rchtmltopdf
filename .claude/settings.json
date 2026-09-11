@@ -28,5 +28,21 @@
       "Bash(gh ruleset list:*)",
       "Bash(gh ruleset view:*)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit*)",
+            "command": "cargo fmt --all --check >/dev/null 2>&1 || echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Formatting gate: cargo fmt --all --check failed. Run cargo fmt --all, then commit.\"}}'",
+            "timeout": 60,
+            "statusMessage": "Checking formatting"
+          }
+        ]
+      }
+    ]
   }
 }
