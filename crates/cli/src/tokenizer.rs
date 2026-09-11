@@ -20,61 +20,10 @@
 //! command line it would reject into one that works.
 
 use crate::table::{OptionSpec, Scope, Support, lookup_long, lookup_short};
+// The document model owns these: the browser and PDF layers need them too, and
+// nothing downstream should have to know how a command line was written.
+pub use rchtmltopdf_core::document::{Input, Output};
 use std::fmt;
-
-/// Where a document comes from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Input {
-    /// The literal argument `-`.
-    Stdin,
-    /// Something with a URL scheme, such as `https://` or `file://`.
-    Url(String),
-    /// Anything else, treated as a filesystem path.
-    Path(String),
-}
-
-impl Input {
-    pub fn classify(raw: &str) -> Self {
-        if raw == "-" {
-            return Input::Stdin;
-        }
-        if has_url_scheme(raw) {
-            return Input::Url(raw.to_string());
-        }
-        Input::Path(raw.to_string())
-    }
-
-    pub fn as_str(&self) -> &str {
-        match self {
-            Input::Stdin => "-",
-            Input::Url(value) | Input::Path(value) => value,
-        }
-    }
-}
-
-/// Does this look like `scheme://...` rather than a path?
-///
-/// A single-letter scheme is rejected so a Windows path such as `C:\tmp\a.html`
-/// is not mistaken for a URL.
-fn has_url_scheme(raw: &str) -> bool {
-    let Some(colon) = raw.find(':') else {
-        return false;
-    };
-    let scheme = &raw[..colon];
-    scheme.len() > 1
-        && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
-        && scheme
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-}
-
-/// Where the PDF goes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Output {
-    /// The literal argument `-`.
-    Stdout,
-    Path(String),
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ObjectKind {
@@ -390,11 +339,7 @@ fn assemble(tokens: Vec<Token>) -> Result<Tokenized, ParseError> {
     else {
         unreachable!("index came from rposition over positionals")
     };
-    let output = if output_raw == "-" {
-        Output::Stdout
-    } else {
-        Output::Path(output_raw)
-    };
+    let output = Output::classify(&output_raw);
 
     let mut globals = Vec::new();
     let mut defaults = Vec::new();
