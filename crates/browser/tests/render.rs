@@ -27,6 +27,86 @@ async fn a_plain_page_settles() {
     browser.close().await.unwrap();
 }
 
+/// Progress exists so a conversion that gets stuck can say which rung it is on.
+/// Asserting only the final rung proves nothing: the line above the assertion
+/// sets it. This watches a slow load from outside and checks an intermediate
+/// rung is actually reached and published.
+#[tokio::test]
+async fn the_rung_being_climbed_is_visible_from_outside() {
+    let _turn = one_at_a_time().await;
+    let Some(browser) = launch().await else {
+        return;
+    };
+    let server = TestServer::start().await;
+    let page = browser.new_page().await.unwrap();
+    page.prepare(&WebSettings::default()).await.unwrap();
+
+    let progress = Progress::new();
+    let watcher = {
+        let progress = progress.clone();
+        tokio::spawn(async move {
+            let mut seen = Vec::new();
+            // The stylesheet takes 700ms, so there is a wide window in which to
+            // catch the rungs before the last one.
+            for _ in 0..120 {
+                let stage = progress.current();
+                if !seen.contains(&stage) {
+                    seen.push(stage);
+                }
+                if stage == Stage::Settled {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            seen
+        })
+    };
+
+    page.load(
+        &server.url("/slow-css"),
+        &LoadSettings::default(),
+        &progress,
+    )
+    .await
+    .unwrap();
+
+    let seen = watcher.await.unwrap();
+    assert!(
+        seen.contains(&Stage::AwaitingNetworkIdle),
+        "never saw the network rung; only saw {seen:?}"
+    );
+    assert!(seen.len() > 1, "only ever saw one rung: {seen:?}");
+    browser.close().await.unwrap();
+}
+
+/// A request whose connection is dropped is reported as failed, not finished.
+/// The 404 route returns a body, so it completes normally and never reaches that
+/// branch; this one hangs up instead.
+#[tokio::test]
+async fn a_request_that_fails_outright_does_not_hold_the_page_open() {
+    let _turn = one_at_a_time().await;
+    let Some(browser) = launch().await else {
+        return;
+    };
+    let server = TestServer::start().await;
+    let page = browser.new_page().await.unwrap();
+    page.prepare(&WebSettings::default()).await.unwrap();
+
+    let settled = tokio::time::timeout(
+        Duration::from_secs(15),
+        page.load(
+            &server.url("/broken-image"),
+            &LoadSettings::default(),
+            &Progress::new(),
+        ),
+    )
+    .await;
+
+    assert!(settled.is_ok(), "a failed request hung the wait");
+    settled.unwrap().unwrap();
+    browser.close().await.unwrap();
+}
+
 /// The point of waiting for the network rather than only for the load event.
 /// The stylesheet arrives well after load, and printing before it would use the
 /// wrong styles.
@@ -113,9 +193,13 @@ async fn window_status_is_waited_for() {
     .expect("should not have fallen back to the delay")
     .unwrap();
 
+    // The status is set 400ms in, so anything faster means it was not waited
+    // for at all. The upper bound is already implied by the timeout above; this
+    // lower one is the assertion that matters.
     assert!(
-        started.elapsed() < Duration::from_secs(20),
-        "the delay was used instead of the status"
+        started.elapsed() >= Duration::from_millis(400),
+        "settled in {:?}, before the status could have been set",
+        started.elapsed()
     );
     browser.close().await.unwrap();
 }
