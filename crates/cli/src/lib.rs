@@ -12,9 +12,11 @@
 //! millimetres. A general-purpose argument parser fights all of this, so the
 //! grammar is tokenised by hand here.
 
+pub mod apply;
 pub mod table;
 pub mod tokenizer;
 
+pub use apply::{Applied, ApplyError, apply};
 pub use table::{OptionSpec, Scope, Support, lookup_long, lookup_short};
 pub use tokenizer::{
     Input, Object, ObjectKind, Occurrence, Output, ParseError, Tokenized, find_meta_option,

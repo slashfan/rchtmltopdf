@@ -4,10 +4,10 @@
 //! the grammar is parsed, unimplemented options warn, and `--dump-parse` shows
 //! how a command line was understood.
 
+use rchtmltopdf::apply::apply;
 use rchtmltopdf::table::{OptionSpec, SECTIONS, Support};
 use rchtmltopdf::tokenizer::{Input, ObjectKind, Output, find_meta_option, tokenize};
 use rchtmltopdf_core::ExitCode;
-use rchtmltopdf_core::settings::LogLevel;
 use std::io::Write;
 use std::process;
 
@@ -44,13 +44,16 @@ fn run(args: &[String]) -> ExitCode {
         }
     };
 
-    let log_level = match resolve_log_level(&parsed) {
-        Ok(level) => level,
-        Err(message) => {
-            eprintln!("{PROGRAM}: {message}");
-            return ExitCode::Failure;
-        }
-    };
+    // Translate first, but hold any failure: a command line that will not
+    // translate is exactly when seeing how it was read is most useful, so
+    // --dump-parse still answers below. Warnings come out either way, at the
+    // level the command line asked for, falling back to the default when the
+    // level itself is what could not be read.
+    let translated = apply(&parsed);
+    let log_level = translated
+        .as_ref()
+        .map(|settings| settings.global.log_level)
+        .unwrap_or_default();
 
     if log_level.shows_warnings() {
         // One line per option, not per occurrence: repeating an option should
@@ -71,42 +74,24 @@ fn run(args: &[String]) -> ExitCode {
         .globals
         .iter()
         .any(|occurrence| occurrence.spec.long == "dump-parse");
-
     if dump {
         print_parse(&parsed);
         return ExitCode::Success;
     }
+
+    let _settings = match translated {
+        Ok(settings) => settings,
+        Err(error) => {
+            eprintln!("{PROGRAM}: {error}");
+            return ExitCode::Failure;
+        }
+    };
 
     eprintln!(
         "{PROGRAM}: conversion is not implemented yet; only the command line layer is in place."
     );
     eprintln!("{PROGRAM}: run the same command with --dump-parse to see how it was understood.");
     ExitCode::Failure
-}
-
-/// Work out how much to say.
-///
-/// `-q` is defined as shorthand for `--log-level none`, so the two are resolved
-/// together and the last one written wins. Reading only `quiet`, as this used to,
-/// left `--log-level` marked as implemented in the option table while doing
-/// nothing at all.
-fn resolve_log_level(parsed: &rchtmltopdf::Tokenized) -> Result<LogLevel, String> {
-    let mut level = LogLevel::default();
-
-    for occurrence in parsed.occurrences() {
-        match occurrence.spec.long {
-            "quiet" => level = LogLevel::None,
-            "log-level" => {
-                let value = occurrence.values.first().map(String::as_str).unwrap_or("");
-                level = LogLevel::parse(value).ok_or_else(|| {
-                    format!("Unknown log level {value}, expected one of: none, error, warn, info")
-                })?;
-            }
-            _ => {}
-        }
-    }
-
-    Ok(level)
 }
 
 /// Answer a meta option: the ones that report something and exit.
