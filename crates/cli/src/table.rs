@@ -166,7 +166,6 @@ const V3: &str = "planned for V3";
 const NO_BANDS: &str = "headers and footers are not drawn yet";
 const NO_NETWORK: &str = "nothing is configured on the browser's network stack yet";
 const NO_PAGE_TUNING: &str = "the page is not tuned before it loads yet";
-const NO_FILE_POLICY: &str = "the local file access policy is not enforced yet";
 const NO_SCRIPTS: &str = "nothing is run inside the page yet";
 const NO_ERROR_POLICY: &str = "a failure to load is not classified yet";
 const NO_METADATA: &str = "PDF metadata is not written yet";
@@ -423,7 +422,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "allow",
         None,
         Object,
-        Planned(NO_FILE_POLICY),
+        Implemented,
         &["path"],
         "Allow the file or files from the specified folder to be loaded (repeatable)",
     )
@@ -641,14 +640,14 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "disable-local-file-access",
         None,
         Object,
-        Planned(NO_FILE_POLICY),
+        Implemented,
         "Do not allow conversion of a local file to read in other local files, unless explicitly allowed with --allow (default)",
     ),
     OptionSpec::flag(
         "enable-local-file-access",
         None,
         Object,
-        Planned(NO_FILE_POLICY),
+        Implemented,
         "Allow conversion of a local file to read in other local files",
     ),
     OptionSpec::new(

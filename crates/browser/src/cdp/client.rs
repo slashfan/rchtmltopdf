@@ -429,6 +429,7 @@ impl Drop for Client {
 }
 
 /// A handle addressing one attached target.
+#[derive(Clone)]
 pub struct Session {
     inner: Arc<Inner>,
     id: SessionId,

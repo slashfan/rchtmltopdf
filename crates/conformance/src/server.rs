@@ -16,6 +16,14 @@ use std::time::Duration;
 /// A document with a sentinel in it, served at a real URL.
 pub const PAGE: &str = "/page";
 
+/// A document that pulls in whatever URL follows `?href=`, as a stylesheet.
+///
+/// For the question only a real origin can ask: what a page fetched over http is
+/// allowed to reach on the disk of the machine rendering it (D10). The URL is
+/// interpolated as written, so keep `?` and `&` out of it — a temporary
+/// directory has neither.
+pub const REFERENCING: &str = "/referencing";
+
 /// Accepts the request and never answers. The page under it never loads, which
 /// is what a deadline is for (D16).
 pub const HANG: &str = "/hang";
@@ -56,6 +64,12 @@ impl Server {
 
                     let body = if path.starts_with(PAGE) {
                         fixture::document(&format!("<p>{SENTINEL}</p>"))
+                    } else if let Some(query) = path.strip_prefix(REFERENCING) {
+                        let href = query.strip_prefix("?href=").unwrap_or_default();
+                        fixture::document(&format!(
+                            "<link rel=\"stylesheet\" href=\"{href}\">\
+                             <div id=\"pad\"></div><p>{SENTINEL}</p>"
+                        ))
                     } else {
                         let _ = respond(&mut stream, "404 Not Found", "text/plain", "not found");
                         return;

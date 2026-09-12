@@ -1,9 +1,11 @@
 //! The `rchtmltopdf` binary.
 //!
-//! Conversion is not wired up yet. What works today is the command line layer:
-//! the grammar is parsed, unimplemented options warn, and `--dump-parse` shows
-//! how a command line was understood.
+//! Everything the program promises about how it behaves rather than what it
+//! renders lives here: which stream each thing is written to, what the exit code
+//! says, how much is said at each log level, and the warnings on options that
+//! are recognised and not acted on (D02, D14).
 
+use rchtmltopdf::PROGRAM;
 use rchtmltopdf::apply::apply;
 use rchtmltopdf::convert::convert;
 use rchtmltopdf::table::{OptionSpec, SECTIONS, Support};
@@ -12,7 +14,6 @@ use rchtmltopdf_core::ExitCode;
 use std::io::Write;
 use std::process;
 
-const PROGRAM: &str = "rchtmltopdf";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
 

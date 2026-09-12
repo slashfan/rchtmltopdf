@@ -139,5 +139,6 @@ and everything on GitHub are in English.
 
 Module documentation carries the traps that cost real time: the descriptor plumbing in
 `crates/browser/src/launch.rs`, the framing and session rules in `crates/browser/src/cdp/`,
-and the ordering of the wait ladder in `crates/browser/src/render.rs`. Read the module doc
-before editing one of those.
+the ordering of the wait ladder in `crates/browser/src/render.rs`, and the two rules about
+`Fetch` in `crates/browser/src/intercept.rs` — a paused request nobody answers does not slow
+the page down, it stops it dead. Read the module doc before editing one of those.

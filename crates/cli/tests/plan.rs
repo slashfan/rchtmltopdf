@@ -192,7 +192,7 @@ fn the_advertised_surface_is_the_audited_one() {
         .filter(|spec| spec.support == Support::Implemented)
         .count();
     assert_eq!(
-        implemented, 20,
+        implemented, 23,
         "the number of options honoured end to end changed; \
          if that is deliberate, the audit and this number move together"
     );

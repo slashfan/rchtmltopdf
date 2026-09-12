@@ -19,9 +19,22 @@ act on are accepted and warned about rather than breaking a command line that us
 
 Several documents, covers and a table of contents are not built. Neither is most of the
 option surface beyond what V0 needed: headers and footers, cookies and custom headers,
-credentials and proxies, encoding, the viewport, injected stylesheets and scripts, the local
-file access policy and PDF metadata are all understood on the command line and not yet acted
-on.
+credentials and proxies, encoding, the viewport, injected stylesheets and scripts, and PDF
+metadata are all understood on the command line and not yet acted on.
+
+### Security
+
+**A document can no longer read the disk it is rendered on.** `--enable-local-file-access`,
+`--disable-local-file-access` and `--allow` are enforced, which is wkhtmltopdf 0.12.6's rule
+and D10's: a local document may not read a file beside it unless the flag is given or
+`--allow` names the directory, and a document fetched over http or https may never read a
+local file at all, whatever the options say. A refused load is named on stderr rather than
+dropped, because a document that renders with a stylesheet missing is the hardest kind of
+failure to notice.
+
+Chromium's own default is the permissive one and no launch flag changes it, so this is real
+per-request interception. `--allow` resolves symlinks and refuses a path that climbs out of
+the directory it names.
 
 ### Compatibility
 

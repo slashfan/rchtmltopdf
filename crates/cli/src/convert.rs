@@ -4,9 +4,10 @@
 //! below takes settings and knows nothing about how they were written. This is
 //! the seam, and it is short on purpose.
 
-use crate::{input, output};
+use crate::{PROGRAM, input, output};
 use rchtmltopdf_browser::Browser;
 use rchtmltopdf_browser::deadline;
+use rchtmltopdf_browser::intercept;
 use rchtmltopdf_browser::locate::{SystemEnvironment, locate};
 use rchtmltopdf_browser::plan::Plan;
 use rchtmltopdf_browser::render::Progress;
@@ -79,9 +80,14 @@ pub async fn convert(settings: &Settings) -> Result<(), ConvertError> {
     // The browser is created inside the deadline, so expiry drops it and its Drop
     // stops the process group and removes the profile. Cleanup is not a step that
     // could be skipped.
-    let pdf = deadline::within(plan.deadline, &progress, async {
+    let (pdf, refused) = deadline::within(plan.deadline, &progress, async {
         let browser = Browser::launch(&executable, &plan.launch).await?;
         let page = browser.new_page().await?;
+
+        // Before anything is fetched, the document included: the policy has to
+        // be in place for the first request, not the second (D10).
+        let policing =
+            intercept::install(page.session(), plan.file_access.about(document.url())).await?;
 
         page.prepare(&object.web).await?;
         page.load(document.url(), &object.load, &progress).await?;
@@ -89,11 +95,26 @@ pub async fn convert(settings: &Settings) -> Result<(), ConvertError> {
             .print_to_pdf(&settings.global.page, &object.web)
             .await?;
 
+        // Read before the guard is dropped, which is what stops interception.
+        let refused = policing
+            .as_ref()
+            .map(intercept::Interception::refused)
+            .unwrap_or_default();
+
         // Asked to leave rather than killed, so it can finish writing.
         browser.close().await?;
-        Ok(pdf)
+        Ok((pdf, refused))
     })
     .await?;
+
+    // A document that renders with a stylesheet missing is the hardest kind of
+    // failure to diagnose, because it renders. Said on stderr, where it cannot
+    // corrupt a PDF written to stdout.
+    if settings.global.log_level.shows_warnings() {
+        for refusal in &refused {
+            eprintln!("{PROGRAM}: warning: {refusal}");
+        }
+    }
 
     output::write(&settings.global.output, &pdf)?;
     Ok(())
