@@ -119,9 +119,23 @@ impl fmt::Display for Error {
                 for attempt in attempts {
                     writeln!(f, "  {:<24} {}", attempt.source, attempt.path.display())?;
                 }
+                writeln!(f, "\nInstall one — any of these will do:")?;
+                writeln!(f, "  Debian, Ubuntu   apt install chromium")?;
+                writeln!(f, "  Fedora           dnf install chromium")?;
+                writeln!(f, "  Arch             pacman -S chromium")?;
+                writeln!(f, "  macOS            brew install --cask chromium")?;
+                writeln!(
+                    f,
+                    "  a pinned build   npx @puppeteer/browsers install chrome-headless-shell@{}",
+                    crate::locate::PINNED_VERSION
+                )?;
+                writeln!(
+                    f,
+                    "\nThen point at it with --chromium-path, or set CHROME_PATH."
+                )?;
                 write!(
                     f,
-                    "Pass --chromium-path, set CHROME_PATH, or run `rchtmltopdf fetch-chromium` to download a pinned build."
+                    "Either takes the executable, a directory it was unpacked into, or a macOS .app bundle."
                 )
             }
             Error::Timeout { after, stage } => {

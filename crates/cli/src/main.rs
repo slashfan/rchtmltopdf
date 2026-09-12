@@ -10,6 +10,7 @@ use rchtmltopdf::convert::convert;
 use rchtmltopdf::table::{OptionSpec, SECTIONS, Support};
 use rchtmltopdf::tokenizer::{Input, ObjectKind, Output, find_meta_option, tokenize};
 use rchtmltopdf::{PROGRAM, VERSION};
+use rchtmltopdf_browser::locate::{Flavour, Origin, SystemEnvironment, locate};
 use rchtmltopdf_core::ExitCode;
 use std::io::Write;
 use std::process;
@@ -39,7 +40,7 @@ async fn run(args: &[String]) -> ExitCode {
     // because option values are consumed positionally and a scan would mistake a
     // value for a request. See `find_meta_option`.
     if let Some(spec) = find_meta_option(args) {
-        return run_meta(spec);
+        return run_meta(spec, args);
     }
 
     let parsed = match tokenize(args.to_vec()) {
@@ -108,7 +109,7 @@ async fn run(args: &[String]) -> ExitCode {
 /// marked `Support::Meta` arrives here, so a new one cannot silently fall through
 /// to "you need to specify at least one input file". One that has no arm yet is
 /// reported as not implemented.
-fn run_meta(spec: &'static OptionSpec) -> ExitCode {
+fn run_meta(spec: &'static OptionSpec, args: &[String]) -> ExitCode {
     match spec.long {
         "help" => {
             print_help(&mut std::io::stdout(), false);
@@ -132,11 +133,74 @@ fn run_meta(spec: &'static OptionSpec) -> ExitCode {
             println!("{REPOSITORY}");
             ExitCode::Success
         }
+        "dump-chromium" => report_chromium(args),
         // wkhtmltopdf could print its own manual, readme and HTML help. Those are
         // documentation generators we have not built. Say so plainly rather than
         // exiting zero having produced nothing that was asked for.
         other => {
             eprintln!("{PROGRAM}: --{other} is not implemented; see {REPOSITORY}");
+            ExitCode::Failure
+        }
+    }
+}
+
+/// Say which browser would be used, and where it came from.
+///
+/// The question this answers is "did my path take", which is worth answering
+/// because what counts as a path is wider than it looks: a macOS `.app` bundle
+/// and an unpacked directory both work, and both used to be refused (D31).
+///
+/// `--chromium-path` is read through the real parser, never by scanning the
+/// arguments: a scan mistakes an option's *value* for a request, which is the
+/// bug `find_meta_option` exists because of.
+///
+/// The grammar wants an input and an output, and
+/// `rchtmltopdf --chromium-path X --dump-chromium` has neither — it is a
+/// question, not a conversion. So when the line will not parse as it stands, the
+/// parser is asked the same question about a line that would: the two
+/// placeholders below are never converted and never reach anything. Answering
+/// with the wrong browser because the line was missing a filename would be a bad
+/// answer to "did my path take".
+fn report_chromium(args: &[String]) -> ExitCode {
+    let read = |args: Vec<String>| {
+        tokenize(args)
+            .ok()
+            .and_then(|parsed| apply(&parsed).ok())
+            .and_then(|settings| settings.global.browser.path.clone())
+    };
+
+    let flag = read(args.to_vec()).or_else(|| {
+        let mut complete = args.to_vec();
+        complete.push("-".to_string());
+        complete.push("-".to_string());
+        read(complete)
+    });
+
+    match locate(flag.as_deref(), &SystemEnvironment) {
+        Ok(executable) => {
+            println!("path:    {}", executable.path.display());
+            println!("source:  {}", executable.origin);
+            // The ladder falls through a rung that does not answer (D09), so a
+            // path that is not a browser is quietly overtaken by one that is.
+            // Sensible for a conversion, and useless as a reply to "did my path
+            // take", so the one case where they differ is said out loud.
+            if let Some(given) = flag.as_ref().filter(|_| executable.origin != Origin::Flag) {
+                println!(
+                    "note:    --chromium-path {} is not a browser, so the search carried on",
+                    given.display()
+                );
+            }
+            println!(
+                "flavour: {}",
+                match executable.flavour {
+                    Flavour::HeadlessShell => "chrome-headless-shell",
+                    Flavour::FullBrowser => "full browser, run with --headless",
+                }
+            );
+            ExitCode::Success
+        }
+        Err(error) => {
+            eprintln!("{PROGRAM}: {error}");
             ExitCode::Failure
         }
     }

@@ -280,6 +280,20 @@ Le nombre d'approbations requises est **0**. Un mainteneur seul ne peut pas appr
 
 ---
 
+## D31 — Pas de `fetch-chromium` : on documente l'installation, on facilite le chemin
+
+**Choix.** Le binaire ne télécharge rien, jamais, sous aucune sous-commande. Le quatrième barreau de D09 reste un répertoire de cache que *quelqu'un d'autre* remplit — une étape de CI, une image de conteneur, une personne avec une archive. À la place : le README documente quatre façons d'installer un navigateur, l'erreur « introuvable » les répète avec la version épinglée, un chemin donné peut désormais être un exécutable, un répertoire ou un bundle `.app` macOS, et `--dump-chromium` dit ce qui serait utilisé et d'où il vient.
+
+**Pourquoi.** C'est le seul endroit où le binaire lui-même aurait besoin de HTTPS. Tout le reste délègue le réseau à Chromium, et c'est précisément ce qui rend la construction statique musl triviale (#34) ; y ajouter une pile TLS en est le risque numéro un. Suivent une vérification de somme de contrôle, une extraction d'archive et une matrice plateforme/architecture — beaucoup de surface à maintenir pour un projet de week-end, et une duplication de ce que `apt`, `brew` et `@puppeteer/browsers` font déjà mieux.
+
+**Ce que cela ne change pas.** D09 tient en entier : l'ordre de résolution, l'interdiction de télécharger au moment de la conversion, et l'erreur qui liste tout ce qui a été tenté. Seule la façon dont le quatrième barreau se remplit change, et elle n'était de toute façon jamais automatique.
+
+**Ce que cela oblige à faire.** Si l'erreur ne dit pas quoi installer, ce choix devient hostile : la personne qui la lit n'a alors ni navigateur ni instruction. C'est pourquoi le message et la section du README font partie de cette décision et pas d'un ticket séparé.
+
+**Écarté.** `fetch-chromium` tel que D09 l'annonçait (#33, fermé). Un téléchargement au premier lancement, qui était déjà écarté par D09. Ne rien faire : laisser l'erreur promettre une commande qui n'existerait jamais aurait été le pire des trois.
+
+---
+
 ## Conséquences transverses
 
 - **Le brief doit gagner une section « smart shrinking »** dans les contraintes, et un guide de migration (options à retirer, différences de taille attendues).

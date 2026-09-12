@@ -1,15 +1,26 @@
 //! Finding a browser to drive.
 //!
-//! The order is fixed (D09) and it never downloads anything:
+//! The order is fixed (D09) and **nothing here ever downloads anything** (D31):
 //!
 //! 1. an explicit `--chromium-path`
 //! 2. an environment variable
 //! 3. a known system location
-//! 4. the cache directory that `fetch-chromium` fills
+//! 4. a cache directory somebody else filled
 //!
-//! Downloading at conversion time would mean a production container reaching
-//! out to the network in the middle of rendering an invoice, so the fourth rung
-//! only ever *reads* a directory somebody filled on purpose.
+//! Downloading at conversion time would mean a production container reaching out
+//! to the network in the middle of rendering an invoice. Downloading at any
+//! other time is a job this program does not want either: it is the one thing
+//! that would put a TLS stack, a checksum and an archive unpacker in a binary
+//! whose whole networking story is otherwise "the browser does it" (D31). The
+//! README says how to install one instead.
+//!
+//! # What a path may be
+//!
+//! The first two rungs take whatever the user had to hand, because what they
+//! have to hand is usually not an executable. A macOS browser is an `.app`
+//! bundle; `@puppeteer/browsers` leaves an unpacked directory. Both used to be
+//! rejected for not being a file, which is a bad answer to somebody who has the
+//! browser right there. See [`given_candidates`].
 
 use crate::error::{Error, Result, SearchAttempt};
 use std::ffi::OsString;
@@ -18,8 +29,8 @@ use std::path::{Path, PathBuf};
 /// The version of Chrome for Testing this build expects.
 ///
 /// Read from the single file at the repository root, so CI, the Docker image
-/// and `fetch-chromium` cannot drift apart. Moving that file breaks the build,
-/// which is the intent.
+/// and the README's install command cannot drift apart. Moving that file breaks
+/// the build, which is the intent.
 pub const PINNED_VERSION: &str = include_str!("../../../.chromium-version").trim_ascii();
 
 /// Which rung of the ladder produced a browser.
@@ -31,7 +42,8 @@ pub enum Origin {
     Environment { variable: &'static str },
     /// Found where browsers usually live.
     SystemLocation,
-    /// Downloaded earlier by `fetch-chromium`.
+    /// Unpacked into the cache directory by something else — a CI step, a
+    /// package script, a person. Nothing here puts it there (D31).
     Cache,
 }
 
@@ -41,7 +53,7 @@ impl std::fmt::Display for Origin {
             Origin::Flag => f.write_str("--chromium-path"),
             Origin::Environment { variable } => write!(f, "${variable}"),
             Origin::SystemLocation => f.write_str("a system location"),
-            Origin::Cache => f.write_str("the download cache"),
+            Origin::Cache => f.write_str("the cache directory"),
         }
     }
 }
@@ -103,8 +115,8 @@ pub enum Platform {
 }
 
 impl Platform {
-    /// How Chrome for Testing names the archive for this platform, used to find
-    /// what `fetch-chromium` unpacked.
+    /// How Chrome for Testing names the archive for this platform, used to
+    /// recognise an unpacked one wherever it was put.
     fn download_slug(self, arm: bool) -> &'static str {
         match (self, arm) {
             (Platform::Linux, false) => "linux64",
@@ -176,6 +188,19 @@ const ENVIRONMENT_VARIABLES: &[&str] = &[
     "PUPPETEER_EXECUTABLE_PATH",
 ];
 
+/// What the executable inside a macOS `.app` bundle is called.
+///
+/// Never the bundle's own name, and never predictable from it: `Chromium.app`
+/// holds `Chromium`, but `Google Chrome for Testing.app` holds
+/// `Google Chrome for Testing` and `Chromium.app` from some builds holds
+/// `Chromium Helper`. Trying all of them costs nothing.
+const BUNDLE_EXECUTABLES: &[&str] = &[
+    "Google Chrome for Testing",
+    "Chromium",
+    "Google Chrome",
+    "Google Chrome Canary",
+];
+
 /// Executable names looked for on `PATH`, in preference order.
 ///
 /// `chrome-headless-shell` leads deliberately: it starts faster and carries no
@@ -192,13 +217,13 @@ const EXECUTABLE_NAMES: &[&str] = &[
 pub fn locate(flag: Option<&Path>, env: &dyn Environment) -> Result<Executable> {
     let mut attempts = Vec::new();
 
-    if let Some(path) = flag {
-        if env.is_executable_file(path) {
-            return Ok(Executable::at(path.to_path_buf(), Origin::Flag));
+    if let Some(given) = flag {
+        if let Some(path) = resolve_given(given, env) {
+            return Ok(Executable::at(path, Origin::Flag));
         }
         attempts.push(SearchAttempt {
             source: "--chromium-path".into(),
-            path: path.to_path_buf(),
+            path: given.to_path_buf(),
         });
     }
 
@@ -206,13 +231,13 @@ pub fn locate(flag: Option<&Path>, env: &dyn Environment) -> Result<Executable> 
         let Some(value) = env.var(variable) else {
             continue;
         };
-        let path = PathBuf::from(value);
-        if env.is_executable_file(&path) {
+        let given = PathBuf::from(value);
+        if let Some(path) = resolve_given(&given, env) {
             return Ok(Executable::at(path, Origin::Environment { variable }));
         }
         attempts.push(SearchAttempt {
             source: (*variable).to_string(),
-            path,
+            path: given,
         });
     }
 
@@ -234,6 +259,62 @@ pub fn locate(flag: Option<&Path>, env: &dyn Environment) -> Result<Executable> 
     }
 
     Err(Error::BrowserNotFound { attempts })
+}
+
+/// Turn whatever the user pointed at into an executable, if it is one.
+pub fn resolve_given(given: &Path, env: &dyn Environment) -> Option<PathBuf> {
+    given_candidates(given, env)
+        .into_iter()
+        .find(|candidate| env.is_executable_file(candidate))
+}
+
+/// Everything a path the user gave might mean.
+///
+/// **Probed rather than listed**, so this needs nothing from the environment
+/// beyond "is that a runnable file", and so a test can describe a whole machine
+/// as a set of paths.
+///
+/// Three shapes, because these are the three a person actually has:
+///
+/// - the executable itself, which is the easy case and is tried first;
+/// - a macOS **`.app` bundle**, which is what `/Applications` holds and what a
+///   file picker gives you. The executable is buried four levels down under a
+///   name that is not the bundle's;
+/// - a **directory**, which is what unpacking an archive leaves. Both the plain
+///   layout and Chrome for Testing's `chrome-headless-shell-<slug>/` one, since
+///   `@puppeteer/browsers` produces the second and the README recommends it.
+pub fn given_candidates(given: &Path, env: &dyn Environment) -> Vec<PathBuf> {
+    let platform = env.platform();
+    let suffix = platform.executable_suffix();
+    let mut candidates = vec![given.to_path_buf()];
+
+    // A bundle's executable is not named after the bundle, so every name it
+    // could be is tried.
+    if given
+        .extension()
+        .is_some_and(|extension| extension == "app")
+    {
+        let inside = given.join("Contents").join("MacOS");
+        candidates.extend(BUNDLE_EXECUTABLES.iter().map(|name| inside.join(name)));
+    }
+
+    // A directory, with the browser either directly inside it or inside the
+    // folder an archive unpacked.
+    for name in EXECUTABLE_NAMES {
+        candidates.push(given.join(format!("{name}{suffix}")));
+    }
+    for arm in [true, false] {
+        let slug = platform.download_slug(arm);
+        for name in EXECUTABLE_NAMES {
+            candidates.push(
+                given
+                    .join(format!("{name}-{slug}"))
+                    .join(format!("{name}{suffix}")),
+            );
+        }
+    }
+
+    candidates
 }
 
 /// Everywhere a browser might already be installed, in preference order.
@@ -304,11 +385,14 @@ fn system_candidates(env: &dyn Environment) -> Vec<(String, PathBuf)> {
     candidates
 }
 
-/// The directory `fetch-chromium` writes into.
+/// Where an unpacked browser is looked for, last.
 ///
 /// `RCHTMLTOPDF_CACHE_DIR` wins, which is how CI points it at a path inside the
-/// workspace so the download can be cached between runs. Otherwise it follows
-/// the platform's own convention, never the repository.
+/// workspace so a download can be cached between runs. Otherwise it follows the
+/// platform's own convention, never the repository.
+///
+/// Nothing in this program writes here (D31). It is a rung for whoever does —
+/// a CI step, a container build, a person with an archive.
 pub fn cache_directory(env: &dyn Environment) -> Option<PathBuf> {
     if let Some(explicit) = env.var("RCHTMLTOPDF_CACHE_DIR") {
         return Some(PathBuf::from(explicit));
@@ -356,6 +440,99 @@ fn cache_candidates(env: &dyn Environment) -> Vec<PathBuf> {
 mod tests {
     use super::*;
     use std::collections::{HashMap, HashSet};
+
+    // --- what a path the user gave may be (D31) ------------------------------
+
+    /// What `/Applications` holds and what a file picker hands back. The
+    /// executable is four levels down under a name that is not the bundle's.
+    #[test]
+    fn a_macos_bundle_is_a_browser() {
+        let executable = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+        let machine = Fake::new(Platform::MacOs).with_executable(executable);
+
+        let found = locate(Some(Path::new("/Applications/Google Chrome.app")), &machine)
+            .expect("a bundle should resolve");
+        assert_eq!(found.path, PathBuf::from(executable));
+        assert_eq!(found.origin, Origin::Flag);
+    }
+
+    /// What unpacking an archive leaves behind.
+    #[test]
+    fn a_directory_with_a_browser_in_it_is_a_browser() {
+        let machine =
+            Fake::new(Platform::Linux).with_executable("/opt/browsers/chrome-headless-shell");
+
+        let found =
+            locate(Some(Path::new("/opt/browsers")), &machine).expect("a directory should resolve");
+        assert_eq!(
+            found.path,
+            PathBuf::from("/opt/browsers/chrome-headless-shell")
+        );
+    }
+
+    /// The layout `@puppeteer/browsers` produces, which the README recommends,
+    /// so the directory somebody copies out of it has one more level in it.
+    #[test]
+    fn an_unpacked_chrome_for_testing_directory_is_a_browser() {
+        let executable = "/downloads/chrome-headless-shell-linux64/chrome-headless-shell";
+        let machine = Fake::new(Platform::Linux).with_executable(executable);
+
+        let found = locate(Some(Path::new("/downloads")), &machine)
+            .expect("an unpacked archive should resolve");
+        assert_eq!(found.path, PathBuf::from(executable));
+    }
+
+    /// The same widening applies to the environment, because somebody exporting
+    /// `CHROME_PATH` has exactly the same thing to hand.
+    #[test]
+    fn an_environment_variable_may_also_name_a_directory() {
+        let machine = Fake::new(Platform::Linux)
+            .with_var("CHROME_PATH", "/opt/browsers")
+            .with_executable("/opt/browsers/chromium");
+
+        let found = locate(None, &machine).expect("should resolve");
+        assert_eq!(found.path, PathBuf::from("/opt/browsers/chromium"));
+        assert_eq!(
+            found.origin,
+            Origin::Environment {
+                variable: "CHROME_PATH"
+            }
+        );
+    }
+
+    /// A path that is none of those is still a failure, and the failure names
+    /// the path **as the user wrote it** rather than the several places that
+    /// were probed underneath it.
+    #[test]
+    fn a_path_that_is_nothing_names_itself_in_the_failure() {
+        let machine = Fake::new(Platform::Linux);
+        let error = locate(Some(Path::new("/nowhere")), &machine).expect_err("nothing is there");
+
+        let message = error.to_string();
+        assert!(message.contains("/nowhere"), "{message}");
+        assert_eq!(
+            message.matches("/nowhere").count(),
+            1,
+            "the probes are noise, not attempts to report:\n{message}"
+        );
+    }
+
+    /// The failure is the one thing a first-time user is guaranteed to read, so
+    /// it has to say what to do rather than only what failed (D31).
+    #[test]
+    fn the_failure_says_how_to_get_a_browser() {
+        let message = locate(None, &Fake::new(Platform::Linux))
+            .expect_err("nothing is there")
+            .to_string();
+
+        assert!(message.contains("apt install chromium"), "{message}");
+        assert!(message.contains("@puppeteer/browsers"), "{message}");
+        // And the pin, so the command can be pasted rather than researched.
+        assert!(message.contains(PINNED_VERSION), "{message}");
+        assert!(message.contains("--chromium-path"), "{message}");
+        // Nothing promises a downloader that does not exist.
+        assert!(!message.contains("fetch-chromium"), "{message}");
+    }
 
     /// A made-up machine. Lets the ladder be tested on all three platforms from
     /// whichever one happens to be running the tests.
@@ -640,8 +817,9 @@ mod tests {
             cursor += at;
         }
 
-        assert!(message.contains("fetch-chromium"), "{message}");
-        // Never suggests that it might download something by itself.
+        // Says what to do about it, and never suggests it might fetch a browser
+        // itself (D31).
+        assert!(message.contains("--chromium-path"), "{message}");
         assert!(!message.to_lowercase().contains("downloading"), "{message}");
     }
 
@@ -650,7 +828,7 @@ mod tests {
         let env = Fake::new(Platform::Linux);
         let message = locate(None, &env).unwrap_err().to_string();
         assert!(message.contains("could not find Chromium"), "{message}");
-        assert!(message.contains("fetch-chromium"), "{message}");
+        assert!(message.contains("apt install chromium"), "{message}");
     }
 }
 
@@ -679,7 +857,7 @@ mod host_tests {
             Err(error) => {
                 println!("{error}");
                 let message = error.to_string();
-                assert!(message.contains("fetch-chromium"));
+                assert!(message.contains("--chromium-path"));
             }
         }
     }

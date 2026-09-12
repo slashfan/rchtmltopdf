@@ -85,7 +85,7 @@ impl Run {
     ///
     /// The browser is deliberately **not** named on the command line. The child
     /// resolves one through D09's ladder from the same environment this process
-    /// read, so the CI job exercises the cache rung that `fetch-chromium` fills
+    /// read, so the CI job exercises the cache rung its own download step fills
     /// rather than being handed an answer.
     pub fn output(self) -> Outcome {
         // One conversion at a time. Every run cold-starts a Chromium, and a
