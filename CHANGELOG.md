@@ -21,6 +21,20 @@ Several documents, covers and a table of contents are not built. Neither is most
 option surface beyond what V0 needed: the outline and everything a table of contents needs
 are understood on the command line and not yet acted on.
 
+### Added
+
+**Static musl binaries for x86_64 and aarch64**, built by a tag. Each is statically linked, so
+it runs wherever the kernel does — a distroless image, or a machine whose glibc predates the
+one it was built on — and each archive carries a `wkhtmltopdf` symlink, which is why they are
+tars rather than zips (D13).
+
+Both are built on a runner of their own architecture rather than under emulation, and the
+workflow asserts the three things that would otherwise be found out by whoever downloaded one:
+that the binary is genuinely static, that the symlink survived being archived, and that it
+runs (D32).
+
+No release has been cut yet.
+
 ### Changed
 
 **The binary will never download a browser**, and no longer promises a subcommand that would

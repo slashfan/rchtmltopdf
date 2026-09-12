@@ -1,0 +1,188 @@
+name: Release
+
+# Tags publish. Pull requests that could break the build run it without
+# publishing, because a release workflow that has never run is a release
+# workflow that does not work, and the first time to find that out is not while
+# cutting a tag.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "Cargo.lock"
+      - "**/Cargo.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # **Native runners, no emulation.** Cross-building aarch64 under qemu
+          # works and takes an order of magnitude longer, and a binary nobody has
+          # run on the architecture it claims to support is not evidence of
+          # anything. Arm runners are free on a public repository (D28).
+          - target: x86_64-unknown-linux-musl
+            runs-on: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            runs-on: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      # Rust links musl self-contained these days and this is usually redundant.
+      # It is also two seconds, and the failure it prevents is a linker error at
+      # tag time.
+      - name: Install the musl toolchain
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends musl-tools
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: ${{ matrix.target }}
+          save-if: ${{ startsWith(github.ref, 'refs/tags/') }}
+
+      # Only the binary crate. The conformance harness is not shipped and needs a
+      # browser nobody is going to give it here.
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} --package rchtmltopdf
+
+      # **Asserted, not assumed.** "Static" is the whole point of a musl build:
+      # it is what lets the binary drop into a distroless image or a VM whose
+      # glibc is older than the runner's. A dynamically linked one would work on
+      # CI and fail in the place it was built for.
+      - name: Check that it is genuinely static
+        run: |
+          set -euo pipefail
+          binary="target/${{ matrix.target }}/release/rchtmltopdf"
+          described=$(file "$binary")
+          echo "$described"
+          case "$described" in
+            *"statically linked"*) ;;
+            *) echo "::error::not statically linked"; exit 1 ;;
+          esac
+          case "$described" in
+            *"dynamically linked"*) echo "::error::dynamically linked"; exit 1 ;;
+          esac
+
+      - name: Check that it runs
+        run: |
+          set -euo pipefail
+          binary="target/${{ matrix.target }}/release/rchtmltopdf"
+          "$binary" --version
+          # Exits 1 on a runner with no browser, which is the ordinary case here
+          # and still proves the binary starts and resolves.
+          "$binary" --dump-chromium || true
+
+      # **tar, never zip.** The archive carries a `wkhtmltopdf` symlink so a
+      # drop-in replacement is a drop-in replacement (D13), and zip has no
+      # portable way to hold one — it would arrive as a copy, or as a text file
+      # containing a path.
+      - name: Assemble the archive
+        id: archive
+        run: |
+          set -euo pipefail
+          case "${{ github.ref }}" in
+            refs/tags/v*) version="${GITHUB_REF_NAME#v}" ;;
+            *) version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" ;;
+          esac
+          name="rchtmltopdf-${version}-${{ matrix.target }}"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/rchtmltopdf" "dist/$name/"
+          ln -s rchtmltopdf "dist/$name/wkhtmltopdf"
+          cp README.md LICENSE-MIT LICENSE-APACHE CHANGELOG.md "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          ( cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256" )
+
+      # The symlink is the reason for tar, so whether it survived is worth
+      # knowing here rather than from somebody who unpacked a release.
+      - name: Check that the symlink survived
+        run: |
+          set -euo pipefail
+          mkdir -p check && tar -C check -xzf "dist/${{ steps.archive.outputs.name }}.tar.gz"
+          link="check/${{ steps.archive.outputs.name }}/wkhtmltopdf"
+          test -L "$link" || { echo "::error::wkhtmltopdf is not a symlink"; exit 1; }
+          test "$(readlink "$link")" = "rchtmltopdf" \
+            || { echo "::error::wkhtmltopdf points somewhere unexpected"; exit 1; }
+          "$link" --version
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.archive.outputs.name }}
+          path: dist/*.tar.gz*
+          if-no-files-found: error
+
+  publish:
+    name: publish
+    # Tags only. Every other trigger above exists to prove the build, not to
+    # release anything.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Write the release notes
+        run: |
+          set -euo pipefail
+          cat > notes.md <<'NOTES'
+          > **A weekend project. Do not use it in production.** No support, and no
+          > undertaking that any of this keeps working. See the README.
+
+          ## This does not include a browser
+
+          The binary drives a headless Chromium and **never downloads one** (D31). Install one
+          yourself — `apt install chromium`, `brew install --cask chromium`, or a pinned
+          `npx @puppeteer/browsers install chrome-headless-shell@…` — and it will be found.
+
+          It looks, in order: `--chromium-path`, then `RCHTMLTOPDF_CHROMIUM` / `CHROME_PATH` /
+          `CHROMIUM_PATH` / `PUPPETEER_EXECUTABLE_PATH`, then the usual system locations, then
+          `RCHTMLTOPDF_CACHE_DIR`. That order is [D09](docs/decisions.md), and a path may be an
+          executable, a directory it was unpacked into, or a macOS `.app` bundle.
+
+          `rchtmltopdf --dump-chromium` says which one it would use and where it found it.
+
+          ## The archives
+
+          Statically linked against musl, so they run wherever the kernel does — including a
+          distroless image or a machine whose glibc predates the one they were built on. Each
+          carries a `wkhtmltopdf` symlink, which is why they are tars rather than zips.
+
+          Verify with the `.sha256` beside each one.
+          NOTES
+          sed -n '/^## \[Unreleased\]/,/^## \[/p' CHANGELOG.md | sed '1d;$d' >> notes.md || true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            dist/*.tar.gz dist/*.sha256

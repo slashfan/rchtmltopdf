@@ -294,6 +294,20 @@ Le nombre d'approbations requises est **0**. Un mainteneur seul ne peut pas appr
 
 ---
 
+## D32 — Release à la main sur runners natifs, sans cross ni framework
+
+**Choix.** Les binaires musl x86_64 et aarch64 sont construits par une matrice écrite à la main dans `.github/workflows/release.yml`, chacun sur un runner de son architecture. Ni `cross`, ni `cargo-dist`, ni aucun autre cadre de publication. L'archive est un `tar.gz` contenant le binaire, un lien symbolique `wkhtmltopdf` (D13), les licences et le journal des changements.
+
+**Pourquoi.** D19 disait « via cargo-dist ou cross », écrit avant que le dépôt soit public. Deux choses ont changé. Les runners Arm sont gratuits sur un dépôt public (D28), donc l'émulation n'a plus de raison d'être : un binaire que personne n'a exécuté sur l'architecture qu'il prétend supporter ne prouve rien. Et le lien symbolique est une contrainte que les cadres de publication tiennent mal — leur disposition d'archive est une opinion, et `.zip` n'a pas de façon portable de porter un lien. La matrice fait une trentaine de lignes, l'image Docker doit être écrite à la main de toute façon, et une dépendance de moins dans la chaîne qui signe ce que les gens téléchargent est une bonne chose en soi.
+
+**Ce qui est vérifié plutôt que supposé.** Que le binaire est réellement statique — c'est tout l'intérêt d'une construction musl, et un binaire lié dynamiquement fonctionnerait en CI pour échouer précisément là où il était destiné. Que le lien symbolique survit à l'archivage, en la déballant. Que le binaire démarre.
+
+**Le workflow s'exécute sur les pull requests** qui touchent les manifestes ou lui-même, sans publier. Un workflow de publication qui n'a jamais tourné ne fonctionne pas, et le moment de le découvrir n'est pas pendant qu'on pose une étiquette.
+
+**Écarté.** `cross` et l'émulation qemu. `cargo-dist`, à revoir à la 1.0 quand les installeurs et Homebrew entreront dans le périmètre — c'est là que sa valeur apparaît. Un `.zip` en plus du `tar`, qui aurait livré un `wkhtmltopdf` qui n'est pas un lien.
+
+---
+
 ## Conséquences transverses
 
 - **Le brief doit gagner une section « smart shrinking »** dans les contraintes, et un guide de migration (options à retirer, différences de taille attendues).
