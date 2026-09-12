@@ -260,6 +260,14 @@ pub fn apply_object(
         "include-in-outline" => object.in_outline = true,
         "exclude-from-outline" => object.in_outline = false,
 
+        // --- links --------------------------------------------------------------
+        "enable-external-links" => object.links.external = true,
+        "disable-external-links" => object.links.external = false,
+        "enable-internal-links" => object.links.internal = true,
+        "disable-internal-links" => object.links.internal = false,
+        "resolve-relative-links" => object.links.resolve_relative = true,
+        "keep-relative-links" => object.links.resolve_relative = false,
+
         // --- reaching the filesystem (D10) -----------------------------------
         "enable-local-file-access" => web.local_file_access = true,
         "disable-local-file-access" => web.local_file_access = false,

@@ -12,9 +12,12 @@
 //! along. The first document's Info dictionary, because wkhtmltopdf's output
 //! carried the first document's title and nothing else has a better claim.
 //! The outlines, joined end to end under one root, so a reader's sidebar lists
-//! every document's headings in order (#40). Everything else that hung off a
-//! catalog — named destinations, link destinations that named a page — is left
-//! behind, and rebuilt by the milestone that owns it (#41).
+//! every document's headings in order (#40). The links, with every named
+//! destination resolved to the page it meant before the name table it lived in
+//! is left behind, and a link to another document of the same conversion
+//! pointed into it (#41). Everything else that hung off a catalog — the
+//! structure tree above all — is left behind: merging tagged structure is a
+//! project of its own, and wkhtmltopdf never wrote any.
 //!
 //! **Fonts are not deduplicated (D34).** Chromium subsets a font per document,
 //! so two documents in the same face carry two different subsets under two
@@ -39,6 +42,7 @@
 
 use lopdf::{Document, Object, ObjectId, dictionary};
 use rchtmltopdf_core::Clock;
+use rchtmltopdf_core::settings::LinkSettings;
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -108,11 +112,23 @@ pub fn set_metadata(pdf: &[u8], metadata: &Metadata) -> Result<Vec<u8>, Error> {
     Ok(out)
 }
 
+/// One printed document going into a merge, and what to do with its links.
+#[derive(Debug, Clone)]
+pub struct Part<'a> {
+    pub pdf: &'a [u8],
+    /// The URL the document was printed from. A link to it from another part
+    /// is pointed into it, and a link below its directory can be made relative
+    /// again.
+    pub url: &'a str,
+    pub links: &'a LinkSettings,
+}
+
 /// Combine several printed documents into one, in the order given.
 ///
-/// One document comes back untouched, bytes for bytes: there is nothing to
-/// combine, and rewriting a file that does not need it would only give a
-/// single-document conversion a way to differ from what Chromium printed.
+/// One document that asks nothing of its links comes back untouched, bytes for
+/// bytes: there is nothing to combine, and rewriting a file that does not need
+/// it would only give a single-document conversion a way to differ from what
+/// Chromium printed. One that does ask is edited in place, its catalog kept.
 ///
 /// # How the objects are moved
 ///
@@ -127,14 +143,14 @@ pub fn set_metadata(pdf: &[u8], metadata: &Metadata) -> Result<Vec<u8>, Error> {
 /// The old catalogs and page trees are not copied across. A new tree holds
 /// every page, the trailer points at a new catalog, and whatever is no longer
 /// reachable from the trailer is pruned before the numbers are compacted.
-pub fn merge(parts: &[&[u8]]) -> Result<Vec<u8>, Error> {
+pub fn merge(parts: &[Part<'_>]) -> Result<Vec<u8>, Error> {
     match parts {
         [] => {
             return Err(Error {
                 reason: "there is no document to merge".into(),
             });
         }
-        [only] => return Ok(only.to_vec()),
+        [only] => return alone(only),
         _ => {}
     }
 
@@ -142,22 +158,39 @@ pub fn merge(parts: &[&[u8]]) -> Result<Vec<u8>, Error> {
     let mut pages = Vec::new();
     let mut info = None;
     let mut outlines: Vec<PartOutline> = Vec::new();
+    let mut absorbed_parts = Vec::with_capacity(parts.len());
 
     for (index, part) in parts.iter().enumerate() {
-        let source = Document::load_mem(part)
+        let source = Document::load_mem(part.pdf)
             .map_err(|error| fail(format!("document {}: {error}", index + 1)))?;
         // The highest version any part asks for. A feature a later part used
         // is still used after the merge.
         if source.version > merged.version {
             merged.version = source.version.clone();
         }
-        let absorbed = absorb(&mut merged, source)
+        let mut absorbed = absorb(&mut merged, source)
             .map_err(|error| fail(format!("document {}: {}", index + 1, error.reason)))?;
-        pages.extend(absorbed.pages);
+        pages.extend(absorbed.pages.iter().copied());
         if info.is_none() {
             info = absorbed.info;
         }
-        outlines.extend(absorbed.outline);
+        outlines.extend(absorbed.outline.take());
+        absorbed_parts.push(absorbed);
+    }
+
+    // Every document's anchors, known before any link is judged: a link from
+    // the first document to the last has to find it.
+    let anchors: Vec<Anchor<'_>> = parts
+        .iter()
+        .zip(&absorbed_parts)
+        .map(|(part, absorbed)| Anchor {
+            url: part.url,
+            names: &absorbed.names,
+            first_page: absorbed.pages[0],
+        })
+        .collect();
+    for (index, (part, absorbed)) in parts.iter().zip(&absorbed_parts).enumerate() {
+        treat_links(&mut merged, &absorbed.pages, part, &anchors, index)?;
     }
 
     let pages_id = merged.new_object_id();
@@ -192,8 +225,31 @@ pub fn merge(parts: &[&[u8]]) -> Result<Vec<u8>, Error> {
     merged.prune_objects();
     merged.renumber_objects();
 
-    let mut out = Vec::with_capacity(parts.iter().map(|part| part.len()).sum());
+    let mut out = Vec::with_capacity(parts.iter().map(|part| part.pdf.len()).sum());
     merged.save_to(&mut out).map_err(fail)?;
+    Ok(out)
+}
+
+/// One document alone: nothing to combine, and its catalog kept whole.
+fn alone(part: &Part<'_>) -> Result<Vec<u8>, Error> {
+    if part.links.leaves_everything() {
+        return Ok(part.pdf.to_vec());
+    }
+    let mut document = Document::load_mem(part.pdf).map_err(fail)?;
+    let pages: Vec<ObjectId> = document.page_iter().collect();
+    if pages.is_empty() {
+        return Err(fail("it has no pages"));
+    }
+    let names = named_destinations(&document);
+    let anchors = [Anchor {
+        url: part.url,
+        names: &names,
+        first_page: pages[0],
+    }];
+    treat_links(&mut document, &pages, part, &anchors, 0)?;
+
+    let mut out = Vec::with_capacity(part.pdf.len());
+    document.save_to(&mut out).map_err(fail)?;
     Ok(out)
 }
 
@@ -205,6 +261,8 @@ struct Absorbed {
     info: Option<ObjectId>,
     /// Its outline, when it had one with something in it.
     outline: Option<PartOutline>,
+    /// Its named destinations, each resolved to an explicit one.
+    names: BTreeMap<Vec<u8>, Object>,
 }
 
 /// The top level of one document's outline: the ends of the chain of items
@@ -322,6 +380,240 @@ fn recount(document: &mut Document, node: ObjectId) -> Result<i64, Error> {
         dictionary.remove(b"Count");
     }
     Ok(total)
+}
+
+// ---------------------------------------------------------------------------
+// Links.
+
+/// Where the anchors of one document of the conversion are.
+struct Anchor<'a> {
+    url: &'a str,
+    /// Name to explicit destination, numbered as the target document knows it.
+    names: &'a BTreeMap<Vec<u8>, Object>,
+    /// Where a link to the document with no fragment, or an unknown one, lands.
+    first_page: ObjectId,
+}
+
+/// A link is one of two kinds, and the options switch each kind off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinkKind {
+    /// To an anchor: in this document, or in another document of the same
+    /// conversion. wkhtmltopdf called these local.
+    Internal,
+    /// To anywhere else.
+    External,
+}
+
+/// The catalog's named destinations, each resolved to an explicit one.
+///
+/// Chromium writes `<a href="#x">` as `/Dest /x` on the annotation and `/x`
+/// in the catalog's `Dests` dictionary, so the annotation means nothing
+/// without the catalog it came with. A name tree under `Names` is the other
+/// place the specification allows and Chromium does not use; it is not read.
+fn named_destinations(document: &Document) -> BTreeMap<Vec<u8>, Object> {
+    let mut names = BTreeMap::new();
+    let Some(dests) = document
+        .catalog()
+        .ok()
+        .and_then(|catalog| catalog.get(b"Dests").ok())
+        .and_then(|entry| document.dereference(entry).ok())
+        .and_then(|(_, entry)| entry.as_dict().ok())
+    else {
+        return names;
+    };
+    for (name, value) in dests.iter() {
+        let Ok((_, value)) = document.dereference(value) else {
+            continue;
+        };
+        // Either the array itself, or a dictionary carrying it under `D`.
+        let explicit = match value {
+            Object::Array(_) => Some(value.clone()),
+            Object::Dictionary(dictionary) => dictionary
+                .get(b"D")
+                .ok()
+                .and_then(|d| document.dereference(d).ok())
+                .filter(|(_, d)| d.as_array().is_ok())
+                .map(|(_, d)| d.clone()),
+            _ => None,
+        };
+        if let Some(explicit) = explicit {
+            names.insert(name.clone(), explicit);
+        }
+    }
+    names
+}
+
+/// Judge every link on these pages: resolve what names an anchor, point a
+/// link to another document of the conversion into it, make a relative link
+/// relative again when asked, and drop the kinds that were switched off.
+fn treat_links(
+    document: &mut Document,
+    pages: &[ObjectId],
+    part: &Part<'_>,
+    anchors: &[Anchor<'_>],
+    own: usize,
+) -> Result<(), Error> {
+    for page in pages {
+        let annotations = page_annotations(document, *page);
+        if annotations.is_empty() {
+            continue;
+        }
+        let mut kept = Vec::with_capacity(annotations.len());
+        let mut dropped = false;
+        for annotation in annotations {
+            let keep = match link_kind(document, annotation, part, anchors, own)? {
+                Some(LinkKind::Internal) => part.links.internal,
+                Some(LinkKind::External) => part.links.external,
+                None => true,
+            };
+            if keep {
+                kept.push(Object::Reference(annotation));
+            } else {
+                dropped = true;
+            }
+        }
+        if dropped {
+            // Written straight onto the page, whether or not it was indirect
+            // before: the old array is either shared with nobody or pruned.
+            document
+                .get_dictionary_mut(*page)
+                .map_err(fail)?
+                .set("Annots", Object::Array(kept));
+        }
+    }
+    Ok(())
+}
+
+/// The annotations of a page, by reference.
+///
+/// Only those written as references, which is how Chromium writes every one.
+/// An annotation written inline in the array is left alone rather than
+/// judged, because it has no number to keep or drop by.
+fn page_annotations(document: &Document, page: ObjectId) -> Vec<ObjectId> {
+    document
+        .get_dictionary(page)
+        .ok()
+        .and_then(|dictionary| dictionary.get(b"Annots").ok())
+        .and_then(|annots| document.dereference(annots).ok())
+        .and_then(|(_, annots)| annots.as_array().ok())
+        .map(|array| {
+            array
+                .iter()
+                .filter_map(|item| item.as_reference().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// What kind of link an annotation is, rewriting it on the way where the
+/// conversion knows better than the browser did.
+///
+/// `None` for an annotation that is not a link, or a link that goes nowhere.
+fn link_kind(
+    document: &mut Document,
+    annotation: ObjectId,
+    part: &Part<'_>,
+    anchors: &[Anchor<'_>],
+    own: usize,
+) -> Result<Option<LinkKind>, Error> {
+    let dictionary = document.get_dictionary(annotation).map_err(fail)?;
+    if dictionary.get(b"Subtype").and_then(Object::as_name).ok() != Some(b"Link") {
+        return Ok(None);
+    }
+
+    // A destination, named or explicit. A name is resolved through the table
+    // it came with, because that table does not survive a merge.
+    if let Ok(destination) = dictionary.get(b"Dest") {
+        let resolved = match destination {
+            Object::Name(name) | Object::String(name, _) => anchors[own].names.get(name).cloned(),
+            _ => None,
+        };
+        if let Some(explicit) = resolved {
+            document
+                .get_dictionary_mut(annotation)
+                .map_err(fail)?
+                .set("Dest", explicit);
+        }
+        return Ok(Some(LinkKind::Internal));
+    }
+
+    let Some(action) = dictionary
+        .get(b"A")
+        .ok()
+        .and_then(|action| document.dereference(action).ok())
+        .and_then(|(_, action)| action.as_dict().ok())
+    else {
+        return Ok(None);
+    };
+    match action.get(b"S").and_then(Object::as_name).ok() {
+        Some(b"GoTo") => Ok(Some(LinkKind::Internal)),
+        Some(b"URI") => {
+            let Some(uri) = action
+                .get(b"URI")
+                .ok()
+                .and_then(|uri| uri.as_str().ok())
+                .map(|uri| String::from_utf8_lossy(uri).into_owned())
+            else {
+                return Ok(Some(LinkKind::External));
+            };
+
+            // A link to another document of this conversion is a link into the
+            // file being written: wkhtmltopdf made it local, and so does this.
+            if let Some(explicit) = destination_in(&uri, anchors) {
+                let dictionary = document.get_dictionary_mut(annotation).map_err(fail)?;
+                dictionary.remove(b"A");
+                dictionary.set("Dest", explicit);
+                return Ok(Some(LinkKind::Internal));
+            }
+
+            // The browser resolved every link before printing. The one thing
+            // it can be asked to undo is a link below the document's own
+            // directory, which is what a relative link almost always was.
+            if !part.links.resolve_relative
+                && let Some(relative) = relative_to(&uri, part.url)
+            {
+                document.get_dictionary_mut(annotation).map_err(fail)?.set(
+                    "A",
+                    Object::Dictionary(dictionary! {
+                        "Type" => "Action",
+                        "S" => "URI",
+                        "URI" => Object::string_literal(relative),
+                    }),
+                );
+            }
+            Ok(Some(LinkKind::External))
+        }
+        // Launch, JavaScript, and anything else the browser might one day
+        // write: not local, whatever it is.
+        _ => Ok(Some(LinkKind::External)),
+    }
+}
+
+/// Where a URI lands when it names a document of the conversion.
+///
+/// The document, exactly as the browser resolved it, with an optional
+/// fragment. A fragment that names an anchor lands on it; no fragment, or one
+/// the document does not have, lands on its first page.
+fn destination_in(uri: &str, anchors: &[Anchor<'_>]) -> Option<Object> {
+    let (document, fragment) = match uri.split_once('#') {
+        Some((document, fragment)) => (document, Some(fragment)),
+        None => (uri, None),
+    };
+    let anchor = anchors.iter().find(|anchor| anchor.url == document)?;
+    if let Some(explicit) = fragment.and_then(|fragment| anchor.names.get(fragment.as_bytes())) {
+        return Some(explicit.clone());
+    }
+    Some(Object::Array(vec![
+        Object::Reference(anchor.first_page),
+        Object::Name(b"Fit".to_vec()),
+    ]))
+}
+
+/// A URI below the document's directory, written relative to it.
+fn relative_to(uri: &str, document_url: &str) -> Option<String> {
+    let directory = &document_url[..=document_url.rfind('/')?];
+    let rest = uri.strip_prefix(directory)?;
+    (!rest.is_empty()).then(|| rest.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -491,6 +783,7 @@ fn absorb(into: &mut Document, mut source: Document) -> Result<Absorbed, Error> 
         .and_then(|entry| entry.as_reference().ok())
         .filter(|id| source.get_dictionary(*id).is_ok());
     let outline = part_outline(&source);
+    let mut names = named_destinations(&source);
 
     let objects = std::mem::take(&mut source.objects);
     let map: BTreeMap<ObjectId, ObjectId> = objects
@@ -501,6 +794,10 @@ fn absorb(into: &mut Document, mut source: Document) -> Result<Absorbed, Error> 
         relabel(&mut object, &map);
         into.objects.insert(map[&old], object);
     }
+    // The destinations name pages by their old numbers, like everything else.
+    for destination in names.values_mut() {
+        relabel(destination, &map);
+    }
 
     Ok(Absorbed {
         pages: page_ids.iter().map(|id| map[id]).collect(),
@@ -509,6 +806,7 @@ fn absorb(into: &mut Document, mut source: Document) -> Result<Absorbed, Error> 
             first: map[&part.first],
             last: map[&part.last],
         }),
+        names,
     })
 }
 
@@ -890,13 +1188,34 @@ mod tests {
 
     // --- merge ------------------------------------------------------------------
 
+    /// A part with nothing asked of its links, printed from nowhere in
+    /// particular.
+    fn part(pdf: &[u8]) -> Part<'_> {
+        Part {
+            pdf,
+            url: "file:///nowhere/document.html",
+            links: &DEFAULT_LINKS,
+        }
+    }
+
+    const DEFAULT_LINKS: LinkSettings = LinkSettings {
+        external: true,
+        internal: true,
+        resolve_relative: true,
+    };
+
+    fn merge_all(parts: &[&[u8]]) -> Result<Vec<u8>, Error> {
+        let parts: Vec<Part<'_>> = parts.iter().map(|pdf| part(pdf)).collect();
+        merge(&parts)
+    }
+
     #[test]
     fn pages_come_out_in_command_line_order() {
         let a = pages(&["A1", "A2"], None);
         let b = pages(&["B1"], None);
         let c = pages(&["C1", "C2", "C3"], None);
 
-        let out = merge(&[&a, &b, &c]).expect("should merge");
+        let out = merge_all(&[&a, &b, &c]).expect("should merge");
 
         assert_eq!(labels(&out), ["A1", "A2", "B1", "C1", "C2", "C3"]);
         let document = Document::load_mem(&out).expect("should parse");
@@ -909,7 +1228,8 @@ mod tests {
     /// with the wrong font on the wrong page.
     #[test]
     fn nothing_in_the_result_references_an_object_that_is_not_there() {
-        let out = merge(&[&pages(&["A"], None), &pages(&["B", "C"], None)]).expect("should merge");
+        let out =
+            merge_all(&[&pages(&["A"], None), &pages(&["B", "C"], None)]).expect("should merge");
 
         let mut document = Document::load_mem(&out).expect("should parse");
         let referenced = document.traverse_objects(|_| {});
@@ -922,7 +1242,7 @@ mod tests {
     /// so a reader cannot pick up a stale `Count` or a second `Root`.
     #[test]
     fn the_sources_own_catalogs_and_trees_are_gone() {
-        let out = merge(&[&pages(&["A"], None), &pages(&["B"], None)]).expect("should merge");
+        let out = merge_all(&[&pages(&["A"], None), &pages(&["B"], None)]).expect("should merge");
 
         let document = Document::load_mem(&out).expect("should parse");
         let of_type = |name: &[u8]| {
@@ -963,8 +1283,8 @@ mod tests {
     #[test]
     fn what_a_page_inherited_from_its_tree_is_copied_onto_it() {
         let inherited = dictionary! { "ProcSet" => vec![Object::Name(b"PDF".to_vec())] };
-        let out =
-            merge(&[&pages(&["A"], Some(inherited)), &pages(&["B"], None)]).expect("should merge");
+        let out = merge_all(&[&pages(&["A"], Some(inherited)), &pages(&["B"], None)])
+            .expect("should merge");
 
         let document = Document::load_mem(&out).expect("should parse");
         let first = document.page_iter().next().expect("a page");
@@ -979,8 +1299,8 @@ mod tests {
     /// wkhtmltopdf's output carried the first document's title.
     #[test]
     fn the_first_documents_info_dictionary_is_the_one_kept() {
-        let out =
-            merge(&[&titled(&["A"], "First"), &titled(&["B"], "Second")]).expect("should merge");
+        let out = merge_all(&[&titled(&["A"], "First"), &titled(&["B"], "Second")])
+            .expect("should merge");
         assert_eq!(info(&out, "Title").as_deref(), Some("First"));
 
         // And the metadata pass still finds it to edit, rather than adding one.
@@ -1012,7 +1332,7 @@ mod tests {
         let mut broken = Vec::new();
         document.save_to(&mut broken).expect("should save");
 
-        let out = merge(&[&broken, &pages(&["B"], None)]).expect("should merge");
+        let out = merge_all(&[&broken, &pages(&["B"], None)]).expect("should merge");
 
         let document = Document::load_mem(&out).expect("should parse");
         let first = document.page_iter().next().expect("a page");
@@ -1027,18 +1347,18 @@ mod tests {
     #[test]
     fn one_document_is_returned_untouched() {
         let only = two_pages();
-        assert_eq!(merge(&[&only]).expect("should pass through"), only);
+        assert_eq!(merge_all(&[&only]).expect("should pass through"), only);
     }
 
     #[test]
     fn nothing_to_merge_is_an_error_not_an_empty_file() {
-        assert!(merge(&[]).is_err());
+        assert!(merge_all(&[]).is_err());
     }
 
     /// The failure names which document, because a command line can carry ten.
     #[test]
     fn a_part_that_is_not_a_pdf_is_named_by_position() {
-        let error = merge(&[&two_pages(), b"not a PDF"]).expect_err("should refuse");
+        let error = merge_all(&[&two_pages(), b"not a PDF"]).expect_err("should refuse");
         assert!(error.to_string().contains("document 2"), "{error}");
     }
 
@@ -1157,7 +1477,7 @@ mod tests {
     #[test]
     fn merging_joins_the_outlines_and_moves_their_pages() {
         let appendix = outlined(&["A1"], vec![leaf("Appendix", 0)]);
-        let out = merge(&[&chapters(), &appendix]).expect("should merge");
+        let out = merge_all(&[&chapters(), &appendix]).expect("should merge");
 
         let (out, items) = outline(&out, &keep(4)).expect("should read");
         let titles: Vec<&str> = items.iter().map(|item| item.title.as_str()).collect();
@@ -1195,7 +1515,7 @@ mod tests {
     /// others from being joined.
     #[test]
     fn a_document_without_an_outline_merges_between_two_that_have_one() {
-        let out = merge(&[
+        let out = merge_all(&[
             &outlined(&["A"], vec![leaf("First", 0)]),
             &pages(&["B"], None),
             &outlined(&["C"], vec![leaf("Third", 0)]),
@@ -1279,5 +1599,253 @@ mod tests {
         let (_, items) = outline(&outlined(&["A"], vec![leaf("Résumé — plan", 0)]), &keep(4))
             .expect("should read");
         assert_eq!(items[0].title, "Résumé — plan");
+    }
+
+    // --- links ----------------------------------------------------------------
+
+    /// A link annotation to put on the first page of a hand-built document.
+    enum LinkSpec {
+        Named(&'static str),
+        Explicit(usize),
+        Uri(&'static str),
+    }
+
+    /// The page document with links on its first page and a `Dests` table
+    /// naming pages, 0-based.
+    fn linked(labels: &[&str], dests: &[(&str, usize)], links: &[LinkSpec]) -> Vec<u8> {
+        let mut document = Document::load_mem(&pages(labels, None)).expect("should parse");
+        let page_ids: Vec<ObjectId> = document.page_iter().collect();
+        let explicit = |page: usize| {
+            Object::Array(vec![
+                Object::Reference(page_ids[page]),
+                Object::Name(b"XYZ".to_vec()),
+                0.into(),
+                0.into(),
+                0.into(),
+            ])
+        };
+
+        let mut table = lopdf::Dictionary::new();
+        for (name, page) in dests {
+            table.set(name.as_bytes().to_vec(), explicit(*page));
+        }
+        let table = document.add_object(Object::Dictionary(table));
+        let catalog = document.catalog_mut().expect("a catalog");
+        catalog.set("Dests", Object::Reference(table));
+        catalog.set("Lang", Object::string_literal("fr-FR"));
+
+        let annotations: Vec<Object> = links
+            .iter()
+            .map(|link| {
+                let mut annotation = dictionary! {
+                    "Type" => "Annot",
+                    "Subtype" => "Link",
+                    "Rect" => vec![0.into(), 0.into(), 10.into(), 10.into()],
+                };
+                match link {
+                    LinkSpec::Named(name) => {
+                        annotation.set("Dest", Object::Name(name.as_bytes().to_vec()))
+                    }
+                    LinkSpec::Explicit(page) => annotation.set("Dest", explicit(*page)),
+                    LinkSpec::Uri(uri) => annotation.set(
+                        "A",
+                        Object::Dictionary(dictionary! {
+                            "Type" => "Action", "S" => "URI", "URI" => Object::string_literal(*uri),
+                        }),
+                    ),
+                }
+                Object::Reference(document.add_object(Object::Dictionary(annotation)))
+            })
+            .collect();
+        let annots = document.add_object(Object::Array(annotations));
+        document
+            .get_dictionary_mut(page_ids[0])
+            .expect("a page")
+            .set("Annots", Object::Reference(annots));
+
+        let mut out = Vec::new();
+        document.save_to(&mut out).expect("should save");
+        out
+    }
+
+    /// What a link on a 1-based page does, as a reader would follow it.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Followed {
+        Named(String),
+        Page(usize),
+        Uri(String),
+    }
+
+    fn links_on(pdf: &[u8], page: usize) -> Vec<Followed> {
+        let document = Document::load_mem(pdf).expect("should parse");
+        let numbers: BTreeMap<ObjectId, usize> = document
+            .get_pages()
+            .into_iter()
+            .map(|(number, id)| (id, number as usize))
+            .collect();
+        let id = document.get_pages()[&(page as u32)];
+        page_annotations(&document, id)
+            .into_iter()
+            .map(|annotation| {
+                let dictionary = document.get_dictionary(annotation).expect("an annotation");
+                match dictionary.get(b"Dest") {
+                    Ok(Object::Name(name)) => {
+                        Followed::Named(String::from_utf8_lossy(name).into_owned())
+                    }
+                    Ok(Object::Array(array)) => {
+                        Followed::Page(numbers[&array[0].as_reference().expect("a page")])
+                    }
+                    _ => {
+                        let action = dictionary
+                            .get(b"A")
+                            .and_then(Object::as_dict)
+                            .expect("an action");
+                        let uri = action.get(b"URI").and_then(Object::as_str).expect("a URI");
+                        Followed::Uri(String::from_utf8_lossy(uri).into_owned())
+                    }
+                }
+            })
+            .collect()
+    }
+
+    fn with_links<'a>(pdf: &'a [u8], url: &'a str, links: &'a LinkSettings) -> Part<'a> {
+        Part { pdf, url, links }
+    }
+
+    /// **The reason named destinations are resolved.** The table they lived in
+    /// is the catalog's, and the catalog does not survive a merge.
+    #[test]
+    fn a_named_destination_survives_the_merge_as_an_explicit_one() {
+        let a = linked(
+            &["A1", "A2"],
+            &[("target", 1)],
+            &[LinkSpec::Named("target")],
+        );
+        let b = pages(&["B1"], None);
+
+        let out = merge_all(&[&b, &a]).expect("should merge");
+        // A's first page is the second page now, and its target the third.
+        assert_eq!(links_on(&out, 2), [Followed::Page(3)]);
+    }
+
+    /// A link to another document of the conversion is a link into the file:
+    /// to the anchor it names, or to the document's first page.
+    #[test]
+    fn a_link_to_another_document_of_the_conversion_becomes_internal() {
+        let a = linked(
+            &["A1"],
+            &[],
+            &[
+                LinkSpec::Uri("file:///d/b.html#sec"),
+                LinkSpec::Uri("file:///d/b.html"),
+                LinkSpec::Uri("file:///d/b.html#nowhere"),
+                LinkSpec::Uri("file:///d/elsewhere.html"),
+                LinkSpec::Uri("https://example.com/"),
+            ],
+        );
+        let b = linked(&["B1", "B2"], &[("sec", 1)], &[]);
+
+        let out = merge(&[
+            with_links(&a, "file:///d/a.html", &DEFAULT_LINKS),
+            with_links(&b, "file:///d/b.html", &DEFAULT_LINKS),
+        ])
+        .expect("should merge");
+        assert_eq!(
+            links_on(&out, 1),
+            [
+                Followed::Page(3),
+                Followed::Page(2),
+                Followed::Page(2),
+                Followed::Uri("file:///d/elsewhere.html".into()),
+                Followed::Uri("https://example.com/".into()),
+            ]
+        );
+    }
+
+    /// Each option drops one kind and only that kind, and a document alone
+    /// keeps the rest of its catalog while it is edited.
+    #[test]
+    fn disabling_a_kind_of_link_drops_only_that_kind() {
+        let pdf = linked(
+            &["P1", "P2"],
+            &[("t", 1)],
+            &[
+                LinkSpec::Named("t"),
+                LinkSpec::Uri("https://example.com/"),
+                LinkSpec::Explicit(1),
+            ],
+        );
+        let no_internal = LinkSettings {
+            internal: false,
+            ..DEFAULT_LINKS
+        };
+        let out = merge(&[with_links(&pdf, "file:///d/p.html", &no_internal)]).expect("alone");
+        assert_eq!(
+            links_on(&out, 1),
+            [Followed::Uri("https://example.com/".into())]
+        );
+        let document = Document::load_mem(&out).expect("should parse");
+        assert!(
+            document.catalog().unwrap().has(b"Lang"),
+            "a document alone keeps its catalog"
+        );
+
+        let no_external = LinkSettings {
+            external: false,
+            ..DEFAULT_LINKS
+        };
+        let out = merge(&[with_links(&pdf, "file:///d/p.html", &no_external)]).expect("alone");
+        // The named one is resolved on the way, as it would be in a merge.
+        assert_eq!(links_on(&out, 1), [Followed::Page(2), Followed::Page(2)]);
+    }
+
+    /// The browser resolved every link; below the document's own directory it
+    /// can be made relative again.
+    #[test]
+    fn keeping_relative_links_writes_them_relative_again() {
+        let pdf = linked(
+            &["P1"],
+            &[],
+            &[
+                LinkSpec::Uri("file:///d/other.html#x"),
+                LinkSpec::Uri("file:///d/sub/deep.html"),
+                LinkSpec::Uri("file:///elsewhere/x.html"),
+                LinkSpec::Uri("https://example.com/"),
+            ],
+        );
+        let keep = LinkSettings {
+            resolve_relative: false,
+            ..DEFAULT_LINKS
+        };
+        let out = merge(&[with_links(&pdf, "file:///d/p.html", &keep)]).expect("alone");
+        assert_eq!(
+            links_on(&out, 1),
+            [
+                Followed::Uri("other.html#x".into()),
+                Followed::Uri("sub/deep.html".into()),
+                Followed::Uri("file:///elsewhere/x.html".into()),
+                Followed::Uri("https://example.com/".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_document_alone_that_asks_nothing_of_its_links_is_untouched() {
+        let pdf = linked(&["P1"], &[("t", 0)], &[LinkSpec::Named("t")]);
+        assert_eq!(merge(&[part(&pdf)]).expect("alone"), pdf);
+    }
+
+    #[test]
+    fn a_relative_link_is_only_one_below_the_documents_directory() {
+        assert_eq!(
+            relative_to("file:///d/x/y.html", "file:///d/a.html").as_deref(),
+            Some("x/y.html")
+        );
+        assert_eq!(relative_to("file:///d/", "file:///d/a.html"), None);
+        assert_eq!(relative_to("file:///e/y.html", "file:///d/a.html"), None);
+        assert_eq!(
+            relative_to("https://h/p/q.html#f", "https://h/p/index.html").as_deref(),
+            Some("q.html#f")
+        );
     }
 }

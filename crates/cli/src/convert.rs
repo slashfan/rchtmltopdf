@@ -102,8 +102,9 @@ impl From<rchtmltopdf_browser::Error> for ConvertError {
 
 /// What came out of the browser for the documents that made it.
 struct Printed {
-    /// One PDF per document that was printed, in command line order.
-    documents: Vec<Vec<u8>>,
+    /// One PDF per document that was printed, in command line order, with the
+    /// index of the object it came from.
+    documents: Vec<(usize, Vec<u8>)>,
     /// Subresources the interception refused, across every document.
     refused: Vec<intercept::Refusal>,
     /// Subresources that failed, paired with the object whose
@@ -270,7 +271,7 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
 
             printed
                 .documents
-                .push(page.print_to_pdf(&plan.print).await?);
+                .push((index, page.print_to_pdf(&plan.print).await?));
 
             // Read before the guard is dropped, which is what stops interception.
             printed.refused.extend(
@@ -304,7 +305,15 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
     }
 
     say(settings, "Printing pages (2/2)");
-    let parts: Vec<&[u8]> = printed.documents.iter().map(Vec::as_slice).collect();
+    let parts: Vec<rchtmltopdf_pdf::Part<'_>> = printed
+        .documents
+        .iter()
+        .map(|(index, pdf)| rchtmltopdf_pdf::Part {
+            pdf,
+            url: &plans[*index].finish.document_url,
+            links: &plans[*index].finish.links,
+        })
+        .collect();
     let pdf = rchtmltopdf_pdf::merge(&parts)?;
 
     // The outline the browser wrote is all or nothing per document, so the

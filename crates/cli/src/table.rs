@@ -156,6 +156,12 @@ use Scope::{Global, Object, Toc};
 use Support::{Extension, Implemented, Meta, NoEquivalent, Planned};
 
 const SHRINK: &str = "rendering is fixed at 96 CSS px per inch; see the smart shrinking section of the migration guide";
+
+/// Why the form options have no equivalent: the print path draws a form
+/// control as it looks on screen and writes no field behind it — no AcroForm,
+/// no widget — so there is nothing to turn on or off (D37).
+const FORMS: &str =
+    "Chromium's print path draws form fields as they look and makes no interactive fields";
 const V2: &str = "planned for V2";
 const V3: &str = "planned for V3";
 
@@ -533,28 +539,28 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "disable-external-links",
         None,
         Object,
-        Planned(V2),
+        Implemented,
         "Do not make links to remote web pages",
     ),
     OptionSpec::flag(
         "enable-external-links",
         None,
         Object,
-        Planned(V2),
+        Implemented,
         "Make links to remote web pages (default)",
     ),
     OptionSpec::flag(
         "disable-forms",
         None,
         Object,
-        Planned(V2),
+        NoEquivalent(FORMS),
         "Do not turn HTML form fields into pdf form fields (default)",
     ),
     OptionSpec::flag(
         "enable-forms",
         None,
         Object,
-        Planned(V2),
+        NoEquivalent(FORMS),
         "Turn HTML form fields into pdf form fields",
     ),
     OptionSpec::flag(
@@ -575,14 +581,14 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "disable-internal-links",
         None,
         Object,
-        Planned(V2),
+        Implemented,
         "Do not make local links",
     ),
     OptionSpec::flag(
         "enable-internal-links",
         None,
         Object,
-        Planned(V2),
+        Implemented,
         "Make local links (default)",
     ),
     OptionSpec::flag(
@@ -611,7 +617,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "keep-relative-links",
         None,
         Object,
-        Planned(V2),
+        Implemented,
         "Keep relative external links as relative external links",
     ),
     OptionSpec::new(
@@ -763,7 +769,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "resolve-relative-links",
         None,
         Object,
-        Planned(V2),
+        Implemented,
         "Resolve relative external links into absolute links (default)",
     ),
     OptionSpec::new(
