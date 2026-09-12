@@ -231,6 +231,10 @@ pub struct Pair {
     pub value: String,
 }
 
+/// The window wkhtmltopdf emulated, and therefore what a migrated document's
+/// media queries were written against (D03).
+pub const WKHTMLTOPDF_VIEWPORT: (u32, u32) = (1024, 768);
+
 /// How the page itself should behave.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WebSettings {
@@ -240,11 +244,20 @@ pub struct WebSettings {
     pub media_type: MediaType,
     /// Scale applied at print time, from `--zoom`.
     pub zoom: f64,
+    /// What to read the document as when it does not say.
+    ///
+    /// Applies to a local document only. A document fetched over http or https
+    /// is read as its server said, and nothing on this side overrides that.
     pub encoding: Option<String>,
     pub minimum_font_size: Option<u32>,
-    /// Emulated window size. Affects media queries and what scripts read, but
-    /// not the printed layout width.
-    pub viewport: Option<(u32, u32)>,
+    /// Emulated window size.
+    ///
+    /// Affects media queries and what scripts read from the window, and **not**
+    /// the printed layout width: Chromium lays a printed page out at the content
+    /// width, which for A4 less 10mm margins is about 718 CSS pixels. A design
+    /// built for 1024 reflows. That is the second biggest surprise in a
+    /// migration after smart shrinking, and `docs/migration.md` carries it.
+    pub viewport: (u32, u32),
     pub user_style_sheet: Option<String>,
     pub username: Option<String>,
     pub password: Option<String>,
@@ -274,7 +287,7 @@ impl Default for WebSettings {
             zoom: 1.0,
             encoding: None,
             minimum_font_size: None,
-            viewport: None,
+            viewport: WKHTMLTOPDF_VIEWPORT,
             user_style_sheet: None,
             username: None,
             password: None,
@@ -425,6 +438,11 @@ mod tests {
         assert!(object.web.javascript);
         assert!(object.web.images);
         approx(object.web.zoom, 1.0);
+        // The window wkhtmltopdf emulated. A migrated document's media queries
+        // were written against this one, not against the printed width.
+        assert_eq!(object.web.viewport, (1024, 768));
+        assert!(object.web.encoding.is_none());
+        assert_eq!(object.web.minimum_font_size, None);
 
         // Off, because user-supplied HTML plus filesystem reach is the bug that
         // made wkhtmltopdf change this in 0.12.6 (D10).

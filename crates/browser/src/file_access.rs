@@ -159,9 +159,12 @@ fn inside(root: &Path, path: &Path) -> bool {
 
 /// The local path a URL names, if it names one.
 ///
+/// Public because the conversion needs the same answer for a different question:
+/// whether the document it was given is one we can serve ourselves.
+///
 /// `file://` with an empty host or `localhost`; anything else, including every
 /// http and https URL, is not a local file.
-fn local_path(url: &str) -> Option<PathBuf> {
+pub fn local_path(url: &str) -> Option<PathBuf> {
     let rest = url.strip_prefix("file://")?;
     let rest = rest.strip_prefix("localhost").unwrap_or(rest);
     if !rest.starts_with('/') {

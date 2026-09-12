@@ -92,6 +92,12 @@ pub struct LaunchOptions {
     /// conversion deadline is the real bound, so a script that never returns
     /// costs the deadline rather than for ever.
     pub allow_slow_scripts: bool,
+    /// Smallest font the page may use, from `--minimum-font-size`.
+    pub minimum_font_size: Option<u32>,
+    /// Stop images loading at all, from `--no-images`.
+    ///
+    /// Phrased as the negative so the derived default is the ordinary case.
+    pub no_images: bool,
     /// Use this profile directory instead of a throwaway one.
     pub user_data_dir: Option<PathBuf>,
     /// Override how long to wait for the browser to answer after starting.
@@ -425,6 +431,24 @@ pub fn build_args(
         args.push("--disable-hang-monitor".to_string());
     }
 
+    // Two of wkhtmltopdf's page options are Blink settings rather than switches,
+    // and Chromium takes the lot as one comma-separated flag. Both are
+    // process-wide where wkhtmltopdf scopes them to an object; with one document
+    // per run that is the same thing, and when several land (V2) it will not be.
+    let mut blink = Vec::new();
+    if let Some(size) = options.minimum_font_size {
+        // Qt set both, and a page that sizes text in `pt` rather than `px` only
+        // answers to the second.
+        blink.push(format!("minimumFontSize={size}"));
+        blink.push(format!("minimumLogicalFontSize={size}"));
+    }
+    if options.no_images {
+        blink.push("imagesEnabled=false".to_string());
+    }
+    if !blink.is_empty() {
+        args.push(format!("--blink-settings={}", blink.join(",")));
+    }
+
     // Last, so a caller can override anything above.
     args.extend(options.extra_args.iter().cloned());
     args
@@ -666,6 +690,34 @@ mod tests {
         };
         assert!(
             args(Flavour::HeadlessShell, &asked).contains(&"--disable-hang-monitor".to_string())
+        );
+    }
+
+    /// Chromium takes Blink settings as one comma-separated flag, and a second
+    /// `--blink-settings` replaces the first rather than adding to it. So the two
+    /// options that are Blink settings have to arrive together or the later one
+    /// silently cancels the earlier.
+    #[test]
+    fn the_blink_settings_travel_as_one_flag() {
+        assert!(
+            !args(Flavour::HeadlessShell, &LaunchOptions::default())
+                .iter()
+                .any(|arg| arg.starts_with("--blink-settings")),
+            "nothing is asked for by default"
+        );
+
+        let both = LaunchOptions {
+            minimum_font_size: Some(9),
+            no_images: true,
+            ..LaunchOptions::default()
+        };
+        let written: Vec<String> = args(Flavour::HeadlessShell, &both)
+            .into_iter()
+            .filter(|arg| arg.starts_with("--blink-settings"))
+            .collect();
+        assert_eq!(
+            written,
+            ["--blink-settings=minimumFontSize=9,minimumLogicalFontSize=9,imagesEnabled=false"]
         );
     }
 

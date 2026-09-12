@@ -19,8 +19,23 @@ act on are accepted and warned about rather than breaking a command line that us
 
 Several documents, covers and a table of contents are not built. Neither is most of the
 option surface beyond what V0 needed: headers and footers, cookies and custom headers,
-credentials and proxies, encoding, the viewport, injected stylesheets and scripts, and PDF
-metadata are all understood on the command line and not yet acted on.
+credentials and proxies, injected stylesheets and scripts, and PDF metadata are all
+understood on the command line and not yet acted on.
+
+### Added
+
+**`--encoding`, `--minimum-font-size`, `--viewport-size` and `--no-images` are honoured.**
+
+`--encoding` says how to read a document that declares no charset. There is no protocol
+command for that and no launch switch — `--default-encoding` was tried and does nothing — so
+a local document is served to the browser with a `Content-Type` that says so, at its own URL,
+which leaves every relative link resolving where it did. A document fetched over http or
+https is read as its server said and there is nowhere to intervene, so the option says it
+does not apply rather than being accepted in silence.
+
+`--viewport-size` emulates the window, and **the window is now wkhtmltopdf's 1024 by 768 on
+every conversion** rather than whatever Chromium's is, because that is what a migrated
+document's scripts were written against (D03).
 
 ### Security
 
@@ -58,6 +73,11 @@ conversion ever read it. They are now listed as not implemented yet, and writing
 the same warning every other unbuilt option already printed. What those options *do* has not
 changed — they did nothing before and they do nothing now — but a command line using them is
 noisier, and `-q` or `--log-level none` silences it.
+
+**`--viewport-size` does not decide which media queries match.** It moves what a script
+reads from the window, and nothing else: a printed page is laid out at the paper's content
+width and `@media (min-width: …)` is evaluated against that, whatever the window is set to.
+Measured, not deduced, and `docs/migration.md` has been corrected — it claimed otherwise.
 
 **`--default-header` no longer moves the content down the page.** It pushed the top margin
 out to 20mm to make room for a band nothing draws, so a document written with it lost a
