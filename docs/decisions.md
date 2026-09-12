@@ -240,6 +240,20 @@ Le nombre d'approbations requises est **0**. Un mainteneur seul ne peut pas appr
 
 ---
 
+## D28 — Passage en public, et ce que D23 avait prévu de travers
+
+**Choix.** Le dépôt passe en public. La condition posée par D23 — « privé jusqu'à ce que V0 produise un PDF » — est remplie depuis #76. Le README porte en tête un avertissement sans ambiguïté : projet de week-end, pas d'usage en production, pas de release, pas de support, et le modèle de menace de `SECURITY.md` décrit ce que le code tente et non ce qu'il garantit.
+
+**Pourquoi maintenant, et pas plus tard.** Sur un dépôt privé, les minutes GitHub Actions sont décomptées du quota mensuel ; sur un dépôt public, les runners standard sont gratuits et sans limite. La CI de ce projet compte neuf jobs par exécution et le rythme de développement en produit plusieurs dizaines par semaine. Les alternatives ont toutes un coût réel : réduire la CI, c'est retirer précisément les gardes sur lesquelles la discipline du projet repose (la table d'options tenue à un binaire réel, le plan tenu à ce qu'une conversion fait, la suite de conformité tenue à un Chromium épinglé) ; un runner auto-hébergé est une machine à maintenir, et il est dangereux sur un dépôt public qui accepte des pull requests extérieures.
+
+**Correction à D23.** La note de D23 demandait d'élargir la matrice `test` à macOS **et Windows** au passage en public. La moitié Windows est infaisable et l'était déjà quand la note a été écrite : `crates/browser/src/lib.rs` porte un `compile_error!` explicite pour tout ce qui n'est pas Unix, parce que le protocole voyage sur les descripteurs 3 et 4 et que le transport par handles de Windows n'est pas écrit. `cargo test --workspace` sur Windows ne compile pas. La matrice s'élargit donc à macOS seul, où D09 résout de vrais bundles `.app`, et Windows reste hors de portée tant que le transport n'existe pas.
+
+**Ce qui devient public en même temps que le code.** Les 45 commits et leur historique complet, les tickets et les pull requests avec leurs discussions. Les deux ont été passés au crible : aucun secret, aucun chemin local, aucune adresse personnelle en dehors de celles que git inscrit lui-même dans les commits.
+
+**Écarté.** Rester privé en rognant la CI. Un runner auto-hébergé. Réécrire l'historique pour en retirer l'adresse de l'auteur, qui est un choix de l'auteur et pas une fuite.
+
+---
+
 ## Conséquences transverses
 
 - **Le brief doit gagner une section « smart shrinking »** dans les contraintes, et un guide de migration (options à retirer, différences de taille attendues).

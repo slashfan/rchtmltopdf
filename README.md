@@ -2,6 +2,19 @@
 
 > `wkhtmltopdf` interface, modern Chromium rendering.
 
+> [!WARNING]
+> **A weekend project. Do not use it in production.**
+>
+> This is written for the interest of writing it, and published in case the approach is
+> useful to someone. It is not a maintained product: there is no release, no support, and
+> no undertaking that any of it keeps working or that the command line stays as it is.
+>
+> It drives a browser over untrusted HTML, which is a thing to get wrong, and nobody has
+> audited it. The threat model in [SECURITY.md](SECURITY.md) describes what the code tries
+> to do — it is not evidence that it succeeds.
+>
+> If you need a supported `wkhtmltopdf` replacement, this is not one.
+
 A drop-in replacement for [`wkhtmltopdf`](https://github.com/wkhtmltopdf/wkhtmltopdf),
 archived since 2023, that keeps the command line and swaps the rendering engine for a
 recent headless Chromium driven over the Chrome DevTools Protocol.
