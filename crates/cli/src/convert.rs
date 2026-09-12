@@ -10,6 +10,7 @@ use rchtmltopdf_browser::deadline;
 use rchtmltopdf_browser::file_access;
 use rchtmltopdf_browser::intercept;
 use rchtmltopdf_browser::locate::{SystemEnvironment, locate};
+use rchtmltopdf_browser::placeholder::Clock;
 use rchtmltopdf_browser::plan::Plan;
 use rchtmltopdf_browser::render::Progress;
 use rchtmltopdf_core::settings::{ObjectKind, Settings};
@@ -75,7 +76,7 @@ pub async fn convert(settings: &Settings) -> Result<(), ConvertError> {
     // happens. The page halves are rebuilt from the same functions below rather
     // than passed down, so a test can hold the option table to what a conversion
     // would actually do (D27).
-    let plan = Plan::new(&settings.global, object);
+    let plan = Plan::new(&settings.global, object, Clock::now());
 
     // `--encoding` says how to read a document that does not declare a charset.
     // There is no protocol command for it and no launch switch, so the only way
@@ -93,6 +94,17 @@ pub async fn convert(settings: &Settings) -> Result<(), ConvertError> {
             "{PROGRAM}: warning: --encoding does not apply to a document fetched over the \
              network; it is read as the server said it should be"
         );
+    }
+
+    // Said before the browser starts, because it is a fact about the command
+    // line rather than about the document.
+    if settings.global.log_level.shows_warnings() {
+        for name in &plan.unsupported_placeholders {
+            eprintln!(
+                "{PROGRAM}: warning: [{name}] names a position in the document outline, which is \
+                 not built yet (planned for V2); it is being left empty"
+            );
+        }
     }
 
     let progress = Progress::new();
@@ -114,7 +126,7 @@ pub async fn convert(settings: &Settings) -> Result<(), ConvertError> {
 
         page.prepare(&object.web).await?;
         page.load(document.url(), &object.load, &progress).await?;
-        let pdf = page.print_to_pdf(&settings.global.page, object).await?;
+        let pdf = page.print_to_pdf(&plan.print).await?;
 
         // Read before the guard is dropped, which is what stops interception.
         let refused = policing

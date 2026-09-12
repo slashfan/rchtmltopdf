@@ -2,9 +2,8 @@
 
 use crate::error::{Error, Result};
 use crate::launch::Page;
-use crate::plan;
+use crate::plan::Command;
 use base64::Engine;
-use rchtmltopdf_core::settings::{ObjectSettings, PageSetup};
 use serde_json::{Value, json};
 
 /// How much of the PDF stream to ask for at a time.
@@ -13,12 +12,15 @@ const STREAM_CHUNK: u64 = 512 * 1024;
 impl Page {
     /// Print the page and return the bytes.
     ///
-    /// Sends what [`plan::print`] decided and nothing else, so every choice
-    /// about paper, margins, backgrounds and zoom is visible to the guard that
-    /// holds the option table honest (D27).
-    pub async fn print_to_pdf(&self, page: &PageSetup, object: &ObjectSettings) -> Result<Vec<u8>> {
-        let command = plan::print(page, object);
-        let result = self.session().send(command.method, command.params).await?;
+    /// Takes the command the plan decided rather than the settings it was
+    /// decided from, which is the strongest form of D27's contract: there is
+    /// nothing left here to decide, and a choice that never reached the plan
+    /// cannot be made on the way out.
+    pub async fn print_to_pdf(&self, command: &Command) -> Result<Vec<u8>> {
+        let result = self
+            .session()
+            .send(command.method, command.params.clone())
+            .await?;
 
         let handle = result
             .get("stream")

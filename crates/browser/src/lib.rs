@@ -26,6 +26,7 @@ pub mod file_access;
 pub mod intercept;
 pub mod launch;
 pub mod locate;
+pub mod placeholder;
 pub mod plan;
 pub mod print;
 pub mod render;

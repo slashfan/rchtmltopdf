@@ -163,11 +163,8 @@ const V3: &str = "planned for V3";
 // conversion. Each says what is missing rather than which milestone it waits
 // for, because a milestone is not something a user can check and "the band is
 // not drawn" is.
-const NO_SUBSTITUTION: &str =
-    "header and footer text is used as written; placeholders are not substituted yet";
 const NO_NETWORK: &str = "nothing is configured on the browser's network stack yet";
 const NO_ERROR_POLICY: &str = "a failure to load is not classified yet";
-const NO_METADATA: &str = "PDF metadata is not written yet";
 
 /// `General Options` in wkhtmltopdf's extended help. Global scope.
 pub const GENERAL_OPTIONS: &[OptionSpec] = &[
@@ -354,7 +351,7 @@ pub const GENERAL_OPTIONS: &[OptionSpec] = &[
         "title",
         None,
         Global,
-        Planned(NO_METADATA),
+        Implemented,
         &["text"],
         "The title of the generated pdf file (The title of the first document is used if not specified)",
     ),
@@ -1034,7 +1031,7 @@ pub const HEADER_FOOTER_OPTIONS: &[OptionSpec] = &[
         "replace",
         None,
         Object,
-        Planned(NO_SUBSTITUTION),
+        Implemented,
         &["name", "value"],
         "Replace [name] with value in header and footer (repeatable)",
     )

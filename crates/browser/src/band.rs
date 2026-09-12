@@ -43,11 +43,13 @@
 //!   the print margin, so `--header-spacing` is added there (see `plan::print`)
 //!   and this module knows nothing about it.
 //!
-//! # Placeholders are not substituted here
+//! # Placeholders
 //!
-//! `[page]`, `[date]` and the rest are #22. This module takes the text it is
-//! given and escapes it.
+//! `[page]`, `[date]` and the rest are expanded by [`crate::placeholder`], which
+//! also does the escaping: a band's text is somebody's document title, and
+//! `[page]` has to survive as a `<span>` while everything around it does not.
 
+use crate::placeholder::{self, Context};
 use rchtmltopdf_core::settings::Band;
 
 /// wkhtmltopdf's default band font, which is not Chromium's.
@@ -63,6 +65,15 @@ const SIZE_PT: f64 = 12.0;
 /// given", and Chromium falls back to its own. A div that draws nothing is the
 /// way to ask for nothing.
 pub const EMPTY: &str = "<div></div>";
+
+/// A band's markup, and what it could not expand.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Template {
+    pub html: String,
+    /// Placeholders that are real in wkhtmltopdf and empty here. The binary says
+    /// so once per name, however many bands and cells used it.
+    pub unsupported: Vec<&'static str>,
+}
 
 /// Which end of the page a band is at.
 ///
@@ -80,10 +91,38 @@ pub enum Edge {
 /// `left` and `right` are the page's side margins in millimetres: a template
 /// spans the full width of the paper, where wkhtmltopdf's band spans the content
 /// width, so the difference is padded out here.
-pub fn template(band: &Band, edge: Edge, left_mm: f64, right_mm: f64) -> String {
+pub fn template(
+    band: &Band,
+    edge: Edge,
+    left_mm: f64,
+    right_mm: f64,
+    context: &Context,
+) -> Template {
     if band.is_empty() {
-        return EMPTY.to_string();
+        return Template {
+            html: EMPTY.to_string(),
+            unsupported: Vec::new(),
+        };
     }
+
+    let mut unsupported: Vec<&'static str> = Vec::new();
+    let mut cell = |text: Option<&str>| -> String {
+        let Some(text) = text else {
+            return String::new();
+        };
+        let expansion = placeholder::expand(text, context);
+        for name in expansion.unsupported {
+            if !unsupported.contains(&name) {
+                unsupported.push(name);
+            }
+        }
+        expansion.html
+    };
+    let (left, centre, right) = (
+        cell(band.left.as_deref()),
+        cell(band.center.as_deref()),
+        cell(band.right.as_deref()),
+    );
 
     let size = band.font_size.unwrap_or(SIZE_PT);
     let family = band.font_name.as_deref().unwrap_or(FONT);
@@ -96,7 +135,7 @@ pub fn template(band: &Band, edge: Edge, left_mm: f64, right_mm: f64) -> String 
         (true, Edge::Footer) => "border-top:0.5pt solid #000;".to_string(),
     };
 
-    format!(
+    let html = format!(
         "<div style=\"\
          -webkit-print-color-adjust:exact;print-color-adjust:exact;\
          box-sizing:border-box;width:100%;margin:0;\
@@ -107,41 +146,24 @@ pub fn template(band: &Band, edge: Edge, left_mm: f64, right_mm: f64) -> String 
          <div style=\"flex:1 1 0;text-align:center;white-space:pre\">{}</div>\
          <div style=\"flex:1 1 0;text-align:right;white-space:pre\">{}</div>\
          </div>",
-        cell(band.left.as_deref()),
-        cell(band.center.as_deref()),
-        cell(band.right.as_deref()),
-        family = escape(family),
-    )
-}
+        left,
+        centre,
+        right,
+        family = placeholder::escape(family),
+    );
 
-/// One of the three cells, escaped.
-fn cell(text: Option<&str>) -> String {
-    text.map(escape).unwrap_or_default()
-}
-
-/// HTML-escape, because the text is somebody's document title.
-///
-/// A title containing `&` or `<` would otherwise close the markup around it and
-/// take the rest of the band with it. Quotes go too: the styles above are
-/// attributes, and a stray quote in a font name would end one.
-fn escape(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    for character in raw.chars() {
-        match character {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            other => out.push(other),
-        }
-    }
-    out
+    Template { html, unsupported }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The template's markup, expanded against an empty context: these tests are
+    /// about layout and escaping, and `placeholder.rs` covers expansion.
+    fn markup(band: &Band, edge: Edge, left: f64, right: f64) -> String {
+        template(band, edge, left, right, &Context::default()).html
+    }
 
     fn band(center: &str) -> Band {
         Band {
@@ -154,7 +176,7 @@ mod tests {
     /// page number the user did not ask for.
     #[test]
     fn an_empty_band_is_still_a_template() {
-        assert_eq!(template(&Band::default(), Edge::Footer, 10.0, 10.0), EMPTY);
+        assert_eq!(markup(&Band::default(), Edge::Footer, 10.0, 10.0), EMPTY);
         assert!(!EMPTY.is_empty());
     }
 
@@ -163,7 +185,7 @@ mod tests {
     /// silently shrink and fade.
     #[test]
     fn the_font_is_wkhtmltopdfs_default_rather_than_chromiums() {
-        let html = template(&band("x"), Edge::Header, 10.0, 10.0);
+        let html = markup(&band("x"), Edge::Header, 10.0, 10.0);
         assert!(html.contains("font-family:Arial"), "{html}");
         assert!(html.contains("font-size:12pt"), "{html}");
         assert!(html.contains("color:#000"), "{html}");
@@ -176,7 +198,7 @@ mod tests {
             font_size: Some(8.0),
             ..band("x")
         };
-        let html = template(&asked, Edge::Header, 10.0, 10.0);
+        let html = markup(&asked, Edge::Header, 10.0, 10.0);
         assert!(html.contains("font-family:Times New Roman"), "{html}");
         assert!(html.contains("font-size:8pt"), "{html}");
     }
@@ -190,11 +212,11 @@ mod tests {
             line: true,
             ..band("x")
         };
-        assert!(template(&ruled, Edge::Header, 10.0, 10.0).contains("border-bottom"));
-        assert!(template(&ruled, Edge::Footer, 10.0, 10.0).contains("border-top"));
+        assert!(markup(&ruled, Edge::Header, 10.0, 10.0).contains("border-bottom"));
+        assert!(markup(&ruled, Edge::Footer, 10.0, 10.0).contains("border-top"));
         // `box-sizing:border-box` is always there, so this looks for the rule
         // itself rather than for the word.
-        let plain = template(&band("x"), Edge::Header, 10.0, 10.0);
+        let plain = markup(&band("x"), Edge::Header, 10.0, 10.0);
         assert!(!plain.contains("border-bottom") && !plain.contains("border-top"));
     }
 
@@ -207,9 +229,9 @@ mod tests {
             spacing: Some(5.0),
             ..band("x")
         };
-        let html = template(&spaced, Edge::Header, 10.0, 10.0);
+        let html = markup(&spaced, Edge::Header, 10.0, 10.0);
         assert!(!html.contains("5mm"), "{html}");
-        assert_eq!(html, template(&band("x"), Edge::Header, 10.0, 10.0));
+        assert_eq!(html, markup(&band("x"), Edge::Header, 10.0, 10.0));
     }
 
     /// A template spans the paper; wkhtmltopdf's band spans the content. The
@@ -217,7 +239,7 @@ mod tests {
     /// centred on the text above it whenever the two margins differ.
     #[test]
     fn the_band_is_inset_to_the_content_width() {
-        let html = template(&band("x"), Edge::Footer, 15.0, 25.0);
+        let html = markup(&band("x"), Edge::Footer, 15.0, 25.0);
         assert!(html.contains("padding-left:15mm"), "{html}");
         assert!(html.contains("padding-right:25mm"), "{html}");
     }
@@ -232,7 +254,7 @@ mod tests {
             right: Some("a \"quoted\" thing".into()),
             ..Band::default()
         };
-        let html = template(&nasty, Edge::Header, 10.0, 10.0);
+        let html = markup(&nasty, Edge::Header, 10.0, 10.0);
         assert!(html.contains("Tom &amp; Jerry"), "{html}");
         assert!(!html.contains("<script>"), "{html}");
         assert!(html.contains("&lt;script&gt;"), "{html}");
@@ -247,7 +269,7 @@ mod tests {
             font_name: Some("Arial\" onload=\"x".into()),
             ..band("x")
         };
-        let html = template(&injected, Edge::Header, 10.0, 10.0);
+        let html = markup(&injected, Edge::Header, 10.0, 10.0);
         assert!(!html.contains("onload=\""), "{html}");
         assert!(html.contains("&quot;"), "{html}");
     }
@@ -255,7 +277,7 @@ mod tests {
     /// A template that paints anything comes out white without it.
     #[test]
     fn colours_are_asked_to_print() {
-        let html = template(&band("x"), Edge::Header, 10.0, 10.0);
+        let html = markup(&band("x"), Edge::Header, 10.0, 10.0);
         assert!(html.contains("print-color-adjust:exact"), "{html}");
     }
 
@@ -263,7 +285,7 @@ mod tests {
     /// the page rather than on whatever is left after the other two.
     #[test]
     fn the_three_cells_divide_the_width_evenly() {
-        let html = template(&band("x"), Edge::Header, 10.0, 10.0);
+        let html = markup(&band("x"), Edge::Header, 10.0, 10.0);
         assert_eq!(html.matches("flex:1 1 0").count(), 3, "{html}");
     }
 }
