@@ -203,6 +203,12 @@ pub struct LoadSettings {
     pub window_status: Option<String>,
     /// Scripts to run once the page has settled, in order.
     pub run_scripts: Vec<String>,
+    /// A stylesheet to put into the document, from `--user-style-sheet`.
+    ///
+    /// Here rather than in [`WebSettings`] because what matters about it is
+    /// *when*: it goes in after the document exists and before the wait for web
+    /// fonts, which is the same kind of decision as when a script runs.
+    pub user_style_sheet: Option<String>,
     pub on_document_error: LoadErrorHandling,
     pub on_media_error: LoadErrorHandling,
     /// Let slow scripts keep running.
@@ -215,6 +221,7 @@ impl Default for LoadSettings {
             javascript_delay: Duration::from_millis(200),
             window_status: None,
             run_scripts: Vec::new(),
+            user_style_sheet: None,
             // A failed subresource still produces a PDF, but exits non-zero and
             // names the error. Applications depend on that pair (D14).
             on_document_error: LoadErrorHandling::Abort,
@@ -258,7 +265,6 @@ pub struct WebSettings {
     /// built for 1024 reflows. That is the second biggest surprise in a
     /// migration after smart shrinking, and `docs/migration.md` carries it.
     pub viewport: (u32, u32),
-    pub user_style_sheet: Option<String>,
     pub username: Option<String>,
     pub password: Option<String>,
     pub proxy: Option<String>,
@@ -288,7 +294,6 @@ impl Default for WebSettings {
             encoding: None,
             minimum_font_size: None,
             viewport: WKHTMLTOPDF_VIEWPORT,
-            user_style_sheet: None,
             username: None,
             password: None,
             proxy: None,
@@ -454,6 +459,8 @@ mod tests {
         assert_eq!(object.load.on_document_error, LoadErrorHandling::Abort);
         assert_eq!(object.load.on_media_error, LoadErrorHandling::Ignore);
         assert!(object.load.stop_slow_scripts);
+        assert!(object.load.run_scripts.is_empty());
+        assert!(object.load.user_style_sheet.is_none());
 
         assert!(object.header.is_empty());
         assert!(object.footer.is_empty());

@@ -228,7 +228,6 @@ pub fn apply_object(
         "encoding" => web.encoding = Some(value(occurrence).to_string()),
         "minimum-font-size" => web.minimum_font_size = Some(number(occurrence)?),
         "viewport-size" => web.viewport = viewport(occurrence)?,
-        "user-style-sheet" => web.user_style_sheet = Some(value(occurrence).to_string()),
 
         // --- reaching the document -------------------------------------------
         "username" => web.username = Some(value(occurrence).to_string()),
@@ -248,6 +247,7 @@ pub fn apply_object(
         "javascript-delay" => load.javascript_delay = Duration::from_millis(number(occurrence)?),
         "window-status" => load.window_status = Some(value(occurrence).to_string()),
         "run-script" => load.run_scripts.push(value(occurrence).to_string()),
+        "user-style-sheet" => load.user_style_sheet = Some(value(occurrence).to_string()),
         "no-stop-slow-scripts" => load.stop_slow_scripts = false,
         "load-error-handling" => load.on_document_error = handling(occurrence)?,
         "load-media-error-handling" => load.on_media_error = handling(occurrence)?,

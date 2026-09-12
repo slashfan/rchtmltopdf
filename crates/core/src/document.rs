@@ -46,7 +46,11 @@ impl Input {
 ///
 /// A single-letter scheme is rejected so a Windows path such as `C:\tmp\a.html`
 /// is not mistaken for a URL.
-fn has_url_scheme(raw: &str) -> bool {
+///
+/// Public because the same question is asked of things that are not documents:
+/// `--user-style-sheet` takes either a path or a URL and has to tell them apart
+/// the same way, or two options would disagree about what `C:\a.css` is.
+pub fn has_url_scheme(raw: &str) -> bool {
     let Some(colon) = raw.find(':') else {
         return false;
     };

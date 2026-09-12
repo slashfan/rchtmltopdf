@@ -165,8 +165,6 @@ const V3: &str = "planned for V3";
 // not drawn" is.
 const NO_BANDS: &str = "headers and footers are not drawn yet";
 const NO_NETWORK: &str = "nothing is configured on the browser's network stack yet";
-const NO_PAGE_TUNING: &str = "the page is not tuned before it loads yet";
-const NO_SCRIPTS: &str = "nothing is run inside the page yet";
 const NO_ERROR_POLICY: &str = "a failure to load is not classified yet";
 const NO_METADATA: &str = "PDF metadata is not written yet";
 
@@ -776,7 +774,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "run-script",
         None,
         Object,
-        Planned(NO_SCRIPTS),
+        Implemented,
         &["js"],
         "Run this additional javascript after the page is done loading (repeatable)",
     )
@@ -851,7 +849,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "user-style-sheet",
         None,
         Object,
-        Planned(NO_PAGE_TUNING),
+        Implemented,
         &["url"],
         "Specify a user style sheet, to load with every page",
     ),

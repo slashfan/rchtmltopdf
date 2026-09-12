@@ -19,8 +19,8 @@ act on are accepted and warned about rather than breaking a command line that us
 
 Several documents, covers and a table of contents are not built. Neither is most of the
 option surface beyond what V0 needed: headers and footers, cookies and custom headers,
-credentials and proxies, injected stylesheets and scripts, and PDF metadata are all
-understood on the command line and not yet acted on.
+credentials and proxies, and PDF metadata are all understood on the command line and not
+yet acted on.
 
 ### Added
 
@@ -32,6 +32,18 @@ a local document is served to the browser with a `Content-Type` that says so, at
 which leaves every relative link resolving where it did. A document fetched over http or
 https is read as its server said and there is nowhere to intervene, so the option says it
 does not apply rather than being accepted in silence.
+
+**`--user-style-sheet` and `--run-script` are honoured.** A stylesheet named by path is read
+by us and inlined, so the policy that stops a *document* reading the disk has nothing to say
+about a file the user named on the command line; one named by a URL is left to the browser to
+fetch. Either goes in after the document exists and **before the wait for web fonts**,
+because a stylesheet that declares a font face makes that wait meaningless if it arrives
+afterwards.
+
+`--run-script` runs each script in order once the page has settled, awaiting a promise if one
+is returned. A script that throws fails the conversion and names itself, because a command
+line usually carries several. `--load-error-handling` will make that configurable (#28); for
+now it is always the default.
 
 `--viewport-size` emulates the window, and **the window is now wkhtmltopdf's 1024 by 768 on
 every conversion** rather than whatever Chromium's is, because that is what a migrated
