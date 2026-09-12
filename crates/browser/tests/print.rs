@@ -2,9 +2,9 @@
 
 mod support;
 
-use rchtmltopdf_browser::placeholder::Clock;
 use rchtmltopdf_browser::plan::Plan;
 use rchtmltopdf_browser::render::Progress;
+use rchtmltopdf_core::Clock;
 use rchtmltopdf_core::Input;
 use rchtmltopdf_core::Orientation;
 use rchtmltopdf_core::page_size;

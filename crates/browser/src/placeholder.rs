@@ -22,6 +22,7 @@
 //! the spans raw. Nothing reaches the output unescaped except markup this module
 //! wrote.
 
+use rchtmltopdf_core::Clock;
 use rchtmltopdf_core::settings::Pair;
 
 /// What a band's text is expanded against.
@@ -157,85 +158,6 @@ pub(crate) fn escape(raw: &str) -> String {
         }
     }
     out
-}
-
-/// The wall clock, broken down, with the offset from UTC.
-///
-/// Read once per conversion and carried, so two bands cannot disagree about what
-/// time it is.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Clock {
-    pub year: i32,
-    pub month: u32,
-    pub day: u32,
-    pub hour: u32,
-    pub minute: u32,
-    pub second: u32,
-    /// Seconds east of UTC, which is what `tm_gmtoff` gives.
-    pub utc_offset_seconds: i32,
-}
-
-impl Clock {
-    /// Local time, through libc rather than a dependency.
-    ///
-    /// `localtime_r` is what knows about the machine's zone and its daylight
-    /// saving rules, and this crate already links libc for the pipe transport.
-    /// A failure leaves every field at zero, which prints as an obviously wrong
-    /// date rather than as a silently plausible one.
-    pub fn now() -> Self {
-        let Ok(since_epoch) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-        else {
-            return Self::default();
-        };
-        let seconds = since_epoch.as_secs() as libc::time_t;
-
-        // SAFETY: `localtime_r` writes into the caller's `tm`, which is the
-        // whole reason to prefer it over `localtime`. The pointer it returns is
-        // either that same `tm` or null.
-        let mut broken_down: libc::tm = unsafe { std::mem::zeroed() };
-        let filled = unsafe { libc::localtime_r(&seconds, &mut broken_down) };
-        if filled.is_null() {
-            return Self::default();
-        }
-
-        Self {
-            year: broken_down.tm_year + 1900,
-            month: (broken_down.tm_mon + 1) as u32,
-            day: broken_down.tm_mday as u32,
-            hour: broken_down.tm_hour as u32,
-            minute: broken_down.tm_min as u32,
-            second: broken_down.tm_sec as u32,
-            utc_offset_seconds: broken_down.tm_gmtoff as i32,
-        }
-    }
-
-    /// `[date]`, as the local calendar date.
-    ///
-    /// **Not byte-identical to wkhtmltopdf.** Qt renders this through the
-    /// system locale, so the same binary prints a different string on two
-    /// machines and there is no format to match. An unambiguous one is more use
-    /// than a guess at somebody's locale, and `docs/migration.md` says so.
-    pub fn date(&self) -> String {
-        format!("{:04}-{:02}-{:02}", self.year, self.month, self.day)
-    }
-
-    /// `[time]`, as the local wall clock.
-    pub fn time(&self) -> String {
-        format!("{:02}:{:02}:{:02}", self.hour, self.minute, self.second)
-    }
-
-    /// `[isodate]`, ISO 8601 with the offset, which is the one format that does
-    /// not depend on knowing where the reader is.
-    pub fn iso(&self) -> String {
-        let offset = self.utc_offset_seconds;
-        let sign = if offset < 0 { '-' } else { '+' };
-        let (hours, minutes) = (offset.abs() / 3600, (offset.abs() % 3600) / 60);
-        format!(
-            "{}T{}{sign}{hours:02}:{minutes:02}",
-            self.date(),
-            self.time()
-        )
-    }
 }
 
 #[cfg(test)]

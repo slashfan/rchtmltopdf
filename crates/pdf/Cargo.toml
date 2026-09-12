@@ -9,3 +9,6 @@ description = "rchtmltopdf pdf layer"
 
 [dependencies]
 rchtmltopdf-core.workspace = true
+# Behind this crate's interface and nowhere else (D12). Already in the lock
+# through the conformance harness, which reads PDFs the same way.
+lopdf = { version = "0.45", default-features = false }

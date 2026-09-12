@@ -20,6 +20,7 @@ compile_error!(
 
 pub mod band;
 pub mod cdp;
+pub mod clock;
 pub mod deadline;
 pub mod error;
 pub mod file_access;

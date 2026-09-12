@@ -18,8 +18,25 @@ stylesheets, whether scripts run, and how long to wait before printing. Options 
 act on are accepted and warned about rather than breaking a command line that uses them.
 
 Several documents, covers and a table of contents are not built. Neither is most of the
-option surface beyond what V0 needed: PDF metadata, the outline and everything a table of
-contents needs are understood on the command line and not yet acted on.
+option surface beyond what V0 needed: the outline and everything a table of contents needs
+are understood on the command line and not yet acted on.
+
+### Added
+
+**The finished file says what it is.** `--title` sets the document's title, the producer names
+this program and its version, and the document carries a valid PDF creation date. The print
+call takes the title from the document's own `<title>` and offers no override, so the only way
+to honour the option is to rewrite the file afterwards.
+
+That rewrite is the first real code in `crates/pdf`, and it matters more than it looks: it
+establishes the read, modify, write path the V2 header overlay and the multi-document merge
+both depend on. Object renumbering and cross-reference regeneration are easier to get right on
+one document than to discover part-way through a merge. A conformance test round-trips a real
+three-page Chromium PDF and checks the page count, the text and every page's paper — a
+hand-built fixture cannot find what Chromium's cross-reference streams would.
+
+A title outside ASCII is written as UTF-16 with a byte order mark, because a PDF string
+without one is Latin-1 and `Facture n°42` is not.
 
 ### Added
 
