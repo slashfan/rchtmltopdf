@@ -30,6 +30,7 @@ use rchtmltopdf_browser::render::{Failed, Progress};
 use rchtmltopdf_core::settings::{ObjectKind, ObjectSettings, Settings};
 use rchtmltopdf_core::{ExitCode, Input, LoadErrorHandling};
 use std::fmt;
+use std::path::PathBuf;
 
 #[derive(Debug)]
 pub enum ConvertError {
@@ -38,6 +39,11 @@ pub enum ConvertError {
     /// Every document was dropped by `--load-error-handling skip`, so there is
     /// nothing to write. One entry per document, as `could not load` lines.
     NothingLeft(Vec<String>),
+    /// `--dump-outline` named a file that could not be written.
+    Dump {
+        path: PathBuf,
+        reason: String,
+    },
     Input(input::InputError),
     Output(output::OutputError),
     Browser(rchtmltopdf_browser::Error),
@@ -53,6 +59,13 @@ impl fmt::Display for ConvertError {
                 "--load-error-handling skip left nothing to convert: {}",
                 failures.join("; ")
             ),
+            ConvertError::Dump { path, reason } => {
+                write!(
+                    f,
+                    "could not write the outline to {}: {reason}",
+                    path.display()
+                )
+            }
             ConvertError::Input(error) => write!(f, "{error}"),
             ConvertError::Output(error) => write!(f, "{error}"),
             ConvertError::Browser(error) => write!(f, "{error}"),
@@ -293,6 +306,24 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
     say(settings, "Printing pages (2/2)");
     let parts: Vec<&[u8]> = printed.documents.iter().map(Vec::as_slice).collect();
     let pdf = rchtmltopdf_pdf::merge(&parts)?;
+
+    // The outline the browser wrote is all or nothing per document, so the
+    // depth is cut here, and the dump describes what the file will carry. The
+    // treatment is global, so the first plan's copy is every plan's.
+    let finish = &plans[0].finish;
+    let (pdf, items) = rchtmltopdf_pdf::outline(
+        &pdf,
+        &rchtmltopdf_pdf::OutlineTreatment {
+            keep: finish.outline.enabled,
+            depth: finish.outline.depth,
+        },
+    )?;
+    if let Some(path) = &finish.outline.dump {
+        std::fs::write(path, crate::outline::xml(&items)).map_err(|error| ConvertError::Dump {
+            path: path.clone(),
+            reason: error.to_string(),
+        })?;
+    }
 
     // The print call takes the title from the document's own `<title>` and
     // offers no override, so `--title` can only be honoured by rewriting the

@@ -114,6 +114,9 @@ fn build_object(object: &Object, inherited: &ObjectSettings) -> Result<ObjectSet
     if kind == SettingsObjectKind::Cover {
         settings.header = Band::default();
         settings.footer = Band::default();
+        // "The page does not appear in the table of contents", nor in the
+        // outline it is built from.
+        settings.in_outline = false;
     }
     for occurrence in &object.options {
         apply_object(occurrence, &mut settings)?;
@@ -203,6 +206,13 @@ pub fn apply_global(
             .extra_args
             .push(value(occurrence).to_string()),
         "no-sandbox" => global.browser.no_sandbox = true,
+
+        // --- the outline ------------------------------------------------------
+        "outline" => global.outline.enabled = true,
+        "no-outline" => global.outline.enabled = false,
+        "outline-depth" => global.outline.depth = number(occurrence)?,
+        "dump-outline" => global.outline.dump = Some(PathBuf::from(value(occurrence))),
+
         // Answered before any of this runs.
         "dump-parse" => return Ok(Applied::Elsewhere),
         _ => return Ok(Applied::NotYet),
@@ -245,6 +255,10 @@ pub fn apply_object(
         "custom-header" => web.custom_headers.push(pair(occurrence)),
         "custom-header-propagation" => web.propagate_custom_headers = true,
         "no-custom-header-propagation" => web.propagate_custom_headers = false,
+
+        // --- the outline ------------------------------------------------------
+        "include-in-outline" => object.in_outline = true,
+        "exclude-from-outline" => object.in_outline = false,
 
         // --- reaching the filesystem (D10) -----------------------------------
         "enable-local-file-access" => web.local_file_access = true,

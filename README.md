@@ -135,7 +135,7 @@ above.
 | Finding, launching and driving Chromium | `crates/browser` | Working |
 | Several documents and covers, merged into one PDF | `crates/cli`, `crates/pdf` | Working |
 | Table of contents | | V3 |
-| Metadata, outlines | `crates/pdf` | Metadata working, outlines V2 |
+| Metadata, outline | `crates/pdf` | Working |
 
 Still early. Many wkhtmltopdf options are recognised and ignored with a warning rather than
 honoured; `--extended-help` marks which. `--dump-parse` prints how a command line was

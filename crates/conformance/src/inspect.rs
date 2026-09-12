@@ -117,6 +117,31 @@ impl Default for State {
     }
 }
 
+/// One entry of the outline, as a sidebar lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bookmark {
+    /// 1 at the top level, one more for each level down.
+    pub level: usize,
+    pub title: String,
+    /// The 1-based page the entry points at, 0 when it points at nothing.
+    pub page: usize,
+}
+
+/// A PDF text string as a reader shows it: Latin-1, or UTF-16 big endian when
+/// the byte order mark says so.
+fn decode_text(bytes: &[u8]) -> String {
+    if let Some(units) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+        let units: Vec<u16> = units
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_be_bytes(*pair))
+            .collect();
+        return String::from_utf16_lossy(&units);
+    }
+    bytes.iter().map(|byte| *byte as char).collect()
+}
+
 /// A PDF, opened for inspection.
 pub struct Pdf {
     document: Document,
@@ -183,16 +208,72 @@ impl Pdf {
         };
 
         let bytes = dictionary.get(key.as_bytes()).ok()?.as_str().ok()?;
-        if bytes.starts_with(&[0xFE, 0xFF]) {
-            let units: Vec<u16> = bytes[2..]
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|pair| u16::from_be_bytes(*pair))
-                .collect();
-            return Some(String::from_utf16_lossy(&units));
+        Some(decode_text(bytes))
+    }
+
+    /// The outline — a reader's bookmarks — flattened in the order a sidebar
+    /// lists it, each entry with its depth and the 1-based page it points at.
+    ///
+    /// Read by walking `First` and `Next` from the catalog's `Outlines`, which
+    /// is what a reader does. A level is one deeper than its parent; the top
+    /// level is 1.
+    pub fn outline(&self) -> Vec<Bookmark> {
+        let mut out = Vec::new();
+        let Some(root) = self
+            .document
+            .catalog()
+            .ok()
+            .and_then(|catalog| catalog.get(b"Outlines").ok())
+            .and_then(|entry| entry.as_reference().ok())
+        else {
+            return out;
+        };
+        let by_id: std::collections::BTreeMap<ObjectId, usize> = self
+            .document
+            .get_pages()
+            .into_iter()
+            .map(|(number, id)| (id, number as usize))
+            .collect();
+        self.walk_outline(root, 1, &by_id, &mut out);
+        out
+    }
+
+    fn walk_outline(
+        &self,
+        parent: ObjectId,
+        level: usize,
+        pages: &std::collections::BTreeMap<ObjectId, usize>,
+        out: &mut Vec<Bookmark>,
+    ) {
+        let mut next = self
+            .document
+            .get_dictionary(parent)
+            .ok()
+            .and_then(|d| d.get(b"First").and_then(Object::as_reference).ok());
+        let mut seen = 0;
+        while let Some(id) = next {
+            seen += 1;
+            assert!(seen < 10_000, "the outline chain loops");
+            let entry = self.document.get_dictionary(id).expect("an outline entry");
+            let title = entry
+                .get(b"Title")
+                .ok()
+                .and_then(|title| title.as_str().ok())
+                .map(decode_text)
+                .unwrap_or_default();
+            let page = entry
+                .get(b"Dest")
+                .ok()
+                .and_then(|dest| self.document.dereference(dest).ok())
+                .and_then(|(_, dest)| dest.as_array().ok())
+                .and_then(|array| array.first())
+                .and_then(|page| page.as_reference().ok())
+                .and_then(|id| pages.get(&id).copied())
+                .unwrap_or(0);
+            out.push(Bookmark { level, title, page });
+            self.walk_outline(id, level + 1, pages, out);
+            next = entry.get(b"Next").and_then(Object::as_reference).ok();
         }
-        Some(bytes.iter().map(|byte| *byte as char).collect())
     }
 
     /// Every character on every page, in reading order.

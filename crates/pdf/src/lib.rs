@@ -11,9 +11,10 @@
 //! tree above it copied down onto it, because the tree it sat in is not coming
 //! along. The first document's Info dictionary, because wkhtmltopdf's output
 //! carried the first document's title and nothing else has a better claim.
-//! Everything else that hung off a catalog — outlines, named destinations,
-//! link destinations that named a page — is left behind, and rebuilt by the
-//! milestone that owns it (#40, #41).
+//! The outlines, joined end to end under one root, so a reader's sidebar lists
+//! every document's headings in order (#40). Everything else that hung off a
+//! catalog — named destinations, link destinations that named a page — is left
+//! behind, and rebuilt by the milestone that owns it (#41).
 //!
 //! **Fonts are not deduplicated (D34).** Chromium subsets a font per document,
 //! so two documents in the same face carry two different subsets under two
@@ -140,6 +141,7 @@ pub fn merge(parts: &[&[u8]]) -> Result<Vec<u8>, Error> {
     let mut merged = Document::with_version("1.4");
     let mut pages = Vec::new();
     let mut info = None;
+    let mut outlines: Vec<PartOutline> = Vec::new();
 
     for (index, part) in parts.iter().enumerate() {
         let source = Document::load_mem(part)
@@ -155,6 +157,7 @@ pub fn merge(parts: &[&[u8]]) -> Result<Vec<u8>, Error> {
         if info.is_none() {
             info = absorbed.info;
         }
+        outlines.extend(absorbed.outline);
     }
 
     let pages_id = merged.new_object_id();
@@ -171,10 +174,14 @@ pub fn merge(parts: &[&[u8]]) -> Result<Vec<u8>, Error> {
             "Count" => count,
         }),
     );
-    let catalog = merged.add_object(dictionary! {
+    let mut catalog = dictionary! {
         "Type" => "Catalog",
         "Pages" => pages_id,
-    });
+    };
+    if let Some(root) = join_outlines(&mut merged, &outlines)? {
+        catalog.set("Outlines", Object::Reference(root));
+    }
+    let catalog = merged.add_object(catalog);
     merged.trailer.set("Root", Object::Reference(catalog));
     if let Some(info) = info {
         merged.trailer.set("Info", Object::Reference(info));
@@ -196,6 +203,273 @@ struct Absorbed {
     pages: Vec<ObjectId>,
     /// Its Info dictionary, when it had one that resolves.
     info: Option<ObjectId>,
+    /// Its outline, when it had one with something in it.
+    outline: Option<PartOutline>,
+}
+
+/// The top level of one document's outline: the ends of the chain of items
+/// that hung directly under its root.
+struct PartOutline {
+    first: ObjectId,
+    last: ObjectId,
+}
+
+/// The ends of the top-level chain under a document's outline root.
+fn part_outline(document: &Document) -> Option<PartOutline> {
+    let root = outline_root(document)?;
+    let root = document.get_dictionary(root).ok()?;
+    let first = root.get(b"First").and_then(Object::as_reference).ok()?;
+    let last = root.get(b"Last").and_then(Object::as_reference).ok()?;
+    Some(PartOutline { first, last })
+}
+
+/// The catalog's outline root, when it names one that resolves.
+fn outline_root(document: &Document) -> Option<ObjectId> {
+    let id = document
+        .catalog()
+        .ok()?
+        .get(b"Outlines")
+        .and_then(Object::as_reference)
+        .ok()?;
+    document.get_dictionary(id).is_ok().then_some(id)
+}
+
+/// One root over every document's top-level items, chained in order.
+///
+/// Each document's chain is already consistent inside itself: `Prev` and
+/// `Next` between siblings, `Parent` pointing at the old root. What is left is
+/// to point every top-level `Parent` at the new root, tie the last item of one
+/// document to the first of the next, and count.
+fn join_outlines(
+    document: &mut Document,
+    parts: &[PartOutline],
+) -> Result<Option<ObjectId>, Error> {
+    let Some(first) = parts.first() else {
+        return Ok(None);
+    };
+    let root = document.new_object_id();
+    for (index, part) in parts.iter().enumerate() {
+        for item in siblings(document, Some(part.first)) {
+            let dictionary = document.get_dictionary_mut(item).map_err(fail)?;
+            dictionary.set("Parent", Object::Reference(root));
+        }
+        if let Some(previous) = index.checked_sub(1).map(|i| &parts[i]) {
+            document
+                .get_dictionary_mut(previous.last)
+                .map_err(fail)?
+                .set("Next", Object::Reference(part.first));
+            document
+                .get_dictionary_mut(part.first)
+                .map_err(fail)?
+                .set("Prev", Object::Reference(previous.last));
+        }
+    }
+    let last = parts.last().expect("checked above").last;
+    document.objects.insert(
+        root,
+        Object::Dictionary(dictionary! {
+            "Type" => "Outlines",
+            "First" => first.first,
+            "Last" => last,
+        }),
+    );
+    recount(document, root)?;
+    Ok(Some(root))
+}
+
+/// A chain of siblings, `Next` after `Next`, starting at `first`.
+///
+/// Bounded, because a malformed chain that loops would otherwise never end,
+/// and no real outline has this many entries at one level.
+fn siblings(document: &Document, first: Option<ObjectId>) -> Vec<ObjectId> {
+    let mut chain = Vec::new();
+    let mut next = first;
+    while let Some(id) = next {
+        if chain.len() >= 100_000 || chain.contains(&id) {
+            break;
+        }
+        chain.push(id);
+        next = document
+            .get_dictionary(id)
+            .ok()
+            .and_then(|dictionary| dictionary.get(b"Next").and_then(Object::as_reference).ok());
+    }
+    chain
+}
+
+/// Set `Count` on a node to the number of entries visible under it, at every
+/// level, and return that number.
+///
+/// Every entry is open — Chromium writes them so, and nothing here closes one
+/// — so the count of a node is all of its descendants. A node with nothing
+/// under it carries no `Count` at all, which is what the specification wants.
+fn recount(document: &mut Document, node: ObjectId) -> Result<i64, Error> {
+    let first = document
+        .get_dictionary(node)
+        .map_err(fail)?
+        .get(b"First")
+        .and_then(Object::as_reference)
+        .ok();
+    let children = siblings(document, first);
+    let mut total = 0;
+    for child in &children {
+        total += 1 + recount(document, *child)?;
+    }
+    let dictionary = document.get_dictionary_mut(node).map_err(fail)?;
+    if total > 0 {
+        dictionary.set("Count", Object::Integer(total));
+    } else {
+        dictionary.remove(b"Count");
+    }
+    Ok(total)
+}
+
+// ---------------------------------------------------------------------------
+// The outline, after printing.
+
+/// One entry of the outline, with what hangs under it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutlineItem {
+    pub title: String,
+    /// The 1-based page in the file the entry points at. Nought when it points
+    /// at nothing that could be resolved, which nothing Chromium writes does.
+    pub page: usize,
+    pub children: Vec<OutlineItem>,
+}
+
+/// What to do with the outline the browser wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutlineTreatment {
+    /// Leave it in the file. Off is `--no-outline`.
+    pub keep: bool,
+    /// Entries deeper than this are cut, `--outline-depth`. Nought cuts them
+    /// all.
+    pub depth: u32,
+}
+
+/// Bound the outline to a depth, read what is left, and take it out of the
+/// file when it was only wanted for reading.
+///
+/// The print call can be asked for the outline or not, and nothing in between:
+/// the depth wkhtmltopdf lets a user set is cut here, after the fact, by
+/// unhooking the children of every entry at the boundary. What is read back is
+/// what a reader will show, so `--dump-outline` describes the outline the file
+/// actually carries.
+pub fn outline(
+    pdf: &[u8],
+    treatment: &OutlineTreatment,
+) -> Result<(Vec<u8>, Vec<OutlineItem>), Error> {
+    let mut document = Document::load_mem(pdf).map_err(fail)?;
+    let Some(root) = outline_root(&document) else {
+        return Ok((pdf.to_vec(), Vec::new()));
+    };
+
+    let page_numbers: BTreeMap<ObjectId, usize> = document
+        .get_pages()
+        .into_iter()
+        .map(|(number, id)| (id, number as usize))
+        .collect();
+    let items = if treatment.depth == 0 {
+        Vec::new()
+    } else {
+        let first = document
+            .get_dictionary(root)
+            .map_err(fail)?
+            .get(b"First")
+            .and_then(Object::as_reference)
+            .ok();
+        read_and_cut(&mut document, first, 1, treatment.depth, &page_numbers)?
+    };
+
+    if treatment.keep && !items.is_empty() {
+        recount(&mut document, root)?;
+    } else {
+        document.catalog_mut().map_err(fail)?.remove(b"Outlines");
+    }
+    // Whatever was unhooked is unreachable now, and this is what removes it
+    // rather than leaving a title in the bytes that no reader shows.
+    document.prune_objects();
+
+    let mut out = Vec::with_capacity(pdf.len());
+    document.save_to(&mut out).map_err(fail)?;
+    Ok((out, items))
+}
+
+/// Read a chain of entries at `level`, descending while the depth allows and
+/// unhooking the children of entries at the boundary.
+fn read_and_cut(
+    document: &mut Document,
+    first: Option<ObjectId>,
+    level: u32,
+    depth: u32,
+    page_numbers: &BTreeMap<ObjectId, usize>,
+) -> Result<Vec<OutlineItem>, Error> {
+    let mut items = Vec::new();
+    for id in siblings(document, first) {
+        let (title, page, child) = {
+            let dictionary = document.get_dictionary(id).map_err(fail)?;
+            (
+                dictionary
+                    .get(b"Title")
+                    .ok()
+                    .and_then(|title| title.as_str().ok())
+                    .map(decode_text)
+                    .unwrap_or_default(),
+                page_of(document, dictionary, page_numbers),
+                dictionary.get(b"First").and_then(Object::as_reference).ok(),
+            )
+        };
+        let children = if level < depth {
+            read_and_cut(document, child, level + 1, depth, page_numbers)?
+        } else {
+            let dictionary = document.get_dictionary_mut(id).map_err(fail)?;
+            dictionary.remove(b"First");
+            dictionary.remove(b"Last");
+            dictionary.remove(b"Count");
+            Vec::new()
+        };
+        items.push(OutlineItem {
+            title,
+            page,
+            children,
+        });
+    }
+    Ok(items)
+}
+
+/// The page an entry's destination names, as a 1-based number.
+///
+/// Chromium writes `Dest [page /XYZ x y 0]`, page as a reference. The array
+/// may itself be indirect, so it is dereferenced first.
+fn page_of(
+    document: &Document,
+    entry: &lopdf::Dictionary,
+    page_numbers: &BTreeMap<ObjectId, usize>,
+) -> usize {
+    entry
+        .get(b"Dest")
+        .ok()
+        .and_then(|dest| document.dereference(dest).ok())
+        .and_then(|(_, dest)| dest.as_array().ok())
+        .and_then(|array| array.first())
+        .and_then(|page| page.as_reference().ok())
+        .and_then(|id| page_numbers.get(&id).copied())
+        .unwrap_or(0)
+}
+
+/// A PDF text string as a reader shows it: Latin-1, or UTF-16 big endian when
+/// the byte order mark says so.
+fn decode_text(bytes: &[u8]) -> String {
+    if let Some(units) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+        let units: Vec<u16> = units
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_be_bytes(*pair))
+            .collect();
+        return String::from_utf16_lossy(&units);
+    }
+    bytes.iter().map(|byte| *byte as char).collect()
 }
 
 /// Move every object of `source` into `into` under fresh numbers.
@@ -216,6 +490,7 @@ fn absorb(into: &mut Document, mut source: Document) -> Result<Absorbed, Error> 
         .ok()
         .and_then(|entry| entry.as_reference().ok())
         .filter(|id| source.get_dictionary(*id).is_ok());
+    let outline = part_outline(&source);
 
     let objects = std::mem::take(&mut source.objects);
     let map: BTreeMap<ObjectId, ObjectId> = objects
@@ -230,6 +505,10 @@ fn absorb(into: &mut Document, mut source: Document) -> Result<Absorbed, Error> 
     Ok(Absorbed {
         pages: page_ids.iter().map(|id| map[id]).collect(),
         info: info.map(|id| map[&id]),
+        outline: outline.map(|part| PartOutline {
+            first: map[&part.first],
+            last: map[&part.last],
+        }),
     })
 }
 
@@ -467,18 +746,8 @@ mod tests {
         Some(decode(value))
     }
 
-    /// Latin-1, or UTF-16 when the mark says so.
     fn decode(bytes: &[u8]) -> String {
-        if bytes.starts_with(&[0xFE, 0xFF]) {
-            let units: Vec<u16> = bytes[2..]
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|pair| u16::from_be_bytes(*pair))
-                .collect();
-            return String::from_utf16_lossy(&units);
-        }
-        bytes.iter().map(|byte| *byte as char).collect()
+        decode_text(bytes)
     }
 
     #[test]
@@ -771,5 +1040,244 @@ mod tests {
     fn a_part_that_is_not_a_pdf_is_named_by_position() {
         let error = merge(&[&two_pages(), b"not a PDF"]).expect_err("should refuse");
         assert!(error.to_string().contains("document 2"), "{error}");
+    }
+
+    // --- the outline ----------------------------------------------------------
+
+    /// A heading and what hangs under it, for building an outline by hand.
+    struct Node(&'static str, usize, Vec<Node>);
+
+    fn leaf(title: &'static str, page: usize) -> Node {
+        Node(title, page, Vec::new())
+    }
+
+    /// The page document with an outline over it, pages given 0-based.
+    fn outlined(labels: &[&str], tree: Vec<Node>) -> Vec<u8> {
+        let mut document = Document::load_mem(&pages(labels, None)).expect("should parse");
+        let page_ids: Vec<ObjectId> = document.page_iter().collect();
+        let root = document.new_object_id();
+        let (first, last, count) = add_items(&mut document, &tree, root, &page_ids);
+        let mut dictionary = dictionary! { "Type" => "Outlines" };
+        if let (Some(first), Some(last)) = (first, last) {
+            dictionary.set("First", first);
+            dictionary.set("Last", last);
+            dictionary.set("Count", count);
+        }
+        document
+            .objects
+            .insert(root, Object::Dictionary(dictionary));
+        document
+            .catalog_mut()
+            .expect("a catalog")
+            .set("Outlines", Object::Reference(root));
+        let mut out = Vec::new();
+        document.save_to(&mut out).expect("should save");
+        out
+    }
+
+    fn add_items(
+        document: &mut Document,
+        nodes: &[Node],
+        parent: ObjectId,
+        page_ids: &[ObjectId],
+    ) -> (Option<ObjectId>, Option<ObjectId>, i64) {
+        let ids: Vec<ObjectId> = nodes.iter().map(|_| document.new_object_id()).collect();
+        let mut total = 0;
+        for (index, node) in nodes.iter().enumerate() {
+            let (first, last, count) = add_items(document, &node.2, ids[index], page_ids);
+            let mut dictionary = dictionary! {
+                "Title" => text_string(node.0),
+                "Dest" => vec![
+                    Object::Reference(page_ids[node.1]),
+                    Object::Name(b"XYZ".to_vec()),
+                    0.into(), 0.into(), 0.into(),
+                ],
+                "Parent" => parent,
+            };
+            if index > 0 {
+                dictionary.set("Prev", ids[index - 1]);
+            }
+            if index + 1 < ids.len() {
+                dictionary.set("Next", ids[index + 1]);
+            }
+            if let (Some(first), Some(last)) = (first, last) {
+                dictionary.set("First", first);
+                dictionary.set("Last", last);
+                dictionary.set("Count", count);
+            }
+            document
+                .objects
+                .insert(ids[index], Object::Dictionary(dictionary));
+            total += 1 + count;
+        }
+        (ids.first().copied(), ids.last().copied(), total)
+    }
+
+    fn item(title: &str, page: usize, children: Vec<OutlineItem>) -> OutlineItem {
+        OutlineItem {
+            title: title.into(),
+            page,
+            children,
+        }
+    }
+
+    fn keep(depth: u32) -> OutlineTreatment {
+        OutlineTreatment { keep: true, depth }
+    }
+
+    /// Two chapters over two pages, the first with a section and a subsection.
+    fn chapters() -> Vec<u8> {
+        outlined(
+            &["P1", "P2"],
+            vec![
+                Node("One", 0, vec![Node("One A", 0, vec![leaf("Deep", 0)])]),
+                leaf("Two", 1),
+            ],
+        )
+    }
+
+    #[test]
+    fn the_outline_reads_back_with_its_nesting_and_pages() {
+        let (_, items) = outline(&chapters(), &keep(4)).expect("should read");
+        assert_eq!(
+            items,
+            [
+                item(
+                    "One",
+                    1,
+                    vec![item("One A", 1, vec![item("Deep", 1, vec![])])]
+                ),
+                item("Two", 2, vec![]),
+            ]
+        );
+    }
+
+    /// **The point of carrying outlines through a merge.** The second document's
+    /// entries follow the first's, and point at the pages they now sit on.
+    #[test]
+    fn merging_joins_the_outlines_and_moves_their_pages() {
+        let appendix = outlined(&["A1"], vec![leaf("Appendix", 0)]);
+        let out = merge(&[&chapters(), &appendix]).expect("should merge");
+
+        let (out, items) = outline(&out, &keep(4)).expect("should read");
+        let titles: Vec<&str> = items.iter().map(|item| item.title.as_str()).collect();
+        assert_eq!(titles, ["One", "Two", "Appendix"]);
+        assert_eq!(items[2].page, 3, "the appendix is on the third page now");
+
+        // One root, counted over every level, with every top-level entry
+        // hanging from it rather than from a root that is gone.
+        let document = Document::load_mem(&out).expect("should parse");
+        let root = outline_root(&document).expect("an outline");
+        let dictionary = document.get_dictionary(root).expect("a root");
+        assert_eq!(
+            dictionary.get(b"Count").and_then(Object::as_i64).ok(),
+            Some(5)
+        );
+        for id in siblings(
+            &document,
+            Some(
+                dictionary
+                    .get(b"First")
+                    .and_then(Object::as_reference)
+                    .unwrap(),
+            ),
+        ) {
+            let parent = document
+                .get_dictionary(id)
+                .and_then(|d| d.get(b"Parent"))
+                .and_then(Object::as_reference)
+                .expect("a parent");
+            assert_eq!(parent, root);
+        }
+    }
+
+    /// A document with no outline contributes nothing, and does not stop the
+    /// others from being joined.
+    #[test]
+    fn a_document_without_an_outline_merges_between_two_that_have_one() {
+        let out = merge(&[
+            &outlined(&["A"], vec![leaf("First", 0)]),
+            &pages(&["B"], None),
+            &outlined(&["C"], vec![leaf("Third", 0)]),
+        ])
+        .expect("should merge");
+        let (_, items) = outline(&out, &keep(4)).expect("should read");
+        let titles: Vec<&str> = items.iter().map(|item| item.title.as_str()).collect();
+        assert_eq!(titles, ["First", "Third"]);
+        assert_eq!(items[1].page, 3);
+    }
+
+    /// Cut at a depth, the entries below it are gone from the file, not only
+    /// from what was read back.
+    #[test]
+    fn the_depth_cuts_the_tree_and_prunes_what_was_cut() {
+        let (out, items) = outline(&chapters(), &keep(2)).expect("should read");
+        assert_eq!(
+            items,
+            [
+                item("One", 1, vec![item("One A", 1, vec![])]),
+                item("Two", 2, vec![]),
+            ]
+        );
+        assert!(
+            !String::from_utf8_lossy(&out).contains("Deep"),
+            "the cut entry was left in the bytes"
+        );
+
+        let document = Document::load_mem(&out).expect("should parse");
+        let root = outline_root(&document).expect("an outline");
+        let count = document
+            .get_dictionary(root)
+            .and_then(|d| d.get(b"Count"))
+            .and_then(Object::as_i64)
+            .expect("a count");
+        assert_eq!(count, 3, "the count follows the cut");
+    }
+
+    /// `--no-outline --dump-outline x`: read, then taken out of the file.
+    #[test]
+    fn not_keeping_the_outline_still_reads_it_first() {
+        let treatment = OutlineTreatment {
+            keep: false,
+            depth: 4,
+        };
+        let (out, items) = outline(&chapters(), &treatment).expect("should read");
+        assert_eq!(items.len(), 2);
+
+        let document = Document::load_mem(&out).expect("should parse");
+        assert!(
+            outline_root(&document).is_none(),
+            "the outline is still there"
+        );
+        assert!(
+            !String::from_utf8_lossy(&out).contains("One A"),
+            "an unhooked entry was left in the bytes"
+        );
+        assert_eq!(document.get_pages().len(), 2, "the pages are untouched");
+    }
+
+    #[test]
+    fn a_depth_of_nought_leaves_no_outline() {
+        let (out, items) = outline(&chapters(), &keep(0)).expect("should read");
+        assert!(items.is_empty());
+        let document = Document::load_mem(&out).expect("should parse");
+        assert!(outline_root(&document).is_none());
+    }
+
+    #[test]
+    fn a_document_without_an_outline_is_returned_untouched() {
+        let plain = two_pages();
+        let (out, items) = outline(&plain, &keep(4)).expect("should read");
+        assert_eq!(out, plain);
+        assert!(items.is_empty());
+    }
+
+    /// Chromium writes a title with an accent as UTF-16, and it has to read back
+    /// as the heading said.
+    #[test]
+    fn a_title_outside_latin_1_reads_back() {
+        let (_, items) = outline(&outlined(&["A"], vec![leaf("Résumé — plan", 0)]), &keep(4))
+            .expect("should read");
+        assert_eq!(items[0].title, "Résumé — plan");
     }
 }

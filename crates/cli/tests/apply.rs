@@ -299,6 +299,7 @@ fn a_cover_does_not_inherit_the_bands_but_takes_its_own() {
     assert_eq!(cover.kind, ObjectKind::Cover);
     assert!(cover.header.is_empty(), "{:?}", cover.header);
     assert!(cover.footer.is_empty(), "{:?}", cover.footer);
+    assert!(!cover.in_outline, "a cover is not in the outline");
     // Only the bands: everything else a page inherits, a cover inherits too.
     approx(cover.web.zoom, 2.0);
     assert_eq!(page.footer.center.as_deref(), Some("Everywhere"));
@@ -308,6 +309,29 @@ fn a_cover_does_not_inherit_the_bands_but_takes_its_own() {
     let cover = &own.objects[0];
     assert_eq!(cover.footer.left.as_deref(), Some("Mine"));
     assert_eq!(cover.footer.center, None);
+}
+
+#[test]
+fn the_outline_options_land_where_they_belong() {
+    let off = settings(
+        "--no-outline --outline-depth 2 --dump-outline o.xml a.html --exclude-from-outline \
+         b.html out.pdf",
+    );
+    assert!(!off.global.outline.enabled);
+    assert_eq!(off.global.outline.depth, 2);
+    assert_eq!(
+        off.global.outline.dump.as_deref(),
+        Some(std::path::Path::new("o.xml"))
+    );
+    assert!(!off.objects[0].in_outline);
+    assert!(off.objects[1].in_outline);
+
+    // Each has its opposite, and the last one written wins.
+    let back = settings(
+        "--no-outline --outline --exclude-from-outline a.html --include-in-outline out.pdf",
+    );
+    assert!(back.global.outline.enabled);
+    assert!(back.objects[0].in_outline);
 }
 
 #[test]

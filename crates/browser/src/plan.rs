@@ -40,7 +40,8 @@ use crate::launch::LaunchOptions;
 use crate::placeholder::Context;
 use rchtmltopdf_core::Clock;
 use rchtmltopdf_core::settings::{
-    GlobalSettings, LoadSettings, MediaType, ObjectSettings, PageSetup, WebSettings,
+    GlobalSettings, LoadSettings, MediaType, ObjectSettings, OutlineSettings, PageSetup,
+    WebSettings,
 };
 use rchtmltopdf_core::units::Length;
 use serde_json::{Value, json};
@@ -145,6 +146,10 @@ pub struct Plan {
     pub unsupported_placeholders: Vec<&'static str>,
     /// The bound over the whole of the above (D16). `None` is `--timeout 0`.
     pub deadline: Option<Duration>,
+    /// What is done to the printed document once the browser is finished with
+    /// it: the outline is bounded, dumped, or dropped after printing, because
+    /// the print call can only be asked for all of it or none.
+    pub finish: Finishing,
     /// What the interception handler will do with each request: the local file
     /// rule (D10), `--encoding`, the document-only headers and the credentials.
     ///
@@ -164,7 +169,7 @@ impl Plan {
         document_url: &str,
     ) -> Self {
         let context = context(global, object, clock);
-        let printing = print(&global.page, object, &context);
+        let printing = print(&global.page, object, &context, &global.outline);
         Self {
             launch: launch(global, object),
             prepare: prepare(object, document_url),
@@ -174,7 +179,21 @@ impl Plan {
             context,
             deadline: global.timeout,
             requests: rules(object, document_url),
+            finish: finish(global),
         }
+    }
+}
+
+/// What happens to the printed document after the browser is done with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Finishing {
+    pub outline: OutlineSettings,
+}
+
+/// The post-print treatment the command line asked for.
+pub fn finish(global: &GlobalSettings) -> Finishing {
+    Finishing {
+        outline: global.outline.clone(),
     }
 }
 
@@ -371,7 +390,12 @@ pub fn viewport(web: &WebSettings) -> Command {
 /// apply the swap twice. Paper geometry is global in wkhtmltopdf; backgrounds
 /// and zoom belong to the object. Both are needed, and they come from different
 /// places.
-pub fn print(page: &PageSetup, object: &ObjectSettings, context: &Context) -> Printing {
+pub fn print(
+    page: &PageSetup,
+    object: &ObjectSettings,
+    context: &Context,
+    outline: &OutlineSettings,
+) -> Printing {
     let web = &object.web;
 
     // Chromium draws its own footer -- a page number -- when asked to display
@@ -421,6 +445,11 @@ pub fn print(page: &PageSetup, object: &ObjectSettings, context: &Context) -> Pr
             "displayHeaderFooter": bands,
             "headerTemplate": header.html,
             "footerTemplate": footer.html,
+            // Chromium derives an outline from the headings, nested by level,
+            // with a destination on each. All or nothing per document: the
+            // depth is cut afterwards (`Finishing`), and a document kept out
+            // of the outline is one that was never asked for it.
+            "generateDocumentOutline": outline.wanted() && object.in_outline,
             // Not the default. The default returns the whole document
             // base64-encoded inside one protocol message, and a document of any
             // size exceeds the message limit.
@@ -571,7 +600,13 @@ mod tests {
             orientation: Orientation::Landscape,
             ..PageSetup::default()
         };
-        let command = print(&landscape, &page_object(), &Context::default()).command;
+        let command = print(
+            &landscape,
+            &page_object(),
+            &Context::default(),
+            &OutlineSettings::default(),
+        )
+        .command;
         assert_eq!(command.params["landscape"], json!(false));
         // 297mm, the long edge, is now the width.
         let width = command.params["paperWidth"].as_f64().unwrap();

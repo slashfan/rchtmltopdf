@@ -213,12 +213,12 @@ fn nothing_the_table_calls_unbuilt_changes_the_conversion() {
 /// field, which is what the test above holds.
 #[test]
 fn an_option_that_is_not_built_may_still_be_understood() {
-    let outline = table::lookup_long("outline-depth").expect("in the table");
-    assert!(matches!(outline.support, Support::Planned(_)));
+    let offset = table::lookup_long("page-offset").expect("in the table");
+    assert!(matches!(offset.support, Support::Planned(_)));
     // Understood as far as the grammar: it parses, takes its value, and the
     // conversion never asks.
-    assert_eq!(outline.arity(), 1);
-    assert!(!changes_the_conversion(outline));
+    assert_eq!(offset.arity(), 1);
+    assert!(!changes_the_conversion(offset));
 }
 
 /// The exemption list is a promise about tests elsewhere. An entry naming an
@@ -247,7 +247,7 @@ fn the_advertised_surface_is_the_audited_one() {
         .filter(|spec| spec.support == Support::Implemented)
         .count();
     assert_eq!(
-        implemented, 58,
+        implemented, 64,
         "the number of options honoured end to end changed; \
          if that is deliberate, the audit and this number move together"
     );
