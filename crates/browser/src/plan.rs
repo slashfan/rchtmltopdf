@@ -29,7 +29,7 @@
 //! resolved after the settings are read: the policy itself is here, binding it
 //! is [`crate::file_access::Policy::about`]. And the height of a band that is
 //! a document, which sizes a margin (D39) and is not known until the document
-//! is loaded: [`print`] decides everything else about the margins, and
+//! is loaded: [`print()`] decides everything else about the margins, and
 //! [`reserve`] adds the measurement and nothing more.
 //!
 //! [`Page::prepare`]: crate::launch::Page::prepare
@@ -530,7 +530,7 @@ pub fn sized_by_its_document(band: &Band, named: bool) -> bool {
 
 /// The print call with the measured band documents added to the margins.
 ///
-/// The one thing [`print`] cannot decide on its own: how tall a document is.
+/// The one thing [`print()`] cannot decide on its own: how tall a document is.
 /// Everything else about the margins is already in the command, and this adds
 /// the two measurements and nothing more, so the plan still describes the
 /// conversion (D27). An amount is only added for a band whose document sizes
