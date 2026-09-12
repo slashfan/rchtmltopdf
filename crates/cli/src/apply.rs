@@ -4,11 +4,18 @@
 //! downstream reads the settings model and never sees a command line, which is
 //! the seam that lets the browser layer be driven from somewhere else entirely.
 //!
-//! # What is deliberately not done here
+//! # Understanding an option is not honouring it
 //!
-//! Options that are recognised but not implemented are skipped in silence. The
-//! warning for them already lives in the binary (D02) and saying it twice would
-//! mean two places to keep in step.
+//! An option marked `Planned` is still translated here, and that is deliberate.
+//! The settings model is where the browser layer's work lands, so filling it
+//! ahead of that layer is how the two halves are built without either being
+//! written blind. What makes it honest rather than a lie is that nothing
+//! downstream reads the field, and that the binary warns the option is being
+//! ignored — the warning lives there, once, because saying it twice would mean
+//! two places to keep in step (D02).
+//!
+//! So nothing here is evidence that an option works. `tests/plan.rs` asks that
+//! question, against what a conversion would actually do (D27).
 //!
 //! # Errors echo what the user typed
 //!
@@ -79,12 +86,6 @@ pub fn apply(parsed: &Tokenized) -> Result<Settings, ApplyError> {
         apply_object(occurrence, &mut inherited)?;
     }
 
-    // --default-header sets a band on an object, but the room it needs is a
-    // global margin, so the request is noticed here where both are in scope.
-    page.default_header = parsed
-        .occurrences()
-        .any(|occurrence| occurrence.spec.long == "default-header");
-
     let mut objects = Vec::with_capacity(parsed.objects.len());
     for object in &parsed.objects {
         objects.push(build_object(object, &inherited)?);
@@ -122,10 +123,6 @@ fn build_object(object: &Object, inherited: &ObjectSettings) -> Result<ObjectSet
 pub struct PageOverrides {
     pub width: Option<Length>,
     pub height: Option<Length>,
-    /// Whether a top margin was asked for, which decides if `--default-header`
-    /// may make room for itself.
-    pub margin_top_given: bool,
-    pub default_header: bool,
 }
 
 impl PageOverrides {
@@ -136,10 +133,6 @@ impl PageOverrides {
         if let Some(height) = self.height {
             global.page.size.height = height;
         }
-        // wkhtmltopdf's --default-header also makes room for the band it adds.
-        if self.default_header && !self.margin_top_given {
-            global.page.margins.top = Length::mm(20.0);
-        }
     }
 }
 
@@ -148,7 +141,7 @@ pub fn apply_global(
     global: &mut GlobalSettings,
     page: &mut PageOverrides,
 ) -> Result<Applied, ApplyError> {
-    if let Some(applied) = skip_unimplemented(occurrence) {
+    if let Some(applied) = answered_elsewhere(occurrence) {
         return Ok(applied);
     }
 
@@ -167,10 +160,7 @@ pub fn apply_global(
         }
         "page-width" => page.width = Some(length(occurrence)?),
         "page-height" => page.height = Some(length(occurrence)?),
-        "margin-top" => {
-            global.page.margins.top = length(occurrence)?;
-            page.margin_top_given = true;
-        }
+        "margin-top" => global.page.margins.top = length(occurrence)?,
         "margin-right" => global.page.margins.right = length(occurrence)?,
         "margin-bottom" => global.page.margins.bottom = length(occurrence)?,
         "margin-left" => global.page.margins.left = length(occurrence)?,
@@ -217,7 +207,7 @@ pub fn apply_object(
     occurrence: &Occurrence,
     object: &mut ObjectSettings,
 ) -> Result<Applied, ApplyError> {
-    if let Some(applied) = skip_unimplemented(occurrence) {
+    if let Some(applied) = answered_elsewhere(occurrence) {
         return Ok(applied);
     }
 
@@ -299,10 +289,17 @@ fn default_header() -> Band {
     }
 }
 
-/// Options this layer has no opinion on.
-fn skip_unimplemented(occurrence: &Occurrence) -> Option<Applied> {
+/// Options answered before this layer runs at all.
+///
+/// `Planned` is deliberately not here, and that is the whole of the difference
+/// between understanding an option and honouring it. An option the command line
+/// understands but the conversion does not act on yet still fills the settings
+/// model: the model is where the next layer's work lands, and leaving it empty
+/// until the browser catches up would mean writing both halves blind. What keeps
+/// the warning honest is that nothing downstream reads the field, which
+/// `tests/plan.rs` holds rather than takes on trust (D27).
+fn answered_elsewhere(occurrence: &Occurrence) -> Option<Applied> {
     match occurrence.spec.support {
-        Support::Planned(_) | Support::NoEquivalent(_) => Some(Applied::NotYet),
         Support::Meta => Some(Applied::Elsewhere),
         _ => None,
     }

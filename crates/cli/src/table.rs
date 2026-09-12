@@ -15,6 +15,14 @@
 //! and an option wkhtmltopdf does not have cannot be added without a test
 //! failing.
 //!
+//! # What `Implemented` claims
+//!
+//! That an option changes what comes out of the program, and nothing weaker.
+//! Sixty per cent of this table once said so falsely: the command line
+//! understood the option, filled a field in the settings model, and no part of
+//! a conversion ever read the field (#19). `tests/plan.rs` is what holds the
+//! marker to a conversion now; the audit that set the current markers is D27.
+//!
 //! The reconciliation found less than feared, and something worse than expected.
 //! All 122 options were present, every short alias was right and every arity was
 //! right. But `--cookie-jar` was filed as an object option when it is global,
@@ -38,9 +46,21 @@ pub enum Scope {
 /// What we actually do with an option.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Support {
-    /// Honoured.
+    /// Honoured end to end: writing it changes what comes out.
+    ///
+    /// Not the weaker "the command line understands it", which is what this
+    /// marker used to mean without saying so. It was wrong about thirty-eight
+    /// options: each filled a settings field, nothing downstream read the field,
+    /// and the help advertised the option as working (#19). `tests/plan.rs`
+    /// holds every one of these to the conversion it would actually run, so the
+    /// claim cannot go back to being a hope.
     Implemented,
     /// Recognised and ignored for now, with a warning. Intended to work later.
+    ///
+    /// Several of these are understood as far as the settings model and stop
+    /// there. That is a half-built option rather than a broken one — the model
+    /// is where the browser layer's work lands — and it stays honest only while
+    /// nothing downstream reads the field.
     Planned(&'static str),
     /// Recognised and ignored, with a warning. Chromium offers no equivalent,
     /// so this is not expected to change.
@@ -138,6 +158,18 @@ use Support::{Extension, Implemented, Meta, NoEquivalent, Planned};
 const SHRINK: &str = "rendering is fixed at 96 CSS px per inch; see the smart shrinking section of the migration guide";
 const V2: &str = "planned for V2";
 const V3: &str = "planned for V3";
+
+// The V1 surface: understood by the command line, not yet acted on by a
+// conversion. Each says what is missing rather than which milestone it waits
+// for, because a milestone is not something a user can check and "the band is
+// not drawn" is.
+const NO_BANDS: &str = "headers and footers are not drawn yet";
+const NO_NETWORK: &str = "nothing is configured on the browser's network stack yet";
+const NO_PAGE_TUNING: &str = "the page is not tuned before it loads yet";
+const NO_FILE_POLICY: &str = "the local file access policy is not enforced yet";
+const NO_SCRIPTS: &str = "nothing is run inside the page yet";
+const NO_ERROR_POLICY: &str = "a failure to load is not classified yet";
+const NO_METADATA: &str = "PDF metadata is not written yet";
 
 /// `General Options` in wkhtmltopdf's extended help. Global scope.
 pub const GENERAL_OPTIONS: &[OptionSpec] = &[
@@ -324,7 +356,7 @@ pub const GENERAL_OPTIONS: &[OptionSpec] = &[
         "title",
         None,
         Global,
-        Implemented,
+        Planned(NO_METADATA),
         &["text"],
         "The title of the generated pdf file (The title of the first document is used if not specified)",
     ),
@@ -391,7 +423,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "allow",
         None,
         Object,
-        Implemented,
+        Planned(NO_FILE_POLICY),
         &["path"],
         "Allow the file or files from the specified folder to be loaded (repeatable)",
     )
@@ -447,7 +479,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "cookie",
         None,
         Object,
-        Implemented,
+        Planned(NO_NETWORK),
         &["name", "value"],
         "Set an additional cookie (repeatable), value should be url encoded",
     )
@@ -456,7 +488,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "custom-header",
         None,
         Object,
-        Implemented,
+        Planned(NO_NETWORK),
         &["name", "value"],
         "Set an additional HTTP header (repeatable)",
     )
@@ -465,14 +497,14 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "custom-header-propagation",
         None,
         Object,
-        Implemented,
+        Planned(NO_NETWORK),
         "Add HTTP headers specified by --custom-header for each resource request",
     ),
     OptionSpec::flag(
         "no-custom-header-propagation",
         None,
         Object,
-        Implemented,
+        Planned(NO_NETWORK),
         "Do not add HTTP headers specified by --custom-header for each resource request",
     ),
     OptionSpec::flag(
@@ -493,14 +525,14 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "default-header",
         None,
         Object,
-        Implemented,
+        Planned(NO_BANDS),
         "Add a default header, with the name of the page to the left, and the page number to the right",
     ),
     OptionSpec::new(
         "encoding",
         None,
         Object,
-        Implemented,
+        Planned(NO_PAGE_TUNING),
         &["encoding"],
         "Set the default text encoding, for input",
     ),
@@ -536,14 +568,14 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "images",
         None,
         Object,
-        Implemented,
+        Planned(NO_PAGE_TUNING),
         "Do load or print images (default)",
     ),
     OptionSpec::flag(
         "no-images",
         None,
         Object,
-        Implemented,
+        Planned(NO_PAGE_TUNING),
         "Do not load or print images",
     ),
     OptionSpec::flag(
@@ -593,7 +625,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "load-error-handling",
         None,
         Object,
-        Implemented,
+        Planned(NO_ERROR_POLICY),
         &["handler"],
         "Specify how to handle pages that fail to load: abort, ignore or skip (default abort)",
     ),
@@ -601,7 +633,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "load-media-error-handling",
         None,
         Object,
-        Implemented,
+        Planned(NO_ERROR_POLICY),
         &["handler"],
         "Specify how to handle media files that fail to load: abort, ignore or skip (default ignore)",
     ),
@@ -609,21 +641,21 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "disable-local-file-access",
         None,
         Object,
-        Implemented,
+        Planned(NO_FILE_POLICY),
         "Do not allow conversion of a local file to read in other local files, unless explicitly allowed with --allow (default)",
     ),
     OptionSpec::flag(
         "enable-local-file-access",
         None,
         Object,
-        Implemented,
+        Planned(NO_FILE_POLICY),
         "Allow conversion of a local file to read in other local files",
     ),
     OptionSpec::new(
         "minimum-font-size",
         None,
         Object,
-        Implemented,
+        Planned(NO_PAGE_TUNING),
         &["int"],
         "Minimum font size",
     ),
@@ -653,7 +685,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "password",
         None,
         Object,
-        Implemented,
+        Planned(NO_NETWORK),
         &["password"],
         "HTTP Authentication password",
     ),
@@ -707,7 +739,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "proxy",
         Some('p'),
         Object,
-        Implemented,
+        Planned(NO_NETWORK),
         &["proxy"],
         "Use a proxy",
     ),
@@ -745,7 +777,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "run-script",
         None,
         Object,
-        Implemented,
+        Planned(NO_SCRIPTS),
         &["js"],
         "Run this additional javascript after the page is done loading (repeatable)",
     )
@@ -820,7 +852,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "user-style-sheet",
         None,
         Object,
-        Implemented,
+        Planned(NO_PAGE_TUNING),
         &["url"],
         "Specify a user style sheet, to load with every page",
     ),
@@ -828,7 +860,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "username",
         None,
         Object,
-        Implemented,
+        Planned(NO_NETWORK),
         &["username"],
         "HTTP Authentication username",
     ),
@@ -836,7 +868,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "viewport-size",
         None,
         Object,
-        Implemented,
+        Planned(NO_PAGE_TUNING),
         &["size"],
         "Set viewport size if you have custom scrollbars or css attribute overflow to emulate window size",
     ),
@@ -864,7 +896,7 @@ pub const HEADER_FOOTER_OPTIONS: &[OptionSpec] = &[
         "footer-center",
         None,
         Object,
-        Implemented,
+        Planned(NO_BANDS),
         &["text"],
         "Centered footer text",
     ),
@@ -872,7 +904,7 @@ pub const HEADER_FOOTER_OPTIONS: &[OptionSpec] = &[
         "footer-font-name",
         None,
         Object,
-        Implemented,
+        Planned(NO_BANDS),
         &["name"],
         "Set footer font name (default Arial)",
     ),
@@ -880,7 +912,7 @@ pub const HEADER_FOOTER_OPTIONS: &[OptionSpec] = &[
         "footer-font-size",
         None,
         Object,
-        Implemented,
+        Planned(NO_BANDS),
         &["size"],
         "Set footer font size (default 12)",
     ),
@@ -896,7 +928,7 @@ pub const HEADER_FOOTER_OPTIONS: &[OptionSpec] = &[
         "footer-left",
         None,
         Object,
-        Implemented,
+        Planned(NO_BANDS),
         &["text"],
         "Left aligned footer text",
     ),
@@ -904,21 +936,21 @@ pub const HEADER_FOOTER_OPTIONS: &[OptionSpec] = &[
         "footer-line",
         None,
         Object,
-        Implemented,
+        Planned(NO_BANDS),
         "Display line above the footer",
     ),
     OptionSpec::flag(
         "no-footer-line",
         None,
         Object,
-        Implemented,
+        Planned(NO_BANDS),
         "Do not display line above the footer (default)",
     ),
     OptionSpec::new(
         "footer-right",
         None,
         Object,
-        Implemented,
+        Planned(NO_BANDS),
         &["text"],
         "Right aligned footer text",
     ),
@@ -926,7 +958,7 @@ pub const HEADER_FOOTER_OPTIONS: &[OptionSpec] = &[
         "footer-spacing",
         None,
         Object,
-        Implemented,
+        Planned(NO_BANDS),
         &["real"],
         "Spacing between footer and content in mm (default 0)",
     ),
@@ -934,7 +966,7 @@ pub const HEADER_FOOTER_OPTIONS: &[OptionSpec] = &[
         "header-center",
         None,
         Object,
-        Implemented,
+        Planned(NO_BANDS),
         &["text"],
         "Centered header text",
     ),
@@ -942,7 +974,7 @@ pub const HEADER_FOOTER_OPTIONS: &[OptionSpec] = &[
         "header-font-name",
         None,
         Object,
-        Implemented,
+        Planned(NO_BANDS),
         &["name"],
         "Set header font name (default Arial)",
     ),
@@ -950,7 +982,7 @@ pub const HEADER_FOOTER_OPTIONS: &[OptionSpec] = &[
         "header-font-size",
         None,
         Object,
-        Implemented,
+        Planned(NO_BANDS),
         &["size"],
         "Set header font size (default 12)",
     ),
@@ -966,7 +998,7 @@ pub const HEADER_FOOTER_OPTIONS: &[OptionSpec] = &[
         "header-left",
         None,
         Object,
-        Implemented,
+        Planned(NO_BANDS),
         &["text"],
         "Left aligned header text",
     ),
@@ -974,21 +1006,21 @@ pub const HEADER_FOOTER_OPTIONS: &[OptionSpec] = &[
         "header-line",
         None,
         Object,
-        Implemented,
+        Planned(NO_BANDS),
         "Display line below the header",
     ),
     OptionSpec::flag(
         "no-header-line",
         None,
         Object,
-        Implemented,
+        Planned(NO_BANDS),
         "Do not display line below the header (default)",
     ),
     OptionSpec::new(
         "header-right",
         None,
         Object,
-        Implemented,
+        Planned(NO_BANDS),
         &["text"],
         "Right aligned header text",
     ),
@@ -996,7 +1028,7 @@ pub const HEADER_FOOTER_OPTIONS: &[OptionSpec] = &[
         "header-spacing",
         None,
         Object,
-        Implemented,
+        Planned(NO_BANDS),
         &["real"],
         "Spacing between header and content in mm (default 0)",
     ),
@@ -1004,7 +1036,7 @@ pub const HEADER_FOOTER_OPTIONS: &[OptionSpec] = &[
         "replace",
         None,
         Object,
-        Implemented,
+        Planned(NO_BANDS),
         &["name", "value"],
         "Replace [name] with value in header and footer (repeatable)",
     )
@@ -1223,9 +1255,15 @@ mod tests {
         assert!(lookup_short('z').is_none());
     }
 
+    /// The V1 scope list, straight from `docs/brief.md`.
+    ///
+    /// What this can assert is that the promise is still keepable: the option
+    /// exists, and the table does not declare it impossible. It used to assert
+    /// they were all implemented, and passed while most of them did nothing at
+    /// all, because nothing here can see past the settings model (#19).
+    /// `tests/plan.rs` is where `Implemented` is held to something.
     #[test]
-    fn the_options_the_brief_promises_for_v1_are_implemented() {
-        // Straight from the V1 scope list in docs/brief.md.
+    fn every_option_the_brief_promises_for_v1_is_still_keepable() {
         let promised = [
             "page-size",
             "page-width",
@@ -1253,10 +1291,10 @@ mod tests {
         ];
         for name in promised {
             let spec = lookup_long(name).unwrap_or_else(|| panic!("{name} missing from the table"));
-            assert_eq!(
-                spec.support,
-                Support::Implemented,
-                "{name} is promised for V1 but marked {:?}",
+            assert!(
+                matches!(spec.support, Support::Implemented | Support::Planned(_)),
+                "{name} is promised for V1 and the table calls it {:?}, \
+                 which says the promise cannot be kept",
                 spec.support
             );
         }

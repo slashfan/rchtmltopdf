@@ -22,6 +22,7 @@
 use crate::cdp::{Event, Session};
 use crate::error::Result;
 use crate::launch::Page;
+use crate::plan::{self, Settle};
 use rchtmltopdf_core::settings::{LoadSettings, WebSettings};
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -107,23 +108,15 @@ impl Page {
     /// Get the page ready to be loaded into.
     ///
     /// Separate from navigating because these have to be in place before the
-    /// document arrives, not after.
+    /// document arrives, not after: media queries decide which resources are
+    /// fetched at all.
+    ///
+    /// Sends what [`plan::prepare`] decided, in order, and nothing else.
+    /// Deciding anything here instead would put it outside the plan, where the
+    /// guard that holds the option table honest cannot see it (D27).
     pub async fn prepare(&self, web: &WebSettings) -> Result<()> {
-        let session = self.session();
-        session.send("Page.enable", Value::Null).await?;
-        session.send("Network.enable", Value::Null).await?;
-
-        // Before the document arrives, not after: media queries decide which
-        // resources are fetched at all.
-        self.emulate_media(web).await?;
-
-        if !web.javascript {
-            session
-                .send(
-                    "Emulation.setScriptExecutionDisabled",
-                    json!({ "value": true }),
-                )
-                .await?;
+        for command in plan::prepare(web) {
+            self.session().send(command.method, command.params).await?;
         }
         Ok(())
     }
@@ -166,14 +159,16 @@ impl Page {
         progress.enter(Stage::AwaitingFonts);
         wait_for_fonts(session).await;
 
-        match &load.window_status {
-            Some(wanted) => {
+        // The last rung is the only one there is a choice about, and the choice
+        // was made in the plan rather than here.
+        match &plan::LoadPlan::new(load).settle {
+            Settle::WindowStatus(wanted) => {
                 progress.enter(Stage::AwaitingWindowStatus);
                 wait_for_window_status(session, wanted).await;
             }
-            None => {
+            Settle::Delay(delay) => {
                 progress.enter(Stage::Delaying);
-                tokio::time::sleep(load.javascript_delay).await;
+                tokio::time::sleep(*delay).await;
             }
         }
 

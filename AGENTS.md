@@ -44,10 +44,22 @@ point of the file.
 `crates/cli/tests/grammar.rs`. That file is the specification; the parser is an attempt at
 it.
 
-**`Support::Implemented` in the option table is not yet audited.** The translation layer
-exists now (`apply.rs`) and the binary converts, but nobody has checked the marker against
-what each option actually does end to end. That audit is #19. Until it lands, treat
-`Implemented` as a claim rather than a guarantee.
+**`Support::Implemented` means honoured end to end, and a test holds it there.** It used to
+mean "the command line understands it", and the audit (#19) found that 38 of the 58 options
+carrying the marker did nothing at all: each filled a field in the settings model that no
+part of a conversion ever read. Those are now `Planned`.
+
+What keeps it true is `crates/browser/src/plan.rs`, a pure description of everything a
+conversion would do, built without starting anything. `crates/cli/tests/plan.rs` writes each
+option on its own command line and requires the plan to change — and requires a `Planned`
+option never to change it (D27). **So nothing above `plan` may decide anything on its own**:
+`Page::prepare` sends what `plan::prepare` decided, `print_to_pdf` what `plan::print`
+decided, `load` consults `LoadPlan`. Read a settings field directly in one of them and the
+plan stops describing the conversion, with no test to notice.
+
+Promoting an option to `Implemented` therefore means making the plan change, not editing the
+table. A `Planned` option that fills the settings model and is ignored by the conversion is
+a normal half-built state, not a bug.
 
 **The option table has been reconciled against a real binary, and stays that way.**
 `crates/cli/tests/fixtures/wkhtmltopdf-0.12.6.1-extended-help.txt` is the verbatim help of
@@ -121,7 +133,7 @@ Read these before changing behaviour they describe. Both are in French; the code
 and everything on GitHub are in English.
 
 - `docs/brief.md` — scope, V0 through V3, and what compatibility does and does not mean
-- `docs/decisions.md` — D01 to D26, binding, with the alternatives that were rejected
+- `docs/decisions.md` — D01 to D27, binding, with the alternatives that were rejected
 - `docs/migration.md` — why a migrated document changes size, for anything touching layout
 - `CONTRIBUTING.md` — the branch, pull request and Conventional Commit workflow
 

@@ -224,6 +224,22 @@ Le nombre d'approbations requises est **0**. Un mainteneur seul ne peut pas appr
 
 ---
 
+## D27 — `Implemented` veut dire « honoré de bout en bout », et un plan le prouve
+
+**Choix.** Le marqueur `Support::Implemented` de la table d'options affirme qu'écrire l'option change ce qui sort du programme, et rien de plus faible. Pour le rendre vérifiable, le crate `browser` expose `plan` : une description pure de tout ce qu'une conversion ferait — options de lancement, commandes CDP envoyées avant la navigation, dernier barreau de l'échelle d'attente, appel d'impression, échéance — construite sans démarrer quoi que ce soit. `crates/cli/tests/plan.rs` écrit chaque option seule sur une ligne de commande et exige que le plan change ; une option `Planned` ou `NoEquivalent` doit au contraire ne jamais le changer.
+
+**Pourquoi.** L'audit (#19) a trouvé que **38 des 58 options marquées `Implemented` ne faisaient rien du tout** : la ligne de commande remplissait un champ du modèle de réglages, aucune couche ne lisait ce champ, et l'aide annonçait l'option comme fonctionnelle. Le garde existant ne pouvait pas le voir — il demande si `apply.rs` a un bras pour l'option, question qui porte sur la ligne de commande, et les 38 en avaient un. Une était pire qu'inerte : `--default-header` descendait la marge haute à 20 mm pour faire de la place à un bandeau que rien ne dessine, donc décalait le contenu d'un centimètre sans rien imprimer.
+
+**Contrat qui en fait un garde.** Rien au-dessus de `plan` ne décide plus rien seul : `Page::prepare` envoie ce que `plan::prepare` a décidé, `print_to_pdf` ce que `plan::print` a décidé, et `load` ne consulte que `LoadPlan`. Le jour où l'une d'elles relit un réglage directement, le plan cesse de décrire la conversion et le test au-dessus devient un second avis plutôt qu'une vérification. C'est écrit en tête du module parce que c'est la seule chose qui puisse le casser silencieusement.
+
+**Une option `Planned` continue d'être traduite.** Elle remplit le modèle de réglages et la conversion l'ignore. C'est l'état normal d'une option à moitié construite : le modèle est là où atterrit le travail de la couche suivante, et le vider en attendant reviendrait à écrire les deux moitiés à l'aveugle. Ce qui rend l'état honnête, c'est que rien en aval ne lit le champ — tenu par le test, pas par la discipline — et que le binaire avertit que l'option est ignorée.
+
+**Deux exemptions, nommées.** `--quiet` et `--log-level` sont honorées avant qu'un navigateur démarre : aucun plan ne peut les voir. La liste les nomme avec le test qui les tient, et un test vérifie que chaque entrée désigne une option réelle et toujours annoncée. La liste est censée rester de cette longueur.
+
+**Écarté.** Supprimer les bras de traduction des options démises, qui aurait vidé le modèle de réglages pour rien. Une liste manuelle « option → test qui la prouve », qui se périme sans que rien n'échoue, exactement comme le marqueur qu'elle remplacerait. Comparer chaque option aux seuls réglages par défaut : cela déclare inertes `--background`, `--enable-javascript` et `--no-print-media-type`, qui redisent un défaut — le garde cherche donc n'importe quel point de départ que l'option déplace, et la table contient son propre contraire.
+
+---
+
 ## Conséquences transverses
 
 - **Le brief doit gagner une section « smart shrinking »** dans les contraintes, et un guide de migration (options à retirer, différences de taille attendues).

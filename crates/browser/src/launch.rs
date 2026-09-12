@@ -72,7 +72,7 @@ const BASELINE_FLAGS: &[&str] = &[
 ];
 
 /// What to start, and how.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LaunchOptions {
     /// Run without the sandbox.
     ///

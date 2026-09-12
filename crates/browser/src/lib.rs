@@ -23,6 +23,7 @@ pub mod deadline;
 pub mod error;
 pub mod launch;
 pub mod locate;
+pub mod plan;
 pub mod print;
 pub mod render;
 
@@ -30,4 +31,5 @@ pub use cdp::{Client, Event, Session, SessionId};
 pub use error::{Error, ProtocolError, Result};
 pub use launch::{Browser, LaunchOptions, Page};
 pub use locate::{Executable, Flavour, Origin, Platform, locate};
+pub use plan::{Command, LoadPlan, Plan, Settle};
 pub use render::{Progress, Stage};

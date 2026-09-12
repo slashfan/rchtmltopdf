@@ -108,7 +108,11 @@ fn unbuilt_meta_options_say_so_and_fail() {
 /// option's *value* for a request for help.
 #[test]
 fn a_meta_option_as_a_value_is_not_a_request() {
+    // Quiet only because a footer is not drawn yet and says so (#19). The case
+    // is kept as it was written, because `-h` as a footer is a real thing to
+    // want and an invented option would not have found the bug.
     let output = run(&[
+        "-q",
         "--footer-center",
         "-h",
         "page.html",
