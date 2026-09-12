@@ -16,17 +16,31 @@ pub const POINTS_PER_INCH: f64 = 72.0;
 
 /// How far a measurement may be out and still count as equal.
 ///
-/// **Chromium does not print the paper size it was asked for.** Every media box
-/// it writes is an exact multiple of 0.24 pt — one device unit at 300 dpi — and
-/// for a size defined in millimetres the result lands slightly large. Measured
-/// against the model in `core`, across A4, A3, A5, Letter, Legal and an explicit
-/// 100x150 mm, the largest discrepancy observed is 0.80 pt; the two inch-defined
-/// sizes are exact.
+/// **Chromium does not print the paper size it was asked for.** Read from the
+/// raw bytes of twenty-four documents — not through this module, to keep lopdf's
+/// `f32` out of the evidence — every media box it writes is an exact multiple of
+/// 0.24 pt, which is 1/300 inch, and the requested size is moved onto that grid.
 ///
-/// 1.5 pt therefore absorbs the quantisation with room to spare while staying
-/// far inside the gaps that matter: the closest pair asserted here is A4 and
-/// Letter, 16.7 pt apart in width. It is not a licence to be vague — a size
-/// wrong by a whole millimetre still fails.
+/// **Which grid point it picks was not worked out**, and the obvious guesses are
+/// all wrong: it is not the nearest multiple of 0.24 pt (A4's 595.27 would then
+/// print as 595.20, and it prints as 595.92), nor the next one up, and near
+/// 8 inches the step is four device units rather than one. What follows is
+/// measurement, not a model, and anyone predicting an output from it will be
+/// wrong sooner or later.
+///
+/// What was measured, and what this constant actually rests on:
+///
+/// - the deviation reaches **0.91 pt** across twenty-four arbitrary widths from
+///   3 to 14 inches, and **0.64 pt** across the named sizes asserted here;
+/// - it is usually positive but **not always** — 7.777 in comes out 0.024 pt
+///   small — so this is a tolerance in both directions, not an allowance for
+///   Chromium being generous;
+/// - margins do not move it, and it is identical across repeated runs.
+///
+/// 1.5 pt therefore covers everything observed with about 0.6 pt to spare, while
+/// staying far inside the gaps that matter: A4 and Letter, the closest pair
+/// asserted here, are 16.7 pt apart in width. It is not a licence to be vague —
+/// a size wrong by a whole millimetre, 2.83 pt, still fails.
 pub const TOLERANCE: f64 = 1.5;
 
 /// A rectangle in PDF user space, in points.

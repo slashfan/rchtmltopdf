@@ -517,6 +517,10 @@ fn a_global_option_belongs_before_the_first_input() {
         "page in.html --copies 2 out.pdf",
         "in.html --copies 2 in.html out.pdf",
         "cover in.html --copies 2 out.pdf",
+        // Between two objects, and after the output file: both are still after
+        // the first input, and 0.12.6.1 refuses both.
+        "in.html in.html --copies 2 out.pdf",
+        "in.html out.pdf --copies 2",
     ] {
         assert!(
             matches!(parse_err(line), ParseError::WrongLocation { .. }),
@@ -545,6 +549,7 @@ fn a_page_option_may_be_written_anywhere() {
         "in.html --disable-javascript out.pdf",
         "page in.html --disable-javascript out.pdf",
         "toc --disable-javascript out.pdf",
+        "cover in.html --disable-javascript out.pdf",
         "--header-left Hi in.html out.pdf",
         "in.html --header-left Hi out.pdf",
     ] {
@@ -560,12 +565,23 @@ fn a_toc_option_belongs_only_to_a_toc_object() {
     assert!(tokenize(split("toc --toc-header-text Hi out.pdf")).is_ok());
     assert!(tokenize(split("toc --toc-header-text Hi in.html out.pdf")).is_ok());
 
+    // A second `toc` object is allowed, and each takes its own options.
+    assert!(
+        tokenize(split(
+            "toc --toc-header-text A toc --toc-header-text B out.pdf"
+        ))
+        .is_ok()
+    );
+
     for line in [
         "--toc-header-text Hi in.html out.pdf",
         "in.html --toc-header-text Hi out.pdf",
         "page in.html --toc-header-text Hi out.pdf",
         // After a toc object, but a page object has since taken over.
         "toc in.html --toc-header-text Hi out.pdf",
+        // Likewise a cover object.
+        "cover in.html --toc-header-text Hi out.pdf",
+        "toc cover in.html --toc-header-text Hi out.pdf",
     ] {
         assert!(
             matches!(parse_err(line), ParseError::WrongLocation { .. }),
