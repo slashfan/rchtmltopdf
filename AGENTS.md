@@ -101,10 +101,11 @@ in page space, so `inspect` tracks the matrix stack; reading the operands raw gi
 that look plausible and are wrong.
 
 **Chromium does not print the paper size it was asked for.** Every media box it writes is a
-multiple of 0.24 pt (one device unit at 300 dpi), and millimetre-defined sizes land slightly
-large — up to 0.80 pt across the sizes asserted here, while Letter and Legal are exact. That
-is what `inspect::TOLERANCE` is for; it is not licence to be vague, and a size a millimetre
-out still fails.
+multiple of 0.24 pt (1/300 inch), and the requested size is moved onto that grid — by up to
+0.91 pt across twenty-four measured widths, in either direction. Which grid point it picks
+was not worked out, so treat `inspect::TOLERANCE` as a measured bound rather than a model,
+and read its doc comment before changing it. It is not licence to be vague: a size a
+millimetre out still fails.
 
 **Fixtures carry their own font, and must keep doing so.** Line wrapping follows font
 metrics, so a fixture asking for `sans-serif` is measured against a different typeface on a
