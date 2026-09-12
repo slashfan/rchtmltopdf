@@ -123,6 +123,54 @@ fn a_meta_option_as_a_value_is_not_a_request() {
     assert!(stdout(&output).contains(r#"--footer-center "-h""#));
 }
 
+/// Answers on any machine, with or without a browser, which is the whole point:
+/// it is what somebody runs when a conversion said it could not find one.
+///
+/// Deliberately tolerant about *which* outcome, because both are legitimate and
+/// a test that demanded a browser would be untestable on a machine that has
+/// none — the same reasoning as `require_chromium`.
+#[test]
+fn dump_chromium_either_names_a_browser_or_says_how_to_get_one() {
+    let output = run(&["--dump-chromium"]);
+
+    match output.status.code() {
+        Some(0) => {
+            let found = stdout(&output);
+            assert!(found.contains("path:"), "{found}");
+            assert!(found.contains("source:"), "{found}");
+            assert!(found.contains("flavour:"), "{found}");
+        }
+        _ => {
+            let why = stderr(&output);
+            assert!(why.contains("could not find Chromium"), "{why}");
+            assert!(why.contains("apt install chromium"), "{why}");
+            assert!(!why.contains("fetch-chromium"), "no such command: {why}");
+        }
+    }
+}
+
+/// It is a question rather than a conversion, so it needs no document — and the
+/// grammar wants one. `--chromium-path` still has to be read through the parser
+/// on a line that has neither input nor output.
+#[test]
+fn dump_chromium_needs_no_document_and_still_reads_the_path() {
+    let output = run(&[
+        "--chromium-path",
+        "/definitely-not-a-browser",
+        "--dump-chromium",
+    ]);
+    let said = format!("{}{}", stdout(&output), stderr(&output));
+
+    assert!(
+        !said.contains("at least one input file"),
+        "a question should not be answered with the grammar: {said}"
+    );
+    assert!(
+        said.contains("/definitely-not-a-browser"),
+        "should say what happened to the path it was given: {said}"
+    );
+}
+
 // --- errors ------------------------------------------------------------------
 
 #[test]

@@ -1088,6 +1088,13 @@ pub const TOC_OPTIONS: &[OptionSpec] = &[
 
 /// Options of our own that wkhtmltopdf never had.
 pub const EXTENSION_OPTIONS: &[OptionSpec] = &[
+    OptionSpec::flag(
+        "dump-chromium",
+        None,
+        Global,
+        Meta,
+        "Report which browser would be used and where it was found, then exit",
+    ),
     OptionSpec::new(
         "chromium-path",
         None,

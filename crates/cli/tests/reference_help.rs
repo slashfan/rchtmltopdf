@@ -21,7 +21,7 @@
 //! spaces, or two spaces, the short alias, a comma and a space. That is the
 //! anchor used below.
 
-use rchtmltopdf::table::{SECTIONS, Scope, Support, all, lookup_long};
+use rchtmltopdf::table::{self, OptionSpec, SECTIONS, Scope, all, lookup_long};
 
 const HELP: &str = include_str!("fixtures/wkhtmltopdf-0.12.6.1-extended-help.txt");
 
@@ -182,6 +182,18 @@ fn every_reference_option_is_in_the_table() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// Whether an option is ours rather than wkhtmltopdf's.
+///
+/// The section it is filed under, not the support marker. Those are different
+/// axes and used to be conflated: `--dump-chromium` is ours *and* answered
+/// before any conversion, so it is `Support::Meta`, and a check that asked about
+/// the marker called it an invented wkhtmltopdf option.
+fn is_ours(spec: &OptionSpec) -> bool {
+    table::EXTENSION_OPTIONS
+        .iter()
+        .any(|ours| ours.long == spec.long)
+}
+
 /// And nothing else, apart from our own.
 ///
 /// An option the real program does not have is worse than a missing one: it
@@ -191,7 +203,7 @@ fn every_reference_option_is_in_the_table() {
 #[test]
 fn the_table_invents_nothing() {
     let invented: Vec<&str> = all()
-        .filter(|spec| spec.support != Support::Extension)
+        .filter(|spec| !is_ours(spec))
         .map(|spec| spec.long)
         .filter(|long| !parse().iter().any(|option| option.long == *long))
         .collect();
@@ -210,7 +222,7 @@ fn the_table_invents_nothing() {
 /// Our extensions are ours, and must not collide with a real option.
 #[test]
 fn our_own_options_do_not_shadow_wkhtmltopdf_ones() {
-    for spec in all().filter(|spec| spec.support == Support::Extension) {
+    for spec in all().filter(|spec| is_ours(spec)) {
         assert!(
             !parse().iter().any(|option| option.long == spec.long),
             "--{} is an extension, but wkhtmltopdf has an option by that name",

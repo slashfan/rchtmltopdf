@@ -250,12 +250,14 @@ jobs:
           path: ${{ github.workspace }}/.chromium-cache
           key: chromium-${{ runner.os }}-${{ hashFiles('.chromium-version') }}
 
-      # TEMPORARY. This belongs in `rchtmltopdf fetch-chromium` (#33), which will
-      # replace this step with a single `cargo run --locked -- fetch-chromium`,
-      # so that D09's download path is exercised on every run instead of being
-      # reimplemented here. Until that subcommand exists, the unpacked layout
-      # below is the contract: `locate` looks for exactly this path, and the
-      # archive already has the versioned folder inside it.
+      # This step is where the download lives, and it is staying here (D31). The
+      # binary will not fetch a browser: doing so would put a TLS stack, a
+      # checksum and an archive unpacker inside it, and CI is the one place that
+      # already has curl, a shell and a cache.
+      #
+      # The unpacked layout below is the contract with `locate`, which looks for
+      # exactly this path under RCHTMLTOPDF_CACHE_DIR. The archive already has
+      # the versioned folder inside it.
       - name: Download the pinned Chrome for Testing
         if: steps.browser.outputs.cache-hit != 'true'
         env:

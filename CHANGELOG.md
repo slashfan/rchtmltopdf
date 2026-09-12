@@ -23,6 +23,26 @@ are understood on the command line and not yet acted on.
 
 ### Changed
 
+**The binary will never download a browser**, and no longer promises a subcommand that would
+(D31). Fetching one would mean a TLS stack, a checksum and an archive unpacker inside a
+program whose entire networking story is otherwise "the browser does it" — and it would put
+the static musl build at risk for a convenience `apt`, `brew` and `@puppeteer/browsers`
+already provide.
+
+What replaces it is the part that was actually missing:
+
+- **The README says how to install one**, four ways, with the pinned version for the one CI
+  uses.
+- **The "could not find Chromium" error repeats those commands**, with the pin, after listing
+  every path it tried. It is the one message a first-time user is guaranteed to read.
+- **A path may now be a directory or a macOS `.app` bundle**, not only an executable. Both are
+  what people actually have to hand — `/Applications/Google Chrome.app`, or whatever
+  `@puppeteer/browsers` unpacked — and both used to be refused for not being a file.
+- **`--dump-chromium`** reports which browser would be used and where it was found, and says
+  so when an explicit `--chromium-path` was not a browser and the search carried on.
+
+### Changed
+
 **The minimum supported Rust version is 1.88**, up from 1.85. `lopdf` requires it and D12
 chose lopdf for the PDF layer, so the choice was between carrying an old PDF library to
 protect a number nobody had asked for and moving the number (D30).

@@ -180,7 +180,7 @@ Chromium est résolu dans cet ordre (voir [D09](decisions.md)) :
 1. `--chromium-path` ;
 2. variables d'environnement (`CHROME_PATH` et équivalents) ;
 3. emplacements système connus (`chromium`, `chromium-browser`, `google-chrome`, `chrome-headless-shell`, bundles macOS) ;
-4. répertoire de cache alimenté par une sous-commande explicite `rchtmltopdf fetch-chromium`, épinglée sur une version Chrome for Testing.
+4. répertoire de cache (`RCHTMLTOPDF_CACHE_DIR`) rempli par quelqu'un d'autre — étape de CI, image de conteneur, personne avec une archive. Le binaire ne télécharge rien (D31) ; le README documente l'installation et l'erreur « introuvable » la répète.
 
 Aucun téléchargement n'a lieu à l'exécution sans demande explicite. En cas d'échec, l'erreur liste tout ce qui a été tenté.
 

@@ -37,8 +37,61 @@ rchtmltopdf --page-size A4 --margin-top 15mm \
     --footer-center 'Page [page] / [topage]' invoice.html invoice.pdf
 ```
 
-A URL, a local file or standard input goes in; a file or standard output comes out. You need
-a Chromium on the machine, which it finds without ever downloading one.
+A URL, a local file or standard input goes in; a file or standard output comes out.
+
+## You bring the browser
+
+**This program never downloads anything.** Not at conversion time, and not on demand either:
+fetching a browser would mean a TLS stack, a checksum and an archive unpacker inside a binary
+whose entire networking story is otherwise "the browser does it" (D31). Your package manager
+is better at this, and so is `@puppeteer/browsers`.
+
+Any recent Chromium or Chrome will do:
+
+```bash
+apt install chromium                 # Debian, Ubuntu
+dnf install chromium                 # Fedora
+pacman -S chromium                   # Arch
+brew install --cask chromium         # macOS
+```
+
+Or a pinned build, which is what CI uses and what the conformance suite measures against —
+the version is in [`.chromium-version`](.chromium-version):
+
+```bash
+npx @puppeteer/browsers install chrome-headless-shell@<version>
+```
+
+`chrome-headless-shell` is preferred over a full browser when both are present: it starts
+faster and carries no profile or GPU surface.
+
+### Pointing at it
+
+Most of the time you do not have to. It looks, in order, at `--chromium-path`, then
+`RCHTMLTOPDF_CHROMIUM`, `CHROME_PATH`, `CHROMIUM_PATH` and `PUPPETEER_EXECUTABLE_PATH`, then
+the usual system locations including `/Applications` bundles, then `RCHTMLTOPDF_CACHE_DIR`.
+
+When you do, the path can be **the executable, a directory it was unpacked into, or a macOS
+`.app` bundle** — whichever you happen to have:
+
+```bash
+rchtmltopdf --chromium-path /usr/bin/chromium               in.html out.pdf
+rchtmltopdf --chromium-path ~/.cache/puppeteer/chrome-headless-shell/…  in.html out.pdf
+rchtmltopdf --chromium-path "/Applications/Google Chrome.app"  in.html out.pdf
+export CHROME_PATH=/opt/chrome
+```
+
+To check what it would use, and where it found it:
+
+```console
+$ rchtmltopdf --dump-chromium
+path:    /usr/bin/chromium
+source:  a system location
+flavour: full browser, run with --headless
+```
+
+If it finds nothing, the error lists every path it tried and repeats the install commands
+above.
 
 | Layer | Crate | State |
 | --- | --- | --- |
