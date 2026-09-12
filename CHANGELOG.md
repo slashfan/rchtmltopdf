@@ -18,11 +18,26 @@ stylesheets, whether scripts run, and how long to wait before printing. Options 
 act on are accepted and warned about rather than breaking a command line that uses them.
 
 Several documents, covers and a table of contents are not built. Neither is most of the
-option surface beyond what V0 needed: header and footer placeholders, cookies and custom
-headers, credentials and proxies, and PDF metadata are all understood on the command line
-and not yet acted on.
+option surface beyond what V0 needed: cookies and custom headers, credentials and proxies,
+and PDF metadata are all understood on the command line and not yet acted on.
 
 ### Added
+
+**Header and footer placeholders are substituted**, so
+`--footer-center 'Page [page] / [topage]'` — the example in the README, in the brief and in
+the grammar tests — prints "Page 1 / 3" on a three page document. `[frompage]`, `[sitepage]`,
+`[sitepages]`, `[webpage]`, `[title]`, `[doctitle]`, `[date]`, `[isodate]` and `[time]` go
+too, along with any placeholder `--replace` defines. Only the two page counts are left to
+Chromium, because nothing else knows how many pages a document has until it has been laid
+out.
+
+`[section]`, `[subsection]` and `[subsubsection]` name a position in the document outline,
+which V1 does not build. They expand to nothing and say so once on stderr, rather than
+printing their own name on every page.
+
+`[date]` is **not** byte-identical to wkhtmltopdf's. Qt renders it through the system locale,
+so the same binary prints a different string on two machines and there is no format to match;
+this writes the local date as `YYYY-MM-DD`, and `[isodate]` adds the time and the UTC offset.
 
 **Headers and footers are drawn.** `--header-left/center/right`, the same three for the
 footer, the font name and size, the rules and `--default-header` all render through

@@ -69,8 +69,18 @@ mesurées :
   puisse ouvrir un espace entre les deux : `--header-spacing 5` descend le contenu de 5 mm et
   laisse le bandeau où il est.
 
-Les placeholders (`[page]`, `[date]`, …) ne sont pas encore substitués : le texte est utilisé
-tel quel, et l'option est signalée comme telle.
+### Placeholders
+
+`[page]`, `[topage]`, `[frompage]`, `[sitepage]`, `[sitepages]`, `[webpage]`, `[title]`,
+`[doctitle]`, `[date]`, `[isodate]` et `[time]` sont substitués, ainsi que ceux définis par
+`--replace`. `[section]`, `[subsection]` et `[subsubsection]` désignent une position dans le
+plan du document, qui n'existe pas encore : ils s'effacent, et l'option est signalée une fois
+sur stderr.
+
+**`[date]` n'est pas identique à celui de wkhtmltopdf.** Qt le rend via la locale du système,
+donc le même binaire écrit une chaîne différente sur deux machines et il n'y a pas de format
+à reproduire. Nous écrivons la date locale au format `AAAA-MM-JJ`, non ambigu ; `[isodate]`
+ajoute l'heure et le décalage UTC.
 
 ## `--encoding` et les documents distants
 

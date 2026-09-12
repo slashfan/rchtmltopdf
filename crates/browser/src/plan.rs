@@ -36,6 +36,7 @@
 use crate::band::{self, Edge};
 use crate::file_access::Policy;
 use crate::launch::LaunchOptions;
+use crate::placeholder::{Clock, Context};
 use rchtmltopdf_core::settings::{
     GlobalSettings, LoadSettings, MediaType, ObjectSettings, PageSetup, WebSettings,
 };
@@ -134,6 +135,12 @@ pub struct Plan {
     pub prepare: Vec<Command>,
     pub load: LoadPlan,
     pub print: Command,
+    /// What the bands are expanded against. Held so the conversion and a test
+    /// can be given the same clock: a plan built twice a second apart must not
+    /// differ, or every option would look as though it changed something.
+    pub context: Context,
+    /// Placeholders the bands asked for and V1 cannot answer, once each.
+    pub unsupported_placeholders: Vec<&'static str>,
     /// The bound over the whole of the above (D16). `None` is `--timeout 0`.
     pub deadline: Option<Duration>,
     /// What to read a local document as, from `--encoding`.
@@ -154,16 +161,41 @@ pub struct Plan {
 }
 
 impl Plan {
-    pub fn new(global: &GlobalSettings, object: &ObjectSettings) -> Self {
+    /// The clock is a parameter rather than read here, because a plan is
+    /// compared in tests and two built a second apart must be equal.
+    pub fn new(global: &GlobalSettings, object: &ObjectSettings, clock: Clock) -> Self {
+        let context = context(global, object, clock);
+        let printing = print(&global.page, object, &context);
         Self {
             launch: launch(global, object),
             prepare: prepare(&object.web),
             load: LoadPlan::new(&object.load),
-            print: print(&global.page, object),
+            print: printing.command,
+            unsupported_placeholders: printing.unsupported,
+            context,
             deadline: global.timeout,
             encoding: object.web.encoding.clone(),
             file_access: file_access(&object.web),
         }
+    }
+}
+
+/// What the bands are expanded against.
+///
+/// Everything here comes from the command line rather than from the document.
+/// `[title]` is `--title` and not the page's own `<title>`, which needs the
+/// document to have been loaded and is #29's business; `[webpage]` is the input
+/// as it was written, which is what wkhtmltopdf prints too.
+pub fn context(global: &GlobalSettings, object: &ObjectSettings, clock: Clock) -> Context {
+    Context {
+        webpage: object
+            .input
+            .as_ref()
+            .map(|input| input.as_written())
+            .unwrap_or_default(),
+        title: global.title.clone().unwrap_or_default(),
+        replacements: object.replacements.clone(),
+        clock,
     }
 }
 
@@ -261,7 +293,7 @@ pub fn viewport(web: &WebSettings) -> Command {
 /// apply the swap twice. Paper geometry is global in wkhtmltopdf; backgrounds
 /// and zoom belong to the object. Both are needed, and they come from different
 /// places.
-pub fn print(page: &PageSetup, object: &ObjectSettings) -> Command {
+pub fn print(page: &PageSetup, object: &ObjectSettings, context: &Context) -> Printing {
     let web = &object.web;
 
     // Chromium draws its own footer -- a page number -- when asked to display
@@ -282,7 +314,16 @@ pub fn print(page: &PageSetup, object: &ObjectSettings) -> Command {
         false => Length::mm(band.spacing.unwrap_or(0.0)).to_inches(),
     };
 
-    Command::new(
+    let header = band::template(&object.header, Edge::Header, left, right, context);
+    let footer = band::template(&object.footer, Edge::Footer, left, right, context);
+    let mut unsupported = header.unsupported;
+    for name in footer.unsupported {
+        if !unsupported.contains(&name) {
+            unsupported.push(name);
+        }
+    }
+
+    let command = Command::new(
         "Page.printToPDF",
         json!({
             "paperWidth": page.width_inches(),
@@ -300,14 +341,29 @@ pub fn print(page: &PageSetup, object: &ObjectSettings) -> Command {
             // do we.
             "preferCSSPageSize": false,
             "displayHeaderFooter": bands,
-            "headerTemplate": band::template(&object.header, Edge::Header, left, right),
-            "footerTemplate": band::template(&object.footer, Edge::Footer, left, right),
+            "headerTemplate": header.html,
+            "footerTemplate": footer.html,
             // Not the default. The default returns the whole document
             // base64-encoded inside one protocol message, and a document of any
             // size exceeds the message limit.
             "transferMode": "ReturnAsStream",
         }),
-    )
+    );
+
+    Printing {
+        command,
+        unsupported,
+    }
+}
+
+/// The print call, and what the bands could not expand.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Printing {
+    pub command: Command,
+    /// Placeholders that are real in wkhtmltopdf and empty here, once each. The
+    /// binary reports them; nothing downstream of the print call can, because by
+    /// then the band is a string.
+    pub unsupported: Vec<&'static str>,
 }
 
 #[cfg(test)]
@@ -422,7 +478,7 @@ mod tests {
             orientation: Orientation::Landscape,
             ..PageSetup::default()
         };
-        let command = print(&landscape, &page_object());
+        let command = print(&landscape, &page_object(), &Context::default()).command;
         assert_eq!(command.params["landscape"], json!(false));
         // 297mm, the long edge, is now the width.
         let width = command.params["paperWidth"].as_f64().unwrap();

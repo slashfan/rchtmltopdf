@@ -2,12 +2,14 @@
 
 mod support;
 
+use rchtmltopdf_browser::placeholder::Clock;
+use rchtmltopdf_browser::plan::Plan;
 use rchtmltopdf_browser::render::Progress;
 use rchtmltopdf_core::Input;
 use rchtmltopdf_core::Orientation;
 use rchtmltopdf_core::page_size;
 use rchtmltopdf_core::settings::{
-    LoadSettings, Margins, MediaType, ObjectSettings, PageSetup, WebSettings,
+    GlobalSettings, LoadSettings, Margins, MediaType, ObjectSettings, PageSetup, WebSettings,
 };
 use rchtmltopdf_core::units::Length;
 use support::{TestServer, launch, one_at_a_time};
@@ -63,7 +65,12 @@ async fn print(page_setup: PageSetup, web: WebSettings, path: &str) -> Option<Ve
         web: web.clone(),
         ..ObjectSettings::page(Input::Stdin)
     };
-    let pdf = page.print_to_pdf(&page_setup, &object).await.unwrap();
+    let global = GlobalSettings {
+        page: page_setup,
+        ..GlobalSettings::default()
+    };
+    let plan = Plan::new(&global, &object, Clock::default());
+    let pdf = page.print_to_pdf(&plan.print).await.unwrap();
     browser.close().await.unwrap();
     Some(pdf)
 }

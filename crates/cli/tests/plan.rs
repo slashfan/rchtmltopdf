@@ -31,11 +31,13 @@
 mod support;
 
 use rchtmltopdf::apply::apply;
+use rchtmltopdf::table::Scope;
 use rchtmltopdf::table::{self, OptionSpec, Support};
 use rchtmltopdf::tokenizer::tokenize;
+use rchtmltopdf_browser::placeholder::Clock;
 use rchtmltopdf_browser::plan::Plan;
 use rchtmltopdf_core::settings::Settings;
-use support::line;
+use support::line_shaped;
 
 /// Options honoured before a browser is started, so no plan can see them.
 ///
@@ -54,12 +56,30 @@ const HONOURED_BEFORE_THE_BROWSER: &[(&str, &str)] = &[
 ];
 
 fn settings_for(options: &[&'static OptionSpec]) -> Settings {
-    let args = line(options);
+    let needs_toc = options.iter().any(|spec| spec.scope == Scope::Toc);
+    settings_shaped(options, needs_toc)
+}
+
+fn settings_shaped(options: &[&'static OptionSpec], toc_object: bool) -> Settings {
+    let args = line_shaped(options, toc_object);
     let written = args.join(" ");
     let parsed =
         tokenize(args).unwrap_or_else(|error| panic!("`{written}` did not parse: {error}"));
     apply(&parsed).unwrap_or_else(|error| panic!("`{written}` did not apply: {error}"))
 }
+
+/// A clock that does not move, so two plans built a moment apart are equal.
+/// Without it a band carrying `[time]` would make every option look as though it
+/// changed the conversion.
+const FROZEN: Clock = Clock {
+    year: 2026,
+    month: 9,
+    day: 12,
+    hour: 12,
+    minute: 0,
+    second: 0,
+    utc_offset_seconds: 0,
+};
 
 /// The conversion these settings describe.
 fn plan_for(settings: &Settings) -> Plan {
@@ -67,7 +87,7 @@ fn plan_for(settings: &Settings) -> Plan {
         .objects
         .first()
         .expect("every line built here has an object");
-    Plan::new(&settings.global, object)
+    Plan::new(&settings.global, object, FROZEN)
 }
 
 /// Every starting point this option moves, as the settings before and after.
@@ -76,9 +96,12 @@ fn plan_for(settings: &Settings) -> Plan {
 /// the weaker failure `apply.rs` reports.
 fn effects(spec: &'static OptionSpec) -> Vec<(Settings, Settings)> {
     let mut found = Vec::new();
+    // Both halves of every comparison are built on the same object, so the
+    // difference between them is the option and nothing else.
+    let toc = spec.scope == Scope::Toc;
 
-    let bare = settings_for(&[]);
-    let alone = settings_for(&[spec]);
+    let bare = settings_shaped(&[], toc);
+    let alone = settings_shaped(&[spec], toc);
     if alone != bare {
         found.push((bare, alone));
     }
@@ -89,8 +112,9 @@ fn effects(spec: &'static OptionSpec) -> Vec<(Settings, Settings)> {
         if other.long == spec.long || other.support == Support::Meta {
             continue;
         }
-        let before = settings_for(&[other]);
-        let after = settings_for(&[other, spec]);
+        let shaped = toc || other.scope == Scope::Toc;
+        let before = settings_shaped(&[other], shaped);
+        let after = settings_shaped(&[other, spec], shaped);
         if after != before {
             found.push((before, after));
         }
@@ -158,12 +182,12 @@ fn nothing_the_table_calls_unbuilt_changes_the_conversion() {
 /// field, which is what the test above holds.
 #[test]
 fn an_option_that_is_not_built_may_still_be_understood() {
-    let replace = table::lookup_long("replace").expect("in the table");
-    assert!(matches!(replace.support, Support::Planned(_)));
+    let cookie = table::lookup_long("cookie").expect("in the table");
+    assert!(matches!(cookie.support, Support::Planned(_)));
 
-    let settings = settings_for(&[replace]);
+    let settings = settings_for(&[cookie]);
     let object = settings.single_object().expect("one object");
-    assert_eq!(object.replacements[0].name, "x");
+    assert_eq!(object.web.cookies[0].name, "x");
 }
 
 /// The exemption list is a promise about tests elsewhere. An entry naming an
@@ -192,7 +216,7 @@ fn the_advertised_surface_is_the_audited_one() {
         .filter(|spec| spec.support == Support::Implemented)
         .count();
     assert_eq!(
-        implemented, 47,
+        implemented, 49,
         "the number of options honoured end to end changed; \
          if that is deliberate, the audit and this number move together"
     );

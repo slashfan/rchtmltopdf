@@ -98,6 +98,20 @@ pub fn written(spec: &OptionSpec) -> Vec<String> {
 /// object. A line needing the third cannot also be a page, because a `toc`
 /// object has no document of its own.
 pub fn line(options: &[&'static OptionSpec]) -> Vec<String> {
+    let needs_toc = options.iter().any(|spec| spec.scope == Scope::Toc);
+    line_shaped(options, needs_toc)
+}
+
+/// The same, with the object shape forced.
+///
+/// **Two lines are only comparable if they have the same object on them.** A
+/// table-of-contents option can only be written after a `toc`, which has no
+/// document of its own, so a line carrying one differs from a line carrying a
+/// page in more than the option under test — a different object kind, and no
+/// input for `[webpage]` to expand to. Comparing the two attributes all of that
+/// to the option, which is how `--disable-dotted-lines` came to look as though
+/// it changed the conversion.
+pub fn line_shaped(options: &[&'static OptionSpec], toc_object: bool) -> Vec<String> {
     let (mut globals, mut object, mut toc) = (Vec::new(), Vec::new(), Vec::new());
     for spec in options {
         let words = written(spec);
@@ -109,7 +123,7 @@ pub fn line(options: &[&'static OptionSpec]) -> Vec<String> {
     }
 
     let mut args = globals;
-    args.push(if toc.is_empty() { "in.html" } else { "toc" }.to_string());
+    args.push(if toc_object { "toc" } else { "in.html" }.to_string());
     args.extend(object);
     args.extend(toc);
     args.push("out.pdf".to_string());

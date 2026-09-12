@@ -29,8 +29,8 @@ GitHub are in English.
 
 ## State
 
-**It converts.** One document at a time, with the paper, margins, orientation, stylesheets
-and headers you ask for.
+**It converts.** One document at a time, with the paper, margins, orientation, stylesheets,
+and headers and footers you ask for — placeholders included.
 
 ```bash
 rchtmltopdf --page-size A4 --margin-top 15mm \
