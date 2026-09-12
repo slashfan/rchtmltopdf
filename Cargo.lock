@@ -408,6 +408,7 @@ version = "0.0.1"
 dependencies = [
  "rchtmltopdf-browser",
  "rchtmltopdf-core",
+ "rchtmltopdf-pdf",
  "tokio",
 ]
 
@@ -443,6 +444,7 @@ version = "0.0.1"
 name = "rchtmltopdf-pdf"
 version = "0.0.1"
 dependencies = [
+ "lopdf",
  "rchtmltopdf-core",
 ]
 

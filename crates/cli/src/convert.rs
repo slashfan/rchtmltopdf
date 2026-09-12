@@ -4,12 +4,12 @@
 //! below takes settings and knows nothing about how they were written. This is
 //! the seam, and it is short on purpose.
 
-use crate::{PROGRAM, input, output};
+use crate::{PROGRAM, VERSION, input, output};
 use rchtmltopdf_browser::Browser;
+use rchtmltopdf_browser::clock;
 use rchtmltopdf_browser::deadline;
 use rchtmltopdf_browser::intercept;
 use rchtmltopdf_browser::locate::{SystemEnvironment, locate};
-use rchtmltopdf_browser::placeholder::Clock;
 use rchtmltopdf_browser::plan::{self, Plan};
 use rchtmltopdf_browser::render::Progress;
 use rchtmltopdf_core::settings::{ObjectKind, Settings};
@@ -23,6 +23,7 @@ pub enum ConvertError {
     Input(input::InputError),
     Output(output::OutputError),
     Browser(rchtmltopdf_browser::Error),
+    Pdf(rchtmltopdf_pdf::Error),
 }
 
 impl fmt::Display for ConvertError {
@@ -32,6 +33,7 @@ impl fmt::Display for ConvertError {
             ConvertError::Input(error) => write!(f, "{error}"),
             ConvertError::Output(error) => write!(f, "{error}"),
             ConvertError::Browser(error) => write!(f, "{error}"),
+            ConvertError::Pdf(error) => write!(f, "{error}"),
         }
     }
 }
@@ -47,6 +49,12 @@ impl From<input::InputError> for ConvertError {
 impl From<output::OutputError> for ConvertError {
     fn from(error: output::OutputError) -> Self {
         ConvertError::Output(error)
+    }
+}
+
+impl From<rchtmltopdf_pdf::Error> for ConvertError {
+    fn from(error: rchtmltopdf_pdf::Error) -> Self {
+        ConvertError::Pdf(error)
     }
 }
 
@@ -82,7 +90,7 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
     // happens. The page halves are rebuilt from the same functions below rather
     // than passed down, so a test can hold the option table to what a conversion
     // would actually do (D27).
-    let plan = Plan::new(&settings.global, object, Clock::now(), document.url());
+    let plan = Plan::new(&settings.global, object, clock::now(), document.url());
 
     // Two options that cannot always be applied, said before a browser starts
     // because both are facts about the command line and the document rather than
@@ -192,6 +200,20 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             eprintln!("{PROGRAM}: warning: {refusal}");
         }
     }
+
+    // The print call takes the title from the document's own `<title>` and
+    // offers no override, so `--title` can only be honoured by rewriting the
+    // file afterwards. The same pass names the producer and dates the document
+    // (#29).
+    let pdf = rchtmltopdf_pdf::set_metadata(
+        &pdf,
+        &rchtmltopdf_pdf::Metadata {
+            title: settings.global.title.clone(),
+            producer: format!("{PROGRAM} {VERSION}"),
+            creator: format!("{PROGRAM} {VERSION}"),
+            created: clock::now(),
+        },
+    )?;
 
     // Written before the media errors are judged, because D14 says a subresource
     // that failed under `abort` produces the document *and* exits 1. A wrapper

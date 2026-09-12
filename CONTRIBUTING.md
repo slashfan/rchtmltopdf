@@ -76,8 +76,9 @@ entry in the same change.
 
 ## Minimum supported Rust version
 
-1.85, matching `rust-version` in the workspace manifest and verified by CI. Raising it is a
-deliberate decision, not a side effect of reaching for a new language feature.
+1.88, matching `rust-version` in the workspace manifest and verified by CI. Raising it is a
+deliberate decision, not a side effect of reaching for a new language feature — the move from
+1.85 is D30, and it was forced by lopdf rather than chosen for the syntax.
 
 ## Licence
 

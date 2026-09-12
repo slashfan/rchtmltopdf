@@ -5,16 +5,15 @@
 //! says, how much is said at each log level, and the warnings on options that
 //! are recognised and not acted on (D02, D14).
 
-use rchtmltopdf::PROGRAM;
 use rchtmltopdf::apply::apply;
 use rchtmltopdf::convert::convert;
 use rchtmltopdf::table::{OptionSpec, SECTIONS, Support};
 use rchtmltopdf::tokenizer::{Input, ObjectKind, Output, find_meta_option, tokenize};
+use rchtmltopdf::{PROGRAM, VERSION};
 use rchtmltopdf_core::ExitCode;
 use std::io::Write;
 use std::process;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
 
 /// Returns rather than exiting, so every destructor runs: a browser to stop, a

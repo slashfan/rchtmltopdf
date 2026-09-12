@@ -128,6 +128,33 @@ impl Pdf {
         }
     }
 
+    /// One entry from the document's Info dictionary, the way a reader shows it.
+    ///
+    /// Decodes the two string encodings a PDF has: Latin-1, or UTF-16 big endian
+    /// when the byte order mark says so. A title with an accent in it is written
+    /// the second way, and reading it the first way would pass a test while
+    /// showing mojibake to everybody else.
+    pub fn info(&self, key: &str) -> Option<String> {
+        let entry = self.document.trailer.get(b"Info").ok()?;
+        let dictionary = match entry {
+            Object::Reference(id) => self.document.get_dictionary(*id).ok()?,
+            Object::Dictionary(dictionary) => dictionary,
+            _ => return None,
+        };
+
+        let bytes = dictionary.get(key.as_bytes()).ok()?.as_str().ok()?;
+        if bytes.starts_with(&[0xFE, 0xFF]) {
+            let units: Vec<u16> = bytes[2..]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|pair| u16::from_be_bytes(*pair))
+                .collect();
+            return Some(String::from_utf16_lossy(&units));
+        }
+        Some(bytes.iter().map(|byte| *byte as char).collect())
+    }
+
     /// Every character on every page, in reading order.
     ///
     /// Used for a sentinel, not for layout. Extraction inserts its own

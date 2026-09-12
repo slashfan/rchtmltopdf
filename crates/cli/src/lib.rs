@@ -17,6 +17,9 @@
 /// different program depending on which module wrote it.
 pub const PROGRAM: &str = "rchtmltopdf";
 
+/// This program's version, as the PDF's Producer will name it.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod apply;
 pub mod convert;
 pub mod input;

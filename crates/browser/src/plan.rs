@@ -37,7 +37,8 @@ use crate::band::{self, Edge};
 use crate::file_access::{self, Policy};
 use crate::intercept::{Charset, Credentials, Rules};
 use crate::launch::LaunchOptions;
-use crate::placeholder::{Clock, Context};
+use crate::placeholder::Context;
+use rchtmltopdf_core::Clock;
 use rchtmltopdf_core::settings::{
     GlobalSettings, LoadSettings, MediaType, ObjectSettings, PageSetup, WebSettings,
 };

@@ -34,8 +34,8 @@ use rchtmltopdf::apply::apply;
 use rchtmltopdf::table::Scope;
 use rchtmltopdf::table::{self, OptionSpec, Support};
 use rchtmltopdf::tokenizer::tokenize;
-use rchtmltopdf_browser::placeholder::Clock;
 use rchtmltopdf_browser::plan::Plan;
+use rchtmltopdf_core::Clock;
 use rchtmltopdf_core::settings::Settings;
 use support::{line_shaped, section_of};
 

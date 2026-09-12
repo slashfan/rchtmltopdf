@@ -9,9 +9,9 @@
 
 use base64::Engine;
 use rchtmltopdf_browser::cdp::framing::{Framed, frame};
-use rchtmltopdf_browser::placeholder::Clock;
 use rchtmltopdf_browser::plan::Plan;
 use rchtmltopdf_browser::{Client, Error, Page};
+use rchtmltopdf_core::Clock;
 use rchtmltopdf_core::settings::{GlobalSettings, ObjectSettings};
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
