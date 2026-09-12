@@ -245,7 +245,7 @@ fn the_load_and_web_options_land_where_they_belong() {
     assert!(object.web.local_file_access);
     assert_eq!(object.web.encoding.as_deref(), Some("UTF-8"));
     assert_eq!(object.web.minimum_font_size, Some(9));
-    assert_eq!(object.web.viewport, Some((1280, 1024)));
+    assert_eq!(object.web.viewport, (1280, 1024));
     assert_eq!(object.web.username.as_deref(), Some("bob"));
     assert_eq!(object.web.password.as_deref(), Some("hunter2"));
     assert_eq!(object.web.custom_headers[0].name, "X-A");

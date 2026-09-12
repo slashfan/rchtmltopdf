@@ -33,10 +33,35 @@ pub const FAMILY: &str = "Conformance Sans";
 
 /// Wrap a body in a document that brings its own font.
 pub fn document(body: &str) -> String {
+    format!("{}{body}</body></html>\n", head(Some("utf-8")))
+}
+
+/// The same document with **no charset declaration**, as bytes.
+///
+/// For asking what `--encoding` does, which a document that declares its own
+/// charset answers by itself. Bytes rather than a string, because the whole
+/// point is content that is not valid in the encoding it will be read as.
+///
+/// The font still travels inside it, so a page count is still a function of the
+/// pinned Chromium: the `data:` URI is ASCII and survives being decoded as
+/// anything.
+pub fn undeclared(body: &[u8]) -> Vec<u8> {
+    let mut document = head(None).into_bytes();
+    document.extend_from_slice(body);
+    document.extend_from_slice(b"</body></html>\n");
+    document
+}
+
+/// Everything up to and including `<body>`, with or without a charset.
+fn head(charset: Option<&str>) -> String {
     let font = base64::engine::general_purpose::STANDARD.encode(FONT);
+    let declaration = match charset {
+        Some(name) => format!("<meta charset=\"{name}\">"),
+        None => String::new(),
+    };
     format!(
         "<!doctype html>\n\
-         <html><head><meta charset=\"utf-8\"><title>conformance</title><style>\n\
+         <html><head>{declaration}<title>conformance</title><style>\n\
          @font-face {{\n  \
            font-family: \"{FAMILY}\";\n  \
            src: url(data:font/woff2;base64,{font}) format(\"woff2\");\n  \
@@ -49,8 +74,13 @@ pub fn document(body: &str) -> String {
             a margin assertion measures what was asked for. */\n\
          body {{ margin: 0; }}\n\
          </style></head>\n\
-         <body>{body}</body></html>\n"
+         <body>"
     )
+}
+
+/// Base64, for a fixture that needs to carry something inline.
+pub fn base64(bytes: &[u8]) -> String {
+    base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
 /// Write a document to a file and hand back its path.
@@ -141,6 +171,24 @@ mod tests {
             !html.contains("sans-serif") && !html.contains("serif,"),
             "no fallback family may appear"
         );
+    }
+
+    /// The charset is the one thing that differs, because it is the one thing
+    /// `--encoding` is asked about. Everything else has to match, or the two
+    /// fixtures would not be measuring the same document.
+    #[test]
+    fn the_undeclared_document_differs_only_in_the_declaration() {
+        let declared = document("<p>x</p>");
+        let undeclared = String::from_utf8(undeclared(b"<p>x</p>")).unwrap();
+
+        assert!(declared.contains("<meta charset=\"utf-8\">"));
+        assert!(!undeclared.contains("charset"));
+        assert_eq!(
+            declared.replace("<meta charset=\"utf-8\">", ""),
+            undeclared,
+            "the two should be the same document otherwise"
+        );
+        assert!(undeclared.contains("data:font/woff2;base64,"));
     }
 
     #[test]

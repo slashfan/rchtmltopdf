@@ -99,9 +99,15 @@ pub struct Plan {
     pub print: Command,
     /// The bound over the whole of the above (D16). `None` is `--timeout 0`.
     pub deadline: Option<Duration>,
+    /// What to read a local document as, from `--encoding`.
+    ///
+    /// Like the file policy below, only half decided here: a document fetched
+    /// over http or https is read as its server said and this does not apply.
+    pub encoding: Option<String>,
     /// Which local files the document may read (D10).
     ///
-    /// The only half of a conversion the settings do not finish deciding. What a
+    /// One of the two halves of a conversion the settings do not finish
+    /// deciding. What a
     /// policy does depends on the document it is bound to — whether that
     /// document is itself local, and where it sits — and the document is
     /// resolved after the settings are read, because standard input becomes a
@@ -118,6 +124,7 @@ impl Plan {
             load: LoadPlan::new(&object.load),
             print: print(&global.page, &object.web),
             deadline: global.timeout,
+            encoding: object.web.encoding.clone(),
             file_access: file_access(&object.web),
         }
     }
@@ -137,6 +144,10 @@ pub fn launch(global: &GlobalSettings, object: &ObjectSettings) -> LaunchOptions
         no_sandbox: global.browser.no_sandbox,
         extra_args: global.browser.extra_args.clone(),
         allow_slow_scripts: !object.load.stop_slow_scripts,
+        // Blink settings rather than protocol commands, so they have to be
+        // decided before the browser starts rather than before the page loads.
+        minimum_font_size: object.web.minimum_font_size,
+        no_images: !object.web.images,
         ..LaunchOptions::default()
     }
 }
@@ -150,6 +161,7 @@ pub fn prepare(web: &WebSettings) -> Vec<Command> {
         Command::new("Page.enable", Value::Null),
         Command::new("Network.enable", Value::Null),
         emulate_media(web),
+        viewport(web),
     ];
 
     // Only sent when it is being turned off. Chromium runs scripts unless told
@@ -178,6 +190,31 @@ pub fn emulate_media(web: &WebSettings) -> Command {
         MediaType::Print => "print",
     };
     Command::new("Emulation.setEmulatedMedia", json!({ "media": media }))
+}
+
+/// Emulate the window wkhtmltopdf had.
+///
+/// Sent on every conversion and not only when `--viewport-size` was written,
+/// because Chromium's own window is not wkhtmltopdf's 1024 by 768 and a migrated
+/// document's media queries were written against that one (D03).
+///
+/// It does **not** decide the printed layout width. Chromium lays a printed page
+/// out at the content width — about 718 CSS pixels for A4 less 10mm margins — so
+/// a design built for 1024 reflows however this is set. `docs/migration.md`
+/// carries that, because it is the second biggest surprise in a migration.
+pub fn viewport(web: &WebSettings) -> Command {
+    let (width, height) = web.viewport;
+    Command::new(
+        "Emulation.setDeviceMetricsOverride",
+        json!({
+            "width": width,
+            "height": height,
+            // wkhtmltopdf rendered at one device pixel per CSS pixel, and a
+            // desktop browser, not a phone.
+            "deviceScaleFactor": 1,
+            "mobile": false,
+        }),
+    )
 }
 
 /// The print call.
@@ -223,7 +260,7 @@ mod tests {
     }
 
     #[test]
-    fn the_two_domains_are_enabled_before_the_media_is_chosen() {
+    fn the_two_domains_are_enabled_before_anything_is_expected_of_them() {
         let commands = prepare(&WebSettings::default());
         let methods: Vec<&str> = commands.iter().map(|command| command.method).collect();
         assert_eq!(
@@ -231,9 +268,45 @@ mod tests {
             [
                 "Page.enable",
                 "Network.enable",
-                "Emulation.setEmulatedMedia"
+                "Emulation.setEmulatedMedia",
+                "Emulation.setDeviceMetricsOverride",
             ]
         );
+    }
+
+    /// Sent on every conversion, not only when `--viewport-size` was written:
+    /// Chromium's own window is not the one a migrated document was written
+    /// against (D03).
+    #[test]
+    fn the_window_is_the_one_wkhtmltopdf_emulated_unless_asked_otherwise() {
+        let default = viewport(&WebSettings::default());
+        assert_eq!(default.params["width"], json!(1024));
+        assert_eq!(default.params["height"], json!(768));
+
+        let asked = viewport(&WebSettings {
+            viewport: (1280, 1024),
+            ..WebSettings::default()
+        });
+        assert_eq!(asked.params["width"], json!(1280));
+        // One device pixel per CSS pixel, and not a phone.
+        assert_eq!(asked.params["deviceScaleFactor"], json!(1));
+        assert_eq!(asked.params["mobile"], json!(false));
+    }
+
+    /// Both are Blink settings, so they are decided before the browser starts
+    /// rather than before the page loads.
+    #[test]
+    fn the_font_floor_and_images_are_launch_decisions() {
+        let global = GlobalSettings::default();
+        let mut object = page_object();
+        assert_eq!(launch(&global, &object).minimum_font_size, None);
+        assert!(!launch(&global, &object).no_images);
+
+        object.web.minimum_font_size = Some(9);
+        object.web.images = false;
+        let options = launch(&global, &object);
+        assert_eq!(options.minimum_font_size, Some(9));
+        assert!(options.no_images);
     }
 
     /// D03: Chromium's default is the other one, so this is sent on every print

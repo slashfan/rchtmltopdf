@@ -20,9 +20,29 @@
 use crate::cdp::Session;
 use crate::error::Result;
 use crate::file_access::{FileAccess, Verdict};
+use base64::Engine;
 use serde_json::{Value, json};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
+
+/// A document to answer ourselves, so it is read as the charset asked for.
+///
+/// `--encoding` tells the renderer what a document that does not declare a
+/// charset is written in. There is no protocol command for that and no launch
+/// switch either — `--default-encoding` was tried and does nothing — so the only
+/// way in is to answer the document's own request with a `Content-Type` that
+/// says so. The URL is unchanged, so every relative link in the document still
+/// resolves against where the file actually is.
+#[derive(Debug, Clone)]
+pub struct Charset {
+    /// The document's URL: the one request this applies to.
+    pub url: String,
+    /// Where to read the bytes from.
+    pub path: PathBuf,
+    /// What to tell the browser they are.
+    pub name: String,
+}
 
 /// Interception, for as long as this is held.
 #[derive(Debug)]
@@ -66,8 +86,24 @@ impl Drop for Interception {
 /// Returns `None` when the policy could never refuse anything, in which case
 /// interception is not installed and every request keeps the round trip it would
 /// have paid to be waved through.
-pub async fn install(session: &Session, access: FileAccess) -> Result<Option<Interception>> {
-    if !access.polices_anything() {
+pub async fn install(
+    session: &Session,
+    access: FileAccess,
+    serve_as: Option<Charset>,
+) -> Result<Option<Interception>> {
+    // Read once, up front, rather than inside the handler: the answer is the
+    // same every time and a failure here is better than a half-answered request.
+    // An unreadable document is left to load itself; it will fail on its own and
+    // say so better than this could.
+    let document = serve_as.and_then(|charset| {
+        let body = std::fs::read(&charset.path).ok()?;
+        Some((
+            charset,
+            base64::engine::general_purpose::STANDARD.encode(body),
+        ))
+    });
+
+    if !access.polices_anything() && document.is_none() {
         return Ok(None);
     }
 
@@ -91,6 +127,28 @@ pub async fn install(session: &Session, access: FileAccess) -> Result<Option<Int
                 .and_then(|request| request.get("url"))
                 .and_then(Value::as_str)
                 .unwrap_or_default();
+
+            // The document itself, answered with the charset that was asked for
+            // rather than fetched and guessed at.
+            if let Some((charset, body)) = &document {
+                if url == charset.url {
+                    let _ = answering
+                        .send(
+                            "Fetch.fulfillRequest",
+                            json!({
+                                "requestId": id,
+                                "responseCode": 200,
+                                "responseHeaders": [{
+                                    "name": "Content-Type",
+                                    "value": format!("text/html; charset={}", charset.name),
+                                }],
+                                "body": body,
+                            }),
+                        )
+                        .await;
+                    continue;
+                }
+            }
 
             // Errors are dropped on purpose. A request whose page navigated away
             // can no longer be answered, and that is not a reason to stop

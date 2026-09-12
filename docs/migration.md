@@ -28,13 +28,28 @@ Si votre document était calé avec `--zoom 1.3` pour compenser le shrinking, re
 
 ## Le point numéro deux : viewport contre largeur d'impression
 
-`--viewport-size` agit sur les media queries et sur ce que lisent vos scripts
-(`window.innerWidth`), mais **pas** sur la largeur de mise en page imprimée. Chromium
-compose la page à la largeur du contenu : en A4 avec 10 mm de marges, cela fait 190 mm,
-soit environ 718 px CSS.
+`--viewport-size` agit sur ce que lisent vos scripts (`window.innerWidth`), et **pas** sur
+la largeur de mise en page imprimée. Chromium compose la page à la largeur du contenu : en
+A4 avec 10 mm de marges, cela fait 190 mm, soit environ 718 px CSS.
 
-Une maquette conçue pour un viewport de 1024 px se reflow donc à l'impression. C'est la
-deuxième surprise la plus fréquente après le smart shrinking.
+**Ni sur les media queries, à l'impression.** Mesuré plutôt que déduit : la même fixture
+avec `@media (min-width: 1200px)` produit le même document à 1024 et à 1280 de viewport,
+parce qu'une page imprimée est composée à la largeur du papier et que la requête est
+évaluée contre celle-là. Une mise en page qui dépend d'une media query se reflow donc à
+l'impression quel que soit le viewport. C'est la deuxième surprise la plus fréquente après
+le smart shrinking.
+
+Le viewport par défaut est celui de wkhtmltopdf, **1024 × 768**, appliqué à chaque
+conversion : celui de Chromium n'est pas le même, et une maquette migrée a été écrite
+contre le premier (D03).
+
+## `--encoding` et les documents distants
+
+`--encoding` dit dans quel jeu de caractères lire un document qui ne le déclare pas. Il
+s'applique aux fichiers locaux et à l'entrée standard, que nous servons nous-mêmes au
+navigateur avec le bon `Content-Type`. Un document récupéré en http ou https est lu comme
+son serveur l'a annoncé : il n'y a aucun endroit où intervenir, et l'option est alors
+signalée comme sans effet plutôt qu'acceptée en silence.
 
 ## Média par défaut
 

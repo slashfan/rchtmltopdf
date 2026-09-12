@@ -51,7 +51,8 @@ pub fn placeholder(spec: &OptionSpec, name: &str) -> &'static str {
     // their value "size" and want different shapes, and "level" is a number for
     // one option and a word for another.
     match spec.long {
-        "viewport-size" => return "1024x768",
+        // Not 1024x768: that is the default, and asking for it proves nothing.
+        "viewport-size" => return "1280x1024",
         // Not A4, which is the default, and not info, which is the default.
         "page-size" => return "Letter",
         "log-level" => return "error",

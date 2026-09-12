@@ -227,7 +227,7 @@ pub fn apply_object(
         "zoom" => web.zoom = number(occurrence)?,
         "encoding" => web.encoding = Some(value(occurrence).to_string()),
         "minimum-font-size" => web.minimum_font_size = Some(number(occurrence)?),
-        "viewport-size" => web.viewport = Some(viewport(occurrence)?),
+        "viewport-size" => web.viewport = viewport(occurrence)?,
         "user-style-sheet" => web.user_style_sheet = Some(value(occurrence).to_string()),
 
         // --- reaching the document -------------------------------------------

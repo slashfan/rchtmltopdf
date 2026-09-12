@@ -7,6 +7,7 @@
 use crate::{PROGRAM, input, output};
 use rchtmltopdf_browser::Browser;
 use rchtmltopdf_browser::deadline;
+use rchtmltopdf_browser::file_access;
 use rchtmltopdf_browser::intercept;
 use rchtmltopdf_browser::locate::{SystemEnvironment, locate};
 use rchtmltopdf_browser::plan::Plan;
@@ -76,6 +77,24 @@ pub async fn convert(settings: &Settings) -> Result<(), ConvertError> {
     // would actually do (D27).
     let plan = Plan::new(&settings.global, object);
 
+    // `--encoding` says how to read a document that does not declare a charset.
+    // There is no protocol command for it and no launch switch, so the only way
+    // in is to answer the document's own request with a Content-Type that says
+    // so — which is possible only for a document we can read ourselves.
+    let serve_as = plan.encoding.as_ref().and_then(|name| {
+        file_access::local_path(document.url()).map(|path| intercept::Charset {
+            url: document.url().to_string(),
+            path,
+            name: name.clone(),
+        })
+    });
+    if plan.encoding.is_some() && serve_as.is_none() && settings.global.log_level.shows_warnings() {
+        eprintln!(
+            "{PROGRAM}: warning: --encoding does not apply to a document fetched over the \
+             network; it is read as the server said it should be"
+        );
+    }
+
     let progress = Progress::new();
     // The browser is created inside the deadline, so expiry drops it and its Drop
     // stops the process group and removes the profile. Cleanup is not a step that
@@ -86,8 +105,12 @@ pub async fn convert(settings: &Settings) -> Result<(), ConvertError> {
 
         // Before anything is fetched, the document included: the policy has to
         // be in place for the first request, not the second (D10).
-        let policing =
-            intercept::install(page.session(), plan.file_access.about(document.url())).await?;
+        let policing = intercept::install(
+            page.session(),
+            plan.file_access.about(document.url()),
+            serve_as,
+        )
+        .await?;
 
         page.prepare(&object.web).await?;
         page.load(document.url(), &object.load, &progress).await?;
