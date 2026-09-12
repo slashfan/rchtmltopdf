@@ -32,7 +32,9 @@ protect a number nobody had asked for and moving the number (D30).
 **The finished file says what it is.** `--title` sets the document's title, the producer names
 this program and its version, and the document carries a valid PDF creation date. The print
 call takes the title from the document's own `<title>` and offers no override, so the only way
-to honour the option is to rewrite the file afterwards.
+to honour the option is to rewrite the file afterwards. **Without the option the document keeps
+the title it had**: the browser derived it from the `<title>` element, and for most documents
+that is the only title there will ever be.
 
 That rewrite is the first real code in `crates/pdf`, and it matters more than it looks: it
 establishes the read, modify, write path the V2 header overlay and the multi-document merge
