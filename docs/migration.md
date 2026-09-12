@@ -23,8 +23,18 @@ elles n'aident pas et brouillent le diagnostic.
 ```
 
 **Option à recalibrer.** `--zoom` est honoré et traduit en facteur d'échelle à l'impression.
-Si votre document était calé avec `--zoom 1.3` pour compenser le shrinking, repartez de
-`--zoom 1` et ajustez.
+Mesuré plutôt qu'annoncé : un bloc de 50 mm sort à 50 mm sans option, à 65 mm avec
+`--zoom 1.3`, à 25 mm avec `--zoom 0.5`. Le facteur est exactement celui demandé.
+
+**Le zoom agrandit le contenu, pas le papier.** Le format de page reste celui de
+`--page-size`. En pratique cela veut dire que ce qui est dimensionné en `mm`, `cm`, `pt` ou
+`in` grandit, et que ce qui est dimensionné en pourcentage garde sa largeur : Chromium
+compose la page à une largeur CSS divisée par le zoom, puis met l'ensemble à l'échelle.
+
+**Procédure.** Repartez de `--zoom 1`, sans exception : une valeur héritée d'un calage
+wkhtmltopdf compense un comportement qui n'existe plus, et l'empiler sur le nouveau rendu
+donne un résultat deux fois décalé. Comparez ensuite une page de référence, et n'ajustez que
+si l'écart gêne.
 
 ## Le point numéro deux : viewport contre largeur d'impression
 
@@ -67,6 +77,18 @@ davantage ici.
 
 Si une différence vous bloque, ouvrez un rapport de compatibilité. Le formulaire demande la
 sortie de `--dump-parse`, qui résout la plupart des cas immédiatement.
+
+## Checklist
+
+1. Retirer `--dpi`, `--image-dpi`, `--disable-smart-shrinking`, `--enable-smart-shrinking`.
+2. Remettre `--zoom` à 1 avant toute comparaison.
+3. Vérifier que les media queries et les scripts ne dépendent pas d'une largeur de fenêtre
+   pour la mise en page : à l'impression, c'est la largeur du papier qui décide.
+4. Ajouter `--enable-local-file-access`, ou `--allow <dossier>`, si le document lit des
+   fichiers locaux — ce n'est plus permis par défaut, et c'est délibéré (D10).
+5. Lancer une conversion avec `--dump-parse` pour vérifier que la ligne de commande est lue
+   comme prévu.
+6. Comparer un document de référence, pas une capture d'écran.
 
 ## Options sans équivalent
 

@@ -49,6 +49,12 @@ now it is always the default.
 every conversion** rather than whatever Chromium's is, because that is what a migrated
 document's scripts were written against (D03).
 
+**`--zoom` is measured rather than asserted.** A block of 50mm comes out at 50mm with no
+option, 65mm at `--zoom 1.3` and 25mm at `--zoom 0.5`, and the paper does not move. The four
+options that used to do this job in wkhtmltopdf — `--dpi`, `--image-dpi` and both smart
+shrinking flags — are accepted, warn, point at the migration guide, and change nothing that
+is printed. `docs/migration.md` now carries the recalibration procedure and a checklist.
+
 ### Security
 
 **A document can no longer read the disk it is rendered on.** `--enable-local-file-access`,
