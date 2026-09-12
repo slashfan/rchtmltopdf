@@ -212,6 +212,16 @@ Le nombre d'approbations requises est **0**. Un mainteneur seul ne peut pas appr
 
 **Écarté.** Construire la surface de lecture dans `crates/pdf` dès #17 ; lire les objets PDF à la main dans les tests.
 
+## D26 — Placement des options : trois règles, pas une
+
+**Choix.** Une option globale n'est acceptée qu'avant la première entrée ; une option d'objet partout ; une option de table des matières uniquement après un objet `toc`. Ailleurs, c'est une erreur qui nomme l'option et l'endroit où elle devait être. Nos propres options (`Support::Extension`) restent acceptées partout.
+
+**Pourquoi.** Vérifié en exécutant wkhtmltopdf 0.12.6.1, pas déduit de son aide, qui ne l'écrit nulle part. Le binaire réel répond `<option> specified in incorrect location` et sort en 1 dans chacun de ces cas — y compris pour une option `toc` écrite dans la zone globale, ce qui fait qu'une option `toc` n'est pas une option d'objet avec un nom plus long. Auparavant `--toc-header-text` écrit après un objet `page` s'attachait silencieusement à cette page.
+
+**Deux écarts assumés.** Une option globale écrite entre le mot-clé `page` et son entrée : 0.12.6.1 ne diagnostique rien, il détraque la ligne — `page --copies 2 in.html` part charger `http://2` — et nous refusons, parce que refuser est la moins mauvaise des deux façons de s'en écarter. Et nos options d'extension ne sont pas sensibles à la position : elles ne portent aucun contrat de compatibilité, et `--dump-parse` est une aide au débogage que l'on ajoute au bout d'une ligne déjà écrite.
+
+**Écarté.** Traiter `Scope::Toc` comme `Scope::Object` ; accepter les options globales partout, qui était le comportement précédent ; reproduire le ratage de 0.12.6.1 sur `page --option`.
+
 ---
 
 ## Conséquences transverses
@@ -225,11 +235,19 @@ Le nombre d'approbations requises est **0**. Un mainteneur seul ne peut pas appr
 
 ## Risques ouverts
 
-### R01 — La table d'options n'a pas été confrontée à un binaire réel
+### R01 — La table d'options n'a pas été confrontée à un binaire réel *(résolu)*
 
 `crates/cli/src/table.rs` a été écrite à partir de l'aide documentée de wkhtmltopdf 0.12.6, sans binaire disponible sur la machine de développement. Deux points sont les plus susceptibles d'être faux :
 
 * les alias courts (`-s`, `-O`, `-T`, `-B`, `-L`, `-R`, `-d`, `-p`, `-n`, `-g`, `-l`, `-q`, `-H`, `-V`, `-h`) ;
 * la frontière exacte entre options globales et options par objet.
 
-À faire avant V1 : exécuter `wkhtmltopdf --extended-help` sur un binaire 0.12.6, diffuser la sortie dans un test de conformité, et réconcilier. Tant que ce n'est pas fait, la table est une hypothèse documentée, pas une référence.
+**Résolu (#18).** `wkhtmltopdf 0.12.6.1 (with patched qt)` a été exécuté dans un conteneur, son `--extended-help` est versionné à `crates/cli/tests/fixtures/`, et `reference_help.rs` tient la table dessus à chaque exécution des tests.
+
+Le verdict dément la moitié de la crainte. Les 122 options étaient toutes présentes, **tous les alias courts étaient corrects**, toutes les arités aussi. Trois écarts seulement :
+
+* `--cookie-jar` était classée option d'objet alors qu'elle est globale ;
+* `--redirect-delay` figurait dans la table et n'existe pas en 0.12.6.1 ;
+* les règles de *placement* sont au nombre de trois et pas d'une (D26), ce qui était le vrai risque et n'était pas celui qui avait été écrit ici.
+
+La table n'est plus une hypothèse. Elle ne peut plus dériver sans qu'un test échoue.

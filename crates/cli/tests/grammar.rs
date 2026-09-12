@@ -123,9 +123,15 @@ fn the_invoice_command_from_the_brief() {
 
 // --- scope ------------------------------------------------------------------
 
+/// Global options collect in one bucket, whichever object follows them.
+///
+/// This test used to be called `global_options_are_global_wherever_they_sit`
+/// and wrote them *after* the first input to prove the point. That is a command
+/// line 0.12.6.1 refuses — see `a_global_option_belongs_before_the_first_input`
+/// — so the premise was wrong, and only the half that is true survives.
 #[test]
-fn global_options_are_global_wherever_they_sit() {
-    let parsed = parse("a.html --page-size Letter b.html --orientation Landscape out.pdf");
+fn global_options_collect_in_one_bucket() {
+    let parsed = parse("--page-size Letter --orientation Landscape a.html b.html out.pdf");
     assert_eq!(names(&parsed.globals), ["page-size", "orientation"]);
     assert!(
         parsed
@@ -267,12 +273,15 @@ fn occurrence_index_points_at_the_option_not_its_value() {
 
 #[test]
 fn occurrence_index_is_right_for_flags_and_inline_values() {
-    // argv: 0 a.html  1 --quiet  2 --page-size=A4  3 out.pdf
-    let parsed = parse("a.html --quiet --page-size=A4 out.pdf");
+    // argv: 0 --quiet  1 --page-size=A4  2 a.html  3 out.pdf
+    //
+    // Both are global options, so they go before the input. Written after it,
+    // as this test once had them, 0.12.6.1 refuses the line.
+    let parsed = parse("--quiet --page-size=A4 a.html out.pdf");
     assert_eq!(parsed.globals[0].as_written, "--quiet");
-    assert_eq!(parsed.globals[0].index, 1);
+    assert_eq!(parsed.globals[0].index, 0);
     assert_eq!(parsed.globals[1].as_written, "--page-size");
-    assert_eq!(parsed.globals[1].index, 2);
+    assert_eq!(parsed.globals[1].index, 1);
 }
 
 #[test]
@@ -481,4 +490,119 @@ fn help_still_works_on_an_otherwise_broken_command_line() {
 #[test]
 fn a_file_named_like_a_meta_option_is_not_one() {
     assert_eq!(meta("-- --help out.pdf"), None);
+}
+
+// --- where an option may be written (verified against 0.12.6.1) --------------
+//
+// wkhtmltopdf's grammar has three placement rules, not one, and they were found
+// by running the real binary rather than by reading the help:
+//
+//   global options   only before the first input, bare or keyword-introduced
+//   page options     anywhere
+//   toc options      only after a `toc` object
+//
+// The real binary answers all three with `<option> specified in incorrect
+// location` and exit 1. Before this, all three were accepted, and a misplaced
+// `--toc-header-text` silently attached itself to whichever page preceded it.
+
+#[test]
+fn a_global_option_belongs_before_the_first_input() {
+    // Where it belongs.
+    assert!(tokenize(split("--copies 2 in.html out.pdf")).is_ok());
+
+    // The global area ends at the first input, whether or not `page` was
+    // written: `in.html --copies 2` is refused by the real binary.
+    for line in [
+        "in.html --copies 2 out.pdf",
+        "page in.html --copies 2 out.pdf",
+        "in.html --copies 2 in.html out.pdf",
+        "cover in.html --copies 2 out.pdf",
+    ] {
+        assert!(
+            matches!(parse_err(line), ParseError::WrongLocation { .. }),
+            "`{line}` should be refused"
+        );
+    }
+}
+
+/// Outline options are global too, which the section heading does not say.
+#[test]
+fn an_outline_option_is_global() {
+    assert!(tokenize(split("--outline-depth 3 in.html out.pdf")).is_ok());
+    assert!(matches!(
+        parse_err("in.html --outline-depth 3 out.pdf"),
+        ParseError::WrongLocation { .. }
+    ));
+}
+
+/// Page options are the permissive ones: before any object they apply to all of
+/// them, after one they apply to it. Including after a `toc` object, which the
+/// real binary also allows.
+#[test]
+fn a_page_option_may_be_written_anywhere() {
+    for line in [
+        "--disable-javascript in.html out.pdf",
+        "in.html --disable-javascript out.pdf",
+        "page in.html --disable-javascript out.pdf",
+        "toc --disable-javascript out.pdf",
+        "--header-left Hi in.html out.pdf",
+        "in.html --header-left Hi out.pdf",
+    ] {
+        assert!(tokenize(split(line)).is_ok(), "`{line}` should be accepted");
+    }
+}
+
+/// The finding this test was written for. A TOC option is not an object option
+/// with a different name: it is refused in the global area as well as after a
+/// page, and only a `toc` object accepts it.
+#[test]
+fn a_toc_option_belongs_only_to_a_toc_object() {
+    assert!(tokenize(split("toc --toc-header-text Hi out.pdf")).is_ok());
+    assert!(tokenize(split("toc --toc-header-text Hi in.html out.pdf")).is_ok());
+
+    for line in [
+        "--toc-header-text Hi in.html out.pdf",
+        "in.html --toc-header-text Hi out.pdf",
+        "page in.html --toc-header-text Hi out.pdf",
+        // After a toc object, but a page object has since taken over.
+        "toc in.html --toc-header-text Hi out.pdf",
+    ] {
+        assert!(
+            matches!(parse_err(line), ParseError::WrongLocation { .. }),
+            "`{line}` should be refused"
+        );
+    }
+}
+
+/// Our own options are ours, and carry no compatibility contract, so they are
+/// accepted wherever they are written. `--dump-parse` in particular is a
+/// debugging aid that people append to a line they have already typed.
+#[test]
+fn our_own_options_are_not_position_sensitive() {
+    for line in [
+        "--timeout 5 in.html out.pdf",
+        "in.html --timeout 5 out.pdf",
+        "in.html out.pdf --dump-parse",
+        "page in.html --no-sandbox out.pdf",
+    ] {
+        assert!(tokenize(split(line)).is_ok(), "`{line}` should be accepted");
+    }
+}
+
+/// The message has to name the option as written and say where it belongs,
+/// because "incorrect location" on its own sends people to the manual.
+#[test]
+fn a_misplaced_option_says_where_it_belongs() {
+    let error = parse_err("in.html --copies 2 out.pdf");
+    let message = error.to_string();
+    assert!(message.contains("--copies"), "{message}");
+    assert!(
+        message.contains("before the first"),
+        "should say where it belongs: {message}"
+    );
+
+    let error = parse_err("in.html --toc-header-text Hi out.pdf");
+    let message = error.to_string();
+    assert!(message.contains("--toc-header-text"), "{message}");
+    assert!(message.contains("toc"), "{message}");
 }

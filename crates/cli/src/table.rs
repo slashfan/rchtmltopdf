@@ -7,12 +7,19 @@
 //!
 //! # Provenance
 //!
-//! This table was written from wkhtmltopdf 0.12.6's documented `--extended-help`
-//! output, section by section. It has **not** yet been diffed against a real
-//! binary, because none was available on the machine where it was written.
-//! Before V1 ships, run a real `wkhtmltopdf --extended-help` and reconcile:
-//! short flags and the exact division between global and per-object scope are
-//! the two things most likely to be wrong.
+//! Reconciled against a real **wkhtmltopdf 0.12.6.1 (with patched qt)**, whose
+//! verbatim `--extended-help` is committed at
+//! `tests/fixtures/wkhtmltopdf-0.12.6.1-extended-help.txt`. `reference_help.rs`
+//! holds every entry here to it — long name, short alias, arity, scope and
+//! section — so this table can no longer drift from the program it imitates,
+//! and an option wkhtmltopdf does not have cannot be added without a test
+//! failing.
+//!
+//! The reconciliation found less than feared, and something worse than expected.
+//! All 122 options were present, every short alias was right and every arity was
+//! right. But `--cookie-jar` was filed as an object option when it is global,
+//! `--redirect-delay` was listed and does not exist in 0.12.6.1, and the
+//! *placement* rules turned out to be three rules rather than one (D26).
 
 use std::fmt;
 
@@ -147,6 +154,14 @@ pub const GENERAL_OPTIONS: &[OptionSpec] = &[
         Global,
         Planned(V2),
         "Do not collate when printing multiple copies",
+    ),
+    OptionSpec::new(
+        "cookie-jar",
+        None,
+        Global,
+        Planned(V2),
+        &["path"],
+        "Read and write cookies from and to the supplied cookie jar file",
     ),
     OptionSpec::new(
         "copies",
@@ -438,14 +453,6 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
     )
     .repeats(),
     OptionSpec::new(
-        "cookie-jar",
-        None,
-        Object,
-        Planned(V2),
-        &["path"],
-        "Read and write cookies from and to the supplied cookie jar file",
-    ),
-    OptionSpec::new(
         "custom-header",
         None,
         Object,
@@ -726,14 +733,6 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         NoEquivalent("Chromium renders form controls itself"),
         &["path"],
         "Use this SVG file when rendering unchecked radiobuttons",
-    ),
-    OptionSpec::new(
-        "redirect-delay",
-        None,
-        Object,
-        NoEquivalent("wkhtmltopdf itself ignores this option"),
-        &["msec"],
-        "Wait some milliseconds for js-redirects (deprecated, does nothing)",
     ),
     OptionSpec::flag(
         "resolve-relative-links",

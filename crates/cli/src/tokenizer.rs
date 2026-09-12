@@ -101,6 +101,25 @@ pub enum ParseError {
     },
     /// Fewer than one input and one output.
     NotEnoughArguments,
+    /// An option written somewhere its scope does not allow.
+    WrongLocation {
+        as_written: String,
+        belongs: Placement,
+        index: usize,
+    },
+}
+
+/// Where a misplaced option should have gone.
+///
+/// wkhtmltopdf has three placement rules, not one, and they were established by
+/// running 0.12.6.1 rather than by reading its help, which does not spell them
+/// out. Page options go anywhere; the other two are constrained.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Placement {
+    /// Before the first input, bare or introduced by `page`, `cover` or `toc`.
+    GlobalArea,
+    /// Immediately after a `toc` object, and before any later object.
+    TocObject,
 }
 
 impl fmt::Display for ParseError {
@@ -133,6 +152,22 @@ impl fmt::Display for ParseError {
             ParseError::NotEnoughArguments => write!(
                 f,
                 "You need to specify at least one input file, and exactly one output file"
+            ),
+            ParseError::WrongLocation {
+                as_written,
+                belongs: Placement::GlobalArea,
+                ..
+            } => write!(
+                f,
+                "{as_written} is a global option, so it must be written before the first input"
+            ),
+            ParseError::WrongLocation {
+                as_written,
+                belongs: Placement::TocObject,
+                ..
+            } => write!(
+                f,
+                "{as_written} applies to a table of contents, so it must follow a `toc` object"
             ),
         }
     }
@@ -350,9 +385,44 @@ fn assemble(tokens: Vec<Token>) -> Result<Tokenized, ParseError> {
     for token in tokens {
         match token {
             Token::Opt(occurrence) => {
+                // The global area ends at the first input. A `page`, `cover` or
+                // `toc` keyword ends it too, even before its input has been
+                // read: 0.12.6.1 does not diagnose a global option written
+                // there, it mangles the line — `page --copies 2 in.html` sends
+                // it off to load `http://2` — and refusing is the better of the
+                // two ways to differ from that.
+                let in_global_area = objects.is_empty() && pending_keyword.is_none();
+
+                // Our own options carry no compatibility contract, so they are
+                // accepted wherever they are written. `--dump-parse` in
+                // particular is a debugging aid people append to a line they
+                // have already typed, and making that an error would be a
+                // strictness nobody asked for.
+                let ours = occurrence.spec.support == Support::Extension;
+
                 let bucket = match occurrence.spec.scope {
-                    Scope::Global => &mut globals,
-                    Scope::Object | Scope::Toc => match objects.last_mut() {
+                    Scope::Global if ours || in_global_area => &mut globals,
+                    Scope::Global => {
+                        return Err(ParseError::WrongLocation {
+                            as_written: occurrence.as_written,
+                            belongs: Placement::GlobalArea,
+                            index: occurrence.index,
+                        });
+                    }
+                    Scope::Toc => match objects.last_mut() {
+                        Some(object) if object.kind == ObjectKind::Toc => &mut object.options,
+                        // Refused in the global area as well as after a page,
+                        // which is what makes a TOC option something other than
+                        // an object option with a longer name.
+                        _ => {
+                            return Err(ParseError::WrongLocation {
+                                as_written: occurrence.as_written,
+                                belongs: Placement::TocObject,
+                                index: occurrence.index,
+                            });
+                        }
+                    },
+                    Scope::Object => match objects.last_mut() {
                         Some(object) => &mut object.options,
                         None => &mut defaults,
                     },
