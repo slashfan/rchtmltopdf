@@ -335,6 +335,25 @@ fn the_outline_options_land_where_they_belong() {
 }
 
 #[test]
+fn the_link_options_land_where_they_belong() {
+    let off = settings(
+        "--disable-external-links --disable-internal-links --keep-relative-links a.html out.pdf",
+    );
+    let links = &off.single_object().unwrap().links;
+    assert!(!links.external);
+    assert!(!links.internal);
+    assert!(!links.resolve_relative);
+    assert!(!links.leaves_everything());
+
+    // Each has its opposite, and the last one written wins.
+    let back = settings(
+        "--disable-external-links --enable-external-links --disable-internal-links \
+         --enable-internal-links --keep-relative-links --resolve-relative-links a.html out.pdf",
+    );
+    assert!(back.single_object().unwrap().links.leaves_everything());
+}
+
+#[test]
 fn objects_keep_their_kind_and_a_toc_has_no_input() {
     let settings = settings("cover c.html toc page b.html out.pdf");
     assert_eq!(settings.objects[0].kind, ObjectKind::Cover);

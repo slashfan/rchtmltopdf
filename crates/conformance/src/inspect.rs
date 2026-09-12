@@ -142,6 +142,16 @@ fn decode_text(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| *byte as char).collect()
 }
 
+/// What a link on a page does, as a reader would follow it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Link {
+    /// To a 1-based page of this file. 0 when the destination names a page
+    /// the file does not have, or an anchor the catalog does not know.
+    Internal { page: usize },
+    /// To a URI.
+    External { uri: String },
+}
+
 /// A PDF, opened for inspection.
 pub struct Pdf {
     document: Document,
@@ -236,6 +246,84 @@ impl Pdf {
             .collect();
         self.walk_outline(root, 1, &by_id, &mut out);
         out
+    }
+
+    /// The links on a 1-based page, in the order the page lists them.
+    ///
+    /// A named destination is looked up in the catalog's `Dests` dictionary,
+    /// which is where Chromium writes `<a href="#x">`; an explicit one and a
+    /// `GoTo` action are followed to their page; a `URI` action is read as it
+    /// is. Anything else on the page — a widget, a highlight — is not a link
+    /// and is left out.
+    pub fn links(&self, page: usize) -> Vec<Link> {
+        let id = self.page_id(page);
+        let by_id: std::collections::BTreeMap<ObjectId, usize> = self
+            .document
+            .get_pages()
+            .into_iter()
+            .map(|(number, id)| (id, number as usize))
+            .collect();
+        let page_of = |destination: &Object| -> usize {
+            self.document
+                .dereference(destination)
+                .ok()
+                .and_then(|(_, d)| d.as_array().ok())
+                .and_then(|array| array.first())
+                .and_then(|first| first.as_reference().ok())
+                .and_then(|id| by_id.get(&id).copied())
+                .unwrap_or(0)
+        };
+        let named = |name: &[u8]| -> usize {
+            self.document
+                .catalog()
+                .ok()
+                .and_then(|catalog| catalog.get(b"Dests").ok())
+                .and_then(|dests| self.document.dereference(dests).ok())
+                .and_then(|(_, dests)| dests.as_dict().ok())
+                .and_then(|dests| dests.get(name).ok())
+                .map(page_of)
+                .unwrap_or(0)
+        };
+
+        let Some(annotations) = self
+            .document
+            .get_dictionary(id)
+            .ok()
+            .and_then(|page| page.get(b"Annots").ok())
+            .and_then(|annots| self.document.dereference(annots).ok())
+            .and_then(|(_, annots)| annots.as_array().ok())
+        else {
+            return Vec::new();
+        };
+        annotations
+            .iter()
+            .filter_map(|annotation| self.document.dereference(annotation).ok())
+            .filter_map(|(_, annotation)| annotation.as_dict().ok())
+            .filter(|annotation| {
+                annotation.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Link")
+            })
+            .filter_map(|annotation| {
+                if let Ok(destination) = annotation.get(b"Dest") {
+                    let page = match destination {
+                        Object::Name(name) | Object::String(name, _) => named(name),
+                        other => page_of(other),
+                    };
+                    return Some(Link::Internal { page });
+                }
+                let (_, action) = self.document.dereference(annotation.get(b"A").ok()?).ok()?;
+                let action = action.as_dict().ok()?;
+                match action.get(b"S").and_then(Object::as_name).ok()? {
+                    b"URI" => Some(Link::External {
+                        uri: String::from_utf8_lossy(action.get(b"URI").ok()?.as_str().ok()?)
+                            .into_owned(),
+                    }),
+                    b"GoTo" => Some(Link::Internal {
+                        page: action.get(b"D").ok().map(page_of).unwrap_or(0),
+                    }),
+                    _ => None,
+                }
+            })
+            .collect()
     }
 
     fn walk_outline(

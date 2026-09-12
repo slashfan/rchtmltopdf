@@ -24,6 +24,25 @@ acted on.
 
 ### Added
 
+**Links** (#41). Chromium writes a link annotation for every `<a href>` it prints, and the
+conversion now finishes the job wkhtmltopdf did around them:
+
+- **An anchor survives a merge.** `<a href="#x">` is a named destination resolved through a
+  table in the document's catalog, and the merge drops that catalog. Every name is resolved
+  to the page it meant before the table is left behind, so the link still lands after the
+  pages have moved.
+- **A link to another document of the same conversion is a link into the file**, to the
+  anchor it names or to that document's first page — what wkhtmltopdf called a local link.
+- `--disable-internal-links` drops the links to anchors, in this document or another of the
+  conversion; `--disable-external-links` drops the rest. Both per document.
+- `--keep-relative-links` writes a link that sits below the document's own directory back
+  relative to it, undoing the browser's resolution; the default, `--resolve-relative-links`,
+  leaves it absolute. A link above the directory stays absolute either way.
+
+**`--enable-forms` and `--disable-forms` have no equivalent** (D37). Chromium's print path
+draws a form control as it looks and writes no field behind it — no AcroForm, no widget — so
+there is nothing to turn on or off. Both are accepted with the usual warning.
+
 **The outline** (#40): the bookmarks a reader lists in its sidebar, derived from the
 headings, nested by level, one destination each. On by default as in wkhtmltopdf;
 `--no-outline` leaves it out; `--outline-depth` cuts it, four levels deep by default;

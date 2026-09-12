@@ -350,6 +350,18 @@ L'asymétrie compte aussi. Ne pas l'intégrer laisse les deux options ouvertes �
 
 **Écarté.** Extraire les titres soi-même (voir ci-dessus). Imprimer avec l'outline seulement quand `--outline-depth` vaut sa valeur par défaut, pour économiser la passe : la passe est aussi celle qui lit l'outline pour `--dump-outline`, et deux chemins pour un même résultat sont deux chemins à tester.
 
+## D37 — Liens : ancres résolues avant la fusion, liens entre documents rendus internes, formulaires sans équivalent
+
+**Choix.** Chromium écrit une annotation par `<a href>` : une destination *nommée* pour une ancre du document, résolue par une table `Dests` dans le catalogue, et une action `URI` pour tout le reste, résolue en absolu contre l'URL du document. Le crate `pdf` fait trois choses avec. Avant qu'une fusion abandonne le catalogue, chaque nom est résolu vers la destination explicite qu'il désignait, sur l'annotation même. Un lien `URI` vers un autre document de la même conversion — exactement l'URL contre laquelle ce document a été imprimé, avec ou sans fragment — devient une destination dans le fichier : l'ancre nommée, ou la première page du document. Et `--disable-internal-links` / `--disable-external-links` retirent l'une ou l'autre sorte, par objet ; `--keep-relative-links` réécrit en relatif un lien situé sous le répertoire du document.
+
+`--enable-forms` et `--disable-forms` sont classés sans équivalent : le chemin d'impression de Chromium dessine un contrôle de formulaire tel qu'il s'affiche et n'écrit aucun champ derrière — ni `AcroForm`, ni `Widget` — mesuré sur la 153 épinglée.
+
+**Pourquoi.** Résoudre les noms est ce qui rend la fusion correcte : sans cela, un document fusionné a des liens qui pointent sur rien, et la conversion d'un seul document, qui garde son catalogue, les aurait laissés fonctionner — l'écart le plus discret possible. Rendre internes les liens entre documents est ce que faisait wkhtmltopdf, et c'est l'usage : une table des matières écrite à la main dans un premier document, qui renvoie aux suivants. Une table de noms fusionnée aurait été l'alternative, et deux documents qui définissent `#top` entrent en collision ; une destination explicite sur l'annotation n'a pas ce problème.
+
+**Ce que ça coûte.** `--keep-relative-links` ne peut défaire que ce qu'il reconnaît : un lien résolu *sous* le répertoire du document redevient relatif, un lien vers `../` reste absolu, parce que le navigateur a effacé ce qui était écrit. L'arbre de noms sous `Names`, que la spécification permet et que Chromium n'écrit pas, n'est pas lu. Un lien entre documents dont l'URL diffère de celle d'impression — `b.html` contre `./b.html` sont identiques une fois résolus, mais `B.html` sur un système sensible à la casse ne l'est pas — reste une `URI`.
+
+**Écarté.** Fusionner les tables `Dests` en préfixant les noms par document : plus d'objets pour le même résultat, et un lien entre documents aurait de toute façon dû être réécrit. Produire des champs de formulaire soi-même à partir du DOM : c'est écrire un moteur de formulaires PDF pour une option que wkhtmltopdf lui-même désactivait par défaut.
+
 ---
 
 ## Conséquences transverses

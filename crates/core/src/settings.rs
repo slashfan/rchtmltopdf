@@ -345,6 +345,36 @@ impl Default for WebSettings {
     }
 }
 
+/// What becomes of the links in a document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkSettings {
+    /// Links to other places stay clickable. Off is `--disable-external-links`.
+    pub external: bool,
+    /// Links to an anchor stay clickable — in this document, or in another
+    /// document of the same conversion. Off is `--disable-internal-links`.
+    pub internal: bool,
+    /// A link written relative in the document is kept as the browser resolved
+    /// it, absolute. Off is `--keep-relative-links`.
+    pub resolve_relative: bool,
+}
+
+impl Default for LinkSettings {
+    fn default() -> Self {
+        Self {
+            external: true,
+            internal: true,
+            resolve_relative: true,
+        }
+    }
+}
+
+impl LinkSettings {
+    /// Whether every link is left as the browser wrote it.
+    pub fn leaves_everything(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// A header or a footer.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Band {
@@ -400,6 +430,7 @@ pub struct ObjectSettings {
     /// document's headings go into the outline and the table of contents.
     /// Off for a cover.
     pub in_outline: bool,
+    pub links: LinkSettings,
 }
 
 impl ObjectSettings {
@@ -415,6 +446,7 @@ impl ObjectSettings {
             footer: Band::default(),
             replacements: Vec::new(),
             in_outline: true,
+            links: LinkSettings::default(),
         }
     }
 }
@@ -514,6 +546,12 @@ mod tests {
         assert_eq!(settings.global.outline.depth, 4);
         assert!(settings.global.outline.dump.is_none());
         assert!(object.in_outline);
+
+        // Every link clickable, written as the browser resolved it.
+        assert!(object.links.external);
+        assert!(object.links.internal);
+        assert!(object.links.resolve_relative);
+        assert!(object.links.leaves_everything());
     }
 
     /// `--no-outline --dump-outline x` still needs the browser to produce one.

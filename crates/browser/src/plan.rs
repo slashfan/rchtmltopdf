@@ -40,8 +40,8 @@ use crate::launch::LaunchOptions;
 use crate::placeholder::Context;
 use rchtmltopdf_core::Clock;
 use rchtmltopdf_core::settings::{
-    GlobalSettings, LoadSettings, MediaType, ObjectSettings, OutlineSettings, PageSetup,
-    WebSettings,
+    GlobalSettings, LinkSettings, LoadSettings, MediaType, ObjectSettings, OutlineSettings,
+    PageSetup, WebSettings,
 };
 use rchtmltopdf_core::units::Length;
 use serde_json::{Value, json};
@@ -179,7 +179,7 @@ impl Plan {
             context,
             deadline: global.timeout,
             requests: rules(object, document_url),
-            finish: finish(global),
+            finish: finish(global, object, document_url),
         }
     }
 }
@@ -188,12 +188,21 @@ impl Plan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finishing {
     pub outline: OutlineSettings,
+    /// This document's links: which kinds stay, and whether a relative one is
+    /// written back relative.
+    pub links: LinkSettings,
+    /// What the links were resolved against, so a relative one can be
+    /// recognised afterwards and a link to another document of the same
+    /// conversion can be pointed into it.
+    pub document_url: String,
 }
 
 /// The post-print treatment the command line asked for.
-pub fn finish(global: &GlobalSettings) -> Finishing {
+pub fn finish(global: &GlobalSettings, object: &ObjectSettings, document_url: &str) -> Finishing {
     Finishing {
         outline: global.outline.clone(),
+        links: object.links.clone(),
+        document_url: document_url.to_string(),
     }
 }
 
