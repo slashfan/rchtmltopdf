@@ -5,10 +5,11 @@
 //! the seam, and it is short on purpose.
 
 use crate::{input, output};
+use rchtmltopdf_browser::Browser;
 use rchtmltopdf_browser::deadline;
 use rchtmltopdf_browser::locate::{SystemEnvironment, locate};
+use rchtmltopdf_browser::plan::Plan;
 use rchtmltopdf_browser::render::Progress;
-use rchtmltopdf_browser::{Browser, LaunchOptions};
 use rchtmltopdf_core::settings::{ObjectKind, Settings};
 use std::fmt;
 
@@ -67,19 +68,19 @@ pub async fn convert(settings: &Settings) -> Result<(), ConvertError> {
     let document = input::resolve(source)?;
 
     let executable = locate(settings.global.browser.path.as_deref(), &SystemEnvironment)?;
-    let options = LaunchOptions {
-        no_sandbox: settings.global.browser.no_sandbox,
-        extra_args: settings.global.browser.extra_args.clone(),
-        allow_slow_scripts: !object.load.stop_slow_scripts,
-        ..LaunchOptions::default()
-    };
+
+    // Everything the settings decide, decided in one place before any of it
+    // happens. The page halves are rebuilt from the same functions below rather
+    // than passed down, so a test can hold the option table to what a conversion
+    // would actually do (D27).
+    let plan = Plan::new(&settings.global, object);
 
     let progress = Progress::new();
     // The browser is created inside the deadline, so expiry drops it and its Drop
     // stops the process group and removes the profile. Cleanup is not a step that
     // could be skipped.
-    let pdf = deadline::within(settings.global.timeout, &progress, async {
-        let browser = Browser::launch(&executable, &options).await?;
+    let pdf = deadline::within(plan.deadline, &progress, async {
+        let browser = Browser::launch(&executable, &plan.launch).await?;
         let page = browser.new_page().await?;
 
         page.prepare(&object.web).await?;

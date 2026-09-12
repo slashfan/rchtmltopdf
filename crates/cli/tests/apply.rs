@@ -1,4 +1,11 @@
 //! Turning a command line into settings.
+//!
+//! This file can only see as far as the settings model. Whether an option then
+//! changes anything a conversion does is a stronger question, and `plan.rs` is
+//! where it is asked: thirty-eight options once passed every check here while
+//! doing nothing at all (#19).
+
+mod support;
 
 use rchtmltopdf::apply::{Applied, PageOverrides, apply, apply_global, apply_object};
 use rchtmltopdf::table::{self, Support};
@@ -9,40 +16,9 @@ use rchtmltopdf_core::settings::{
 };
 use rchtmltopdf_core::{Input, LoadErrorHandling, Output};
 use std::time::Duration;
-
-fn split(line: &str) -> Vec<String> {
-    let mut args = Vec::new();
-    let mut current = String::new();
-    let (mut quoted, mut started) = (false, false);
-    for character in line.chars() {
-        match character {
-            '\'' => {
-                quoted = !quoted;
-                started = true;
-            }
-            ' ' if !quoted => {
-                if started {
-                    args.push(std::mem::take(&mut current));
-                    started = false;
-                }
-            }
-            other => {
-                current.push(other);
-                started = true;
-            }
-        }
-    }
-    if started {
-        args.push(current);
-    }
-    args
-}
+use support::{placeholder, split};
 
 fn settings(line: &str) -> Settings {
-    crate_settings(line)
-}
-
-fn crate_settings(line: &str) -> Settings {
     apply(&tokenize(split(line)).expect("should parse"))
         .unwrap_or_else(|error| panic!("`{line}` failed to apply: {error}"))
 }
@@ -58,33 +34,6 @@ fn approx(actual: f64, expected: f64) {
 }
 
 // --- the guard that stops the option table lying -----------------------------
-
-/// A plausible value for each placeholder the table uses, so a synthetic
-/// occurrence can be built for any option without knowing what it does.
-fn placeholder(spec: &table::OptionSpec, name: &str) -> &'static str {
-    // Two options both call their value "size" and want different shapes, so
-    // the option wins where the placeholder name is ambiguous.
-    if spec.long == "viewport-size" {
-        return "1024x768";
-    }
-    match name {
-        "unitreal" | "width" => "10mm",
-        "Size" => "A4",
-        "orientation" => "Landscape",
-        "handler" => "abort",
-        "level" => "info",
-        "msec" | "int" | "integer" | "number" | "offset" | "seconds" | "dpi" | "size" => "10",
-        "float" | "real" => "1.5",
-        "encoding" => "UTF-8",
-        "url" | "file" => "https://example.com/a",
-        "path" => "/tmp",
-        "js" => "void 0",
-        "proxy" => "http://127.0.0.1:8080",
-        // name, value, text, username, password, windowStatus, arg: a bare word
-        // is valid for all of them, and for anything added later.
-        _ => "x",
-    }
-}
 
 fn synthesise(spec: &'static table::OptionSpec) -> Occurrence {
     Occurrence {
@@ -112,9 +61,9 @@ fn drive(spec: &'static table::OptionSpec) -> Applied {
     outcome.unwrap_or_else(|error| panic!("--{} rejected a plausible value: {error}", spec.long))
 }
 
-/// **The point of this file.** `Support::Implemented` is a claim that an option
-/// does something. Without this test the table can say anything, and it did: it
-/// advertised sixty-one working options while nothing read a command line at all.
+/// `Support::Implemented` is a claim that an option does something. This holds
+/// the weaker half of it — the option reaches the settings model — and `plan.rs`
+/// holds the half that matters.
 #[test]
 fn every_option_marked_implemented_is_actually_applied() {
     let unhandled: Vec<&str> = table::all()
@@ -129,19 +78,25 @@ fn every_option_marked_implemented_is_actually_applied() {
     );
 }
 
-/// The other direction. The binary warns that these do nothing, so anything that
-/// quietly acted on one would make the warning a lie.
+/// The other direction, for the half of it that is settled. An option with no
+/// Chromium equivalent is never going to be built, so an arm for one is a
+/// mistake rather than unfinished work.
+///
+/// `Planned` is deliberately not included. Those may be understood here and
+/// ignored by the conversion, which is the normal half-built state and the one
+/// the settings model is written in front of. What keeps that honest is that
+/// nothing downstream reads the field, and `plan.rs` is what holds it.
 #[test]
-fn nothing_acts_on_an_option_the_table_says_is_not_built() {
+fn nothing_acts_on_an_option_that_will_never_have_an_equivalent() {
     let acted: Vec<&str> = table::all()
-        .filter(|spec| matches!(spec.support, Support::Planned(_) | Support::NoEquivalent(_)))
+        .filter(|spec| matches!(spec.support, Support::NoEquivalent(_)))
         .filter(|spec| drive(spec) != Applied::NotYet)
         .map(|spec| spec.long)
         .collect();
 
     assert!(
         acted.is_empty(),
-        "acted on, but the table says they are not built: {acted:?}"
+        "acted on, and no browser can honour them: {acted:?}"
     );
 }
 
@@ -317,19 +272,20 @@ fn headers_and_footers_land_where_they_belong() {
     assert_eq!(object.replacements[0].name, "who");
 }
 
-/// wkhtmltopdf's shorthand also makes room for the band it adds, unless a top
-/// margin was asked for explicitly.
+/// wkhtmltopdf's shorthand fills both halves of the band.
+///
+/// It also made room for the band by pushing the top margin down to 20mm, and
+/// that half is deliberately gone until the band is drawn. Moving a document's
+/// content down a centimetre to leave space for a header nobody prints is worse
+/// than ignoring the option, and it is what this program did (#19, #21).
 #[test]
-fn default_header_fills_the_band_and_makes_room_for_it() {
+fn default_header_fills_the_band_without_moving_the_content() {
     let settings = settings("--default-header a.html out.pdf");
     let object = settings.single_object().unwrap();
     assert_eq!(object.header.left.as_deref(), Some("[webpage]"));
     assert_eq!(object.header.right.as_deref(), Some("[page]/[topage]"));
     assert!(object.header.line);
-    approx(settings.global.page.margins.top.to_mm(), 20.0);
-
-    let explicit = crate_settings("--default-header --margin-top 5mm a.html out.pdf");
-    approx(explicit.global.page.margins.top.to_mm(), 5.0);
+    approx(settings.global.page.margins.top.to_mm(), 10.0);
 }
 
 #[test]

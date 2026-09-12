@@ -13,12 +13,15 @@ behaves. If you are migrating, that is the section to read.
 Nothing released yet.
 
 The binary converts one document: a URL, a local file or standard input, to a file or
-standard output, with paper size, margins, orientation, backgrounds, stylesheets, headers
-and footers. Options with no Chromium equivalent are accepted and warned about rather than
-breaking a command line that uses them.
+standard output, with paper size, margins, orientation, zoom, backgrounds, screen or print
+stylesheets, whether scripts run, and how long to wait before printing. Options it does not
+act on are accepted and warned about rather than breaking a command line that uses them.
 
 Several documents, covers and a table of contents are not built. Neither is most of the
-option surface beyond what V0 needed.
+option surface beyond what V0 needed: headers and footers, cookies and custom headers,
+credentials and proxies, encoding, the viewport, injected stylesheets and scripts, the local
+file access policy and PDF metadata are all understood on the command line and not yet acted
+on.
 
 ### Compatibility
 
@@ -35,3 +38,15 @@ change how a command line is read, all of them towards what the real program doe
   and a misplaced `--toc-header-text` silently attached itself to the preceding page. Our
   own options — `--timeout`, `--no-sandbox`, `--chromium-path`, `--chromium-arg`,
   `--dump-parse` — carry no such rule and may be written anywhere.
+
+**The help now says what works.** Thirty-eight options were advertised as implemented while
+doing nothing at all: the command line understood each one, filled a field, and no part of a
+conversion ever read it. They are now listed as not implemented yet, and writing one prints
+the same warning every other unbuilt option already printed. What those options *do* has not
+changed — they did nothing before and they do nothing now — but a command line using them is
+noisier, and `-q` or `--log-level none` silences it.
+
+**`--default-header` no longer moves the content down the page.** It pushed the top margin
+out to 20mm to make room for a band nothing draws, so a document written with it lost a
+centimetre off the top and gained no header. It now fills the header fields and leaves the
+page alone until the band is drawn.
