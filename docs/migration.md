@@ -123,7 +123,10 @@ davantage ici.
 * pagination et nombre de pages ;
 * métriques de fontes et césure des lignes ;
 * dimensions calculées par certaines règles CSS ;
-* comportement de vieux hacks CSS visant WebKit.
+* comportement de vieux hacks CSS visant WebKit ;
+* taille du fichier quand plusieurs documents sont assemblés : chaque document embarque son
+  propre sous-ensemble de chaque police, là où wkhtmltopdf partageait les siennes (voir
+  [D34](decisions.md)).
 
 Si une différence vous bloque, ouvrez un rapport de compatibilité. Le formulaire demande la
 sortie de `--dump-parse`, qui résout la plupart des cas immédiatement.

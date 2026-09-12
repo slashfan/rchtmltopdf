@@ -3,23 +3,41 @@
 //! Everything above this has turned a command line into settings; everything
 //! below takes settings and knows nothing about how they were written. This is
 //! the seam, and it is short on purpose.
+//!
+//! # Several documents
+//!
+//! Each is loaded and printed on its own page of one browser, in command line
+//! order, and the printed documents are combined afterwards (#36). One browser
+//! rather than one per document (D11), restarted only when a document asks for
+//! something that is decided on the browser's command line rather than over the
+//! protocol: a proxy, a minimum font size, images off. Two documents that share
+//! those share a browser; two that differ each get one, and the result is the
+//! same either way.
+//!
+//! Every input is resolved before any browser starts, so a missing file at the
+//! end of a ten document command line fails in a millisecond rather than after
+//! nine conversions.
 
 use crate::{PROGRAM, VERSION, input, output};
 use rchtmltopdf_browser::Browser;
+use rchtmltopdf_browser::LaunchOptions;
 use rchtmltopdf_browser::clock;
 use rchtmltopdf_browser::deadline;
 use rchtmltopdf_browser::intercept;
 use rchtmltopdf_browser::locate::{SystemEnvironment, locate};
 use rchtmltopdf_browser::plan::{self, Plan};
-use rchtmltopdf_browser::render::Progress;
-use rchtmltopdf_core::settings::{ObjectKind, Settings};
-use rchtmltopdf_core::{ExitCode, LoadErrorHandling};
+use rchtmltopdf_browser::render::{Failed, Progress};
+use rchtmltopdf_core::settings::{ObjectKind, ObjectSettings, Settings};
+use rchtmltopdf_core::{ExitCode, Input, LoadErrorHandling};
 use std::fmt;
 
 #[derive(Debug)]
 pub enum ConvertError {
     /// Recognised, and not built yet. Said plainly rather than done partly.
     Unsupported(String),
+    /// Every document was dropped by `--load-error-handling skip`, so there is
+    /// nothing to write. One entry per document, as `could not load` lines.
+    NothingLeft(Vec<String>),
     Input(input::InputError),
     Output(output::OutputError),
     Browser(rchtmltopdf_browser::Error),
@@ -30,6 +48,11 @@ impl fmt::Display for ConvertError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ConvertError::Unsupported(what) => write!(f, "{what}"),
+            ConvertError::NothingLeft(failures) => write!(
+                f,
+                "--load-error-handling skip left nothing to convert: {}",
+                failures.join("; ")
+            ),
             ConvertError::Input(error) => write!(f, "{error}"),
             ConvertError::Output(error) => write!(f, "{error}"),
             ConvertError::Browser(error) => write!(f, "{error}"),
@@ -64,6 +87,19 @@ impl From<rchtmltopdf_browser::Error> for ConvertError {
     }
 }
 
+/// What came out of the browser for the documents that made it.
+struct Printed {
+    /// One PDF per document that was printed, in command line order.
+    documents: Vec<Vec<u8>>,
+    /// Subresources the interception refused, across every document.
+    refused: Vec<intercept::Refusal>,
+    /// Subresources that failed, paired with the object whose
+    /// `--load-media-error-handling` judges them.
+    media: Vec<(usize, Vec<Failed>)>,
+    /// Documents `--load-error-handling skip` dropped, as `could not load` lines.
+    skipped: Vec<String>,
+}
+
 /// Convert, or say why not.
 ///
 /// Returns an exit code rather than nothing, because "wrote the document and
@@ -72,17 +108,19 @@ impl From<rchtmltopdf_browser::Error> for ConvertError {
 /// Collapsing that into `Err` would throw the document away, and collapsing it
 /// into `Ok` would lose the exit code KnpSnappy reads.
 pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
-    let object = only_page(settings)?;
-    let source = object
-        .input
-        .as_ref()
-        .ok_or_else(|| ConvertError::Unsupported("this object has no document to read".into()))?;
+    let objects = pages(settings)?;
 
     // Resolved before a browser is started, so a missing file fails in a
     // millisecond rather than after a launch. Held for the whole conversion: a
     // document read from standard input lives in a file that goes away when this
     // is dropped, on every path out including the deadline.
-    let document = input::resolve(source)?;
+    let mut documents = Vec::with_capacity(objects.len());
+    for object in &objects {
+        let source = object.input.as_ref().ok_or_else(|| {
+            ConvertError::Unsupported("this object has no document to read".into())
+        })?;
+        documents.push(input::resolve(source)?);
+    }
 
     let executable = locate(settings.global.browser.path.as_deref(), &SystemEnvironment)?;
 
@@ -90,105 +128,152 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
     // happens. The page halves are rebuilt from the same functions below rather
     // than passed down, so a test can hold the option table to what a conversion
     // would actually do (D27).
-    let plan = Plan::new(&settings.global, object, clock::now(), document.url());
+    //
+    // One clock for every document: a `[date]` in the first footer and one in
+    // the last must agree, whatever midnight does in between.
+    let now = clock::now();
+    let plans: Vec<Plan> = objects
+        .iter()
+        .zip(&documents)
+        .map(|(object, document)| Plan::new(&settings.global, object, now, document.url()))
+        .collect();
 
-    // Two options that cannot always be applied, said before a browser starts
-    // because both are facts about the command line and the document rather than
-    // about the rendering.
+    // Facts about the command line and the documents rather than about the
+    // rendering, so they are said before a browser starts. Once each: ten
+    // documents with the same `--encoding` are one warning, not ten.
     if settings.global.log_level.shows_warnings() {
-        if object.web.encoding.is_some() && plan.requests.serve_as.is_none() {
-            eprintln!(
-                "{PROGRAM}: warning: --encoding does not apply to a document fetched over the \
-                 network; it is read as the server said it should be"
-            );
-        }
-        if !object.web.cookies.is_empty() && !plan::takes_cookies(document.url()) {
-            eprintln!(
-                "{PROGRAM}: warning: --cookie needs a document fetched over http or https; \
-                 a local document has no origin to scope a cookie to, so it is being ignored"
-            );
-        }
-    }
-
-    // Said before the browser starts, because it is a fact about the command
-    // line rather than about the document.
-    if settings.global.log_level.shows_warnings() {
-        for name in &plan.unsupported_placeholders {
-            eprintln!(
-                "{PROGRAM}: warning: [{name}] names a position in the document outline, which is \
-                 not built yet (planned for V2); it is being left empty"
-            );
+        let mut said: Vec<String> = Vec::new();
+        let mut warn = |line: String| {
+            if !said.contains(&line) {
+                eprintln!("{PROGRAM}: warning: {line}");
+                said.push(line);
+            }
+        };
+        for ((object, document), plan) in objects.iter().zip(&documents).zip(&plans) {
+            if object.web.encoding.is_some() && plan.requests.serve_as.is_none() {
+                warn(
+                    "--encoding does not apply to a document fetched over the network; it is \
+                     read as the server said it should be"
+                        .into(),
+                );
+            }
+            if !object.web.cookies.is_empty() && !plan::takes_cookies(document.url()) {
+                warn(
+                    "--cookie needs a document fetched over http or https; a local document \
+                     has no origin to scope a cookie to, so it is being ignored"
+                        .into(),
+                );
+            }
+            for name in &plan.unsupported_placeholders {
+                warn(format!(
+                    "[{name}] names a position in the document outline, which is not built \
+                     yet (planned for V2); it is being left empty"
+                ));
+            }
         }
     }
 
     let progress = Progress::new();
+    let total = objects.len();
     // The browser is created inside the deadline, so expiry drops it and its Drop
     // stops the process group and removes the profile. Cleanup is not a step that
     // could be skipped.
-    let (pdf, refused, report) = deadline::within(plan.deadline, &progress, async {
-        let browser = Browser::launch(&executable, &plan.launch).await?;
-        let page = browser.new_page().await?;
+    let printed = deadline::within(settings.global.timeout, &progress, async {
+        let mut printed = Printed {
+            documents: Vec::with_capacity(total),
+            refused: Vec::new(),
+            media: Vec::new(),
+            skipped: Vec::new(),
+        };
+        let mut browser: Option<Browser> = None;
+        let mut running_with: Option<LaunchOptions> = None;
 
-        // Before anything is fetched, the document included: the policy has to
-        // be in place for the first request, not the second (D10).
-        let policing = intercept::install(page.session(), plan.requests.clone()).await?;
-
-        page.prepare(&plan.prepare).await?;
-        say(settings, "Loading page (1/2)");
-        let report = page.load(document.url(), &object.load, &progress).await?;
-
-        // Before printing, not after. A rejected password leaves the server's
-        // own 401 body as the response, which renders perfectly well and is not
-        // the document anybody asked for (D14).
-        if policing
-            .as_ref()
-            .is_some_and(rchtmltopdf_browser::Interception::credentials_rejected)
+        for (index, ((object, document), plan)) in
+            objects.iter().zip(&documents).zip(&plans).enumerate()
         {
-            return Err(rchtmltopdf_browser::Error::Credentials {
-                url: document.url().to_string(),
-            });
-        }
-
-        // The document itself. `--load-error-handling` decides, and only
-        // `ignore` prints anything at all: D14 is explicit that a main document
-        // which failed means exit 1 and no PDF.
-        if let Some(failed) = &report.document {
-            match object.load.on_document_error {
-                LoadErrorHandling::Ignore => {}
-                LoadErrorHandling::Abort => {
-                    return Err(rchtmltopdf_browser::Error::Navigation {
-                        url: failed.url.clone(),
-                        reason: failed.error.name().to_string(),
-                    });
+            // One browser for the conversion, restarted only when this document
+            // needs one started differently. Closed rather than dropped, so it
+            // can finish writing its profile away.
+            if running_with.as_ref() != Some(&plan.launch) {
+                if let Some(previous) = browser.take() {
+                    previous.close().await?;
                 }
-                // `skip` drops the failing object and carries on, and with one
-                // object there is nothing to carry on to. Saying so is better
-                // than writing an empty document; V2 is where it starts to mean
-                // something.
-                LoadErrorHandling::Skip => {
-                    return Err(rchtmltopdf_browser::Error::Navigation {
-                        url: failed.url.clone(),
-                        reason: format!(
-                            "{} (--load-error-handling skip leaves nothing to convert while \
-                             there is one document)",
-                            failed.error.name()
-                        ),
-                    });
+                browser = Some(Browser::launch(&executable, &plan.launch).await?);
+                running_with = Some(plan.launch.clone());
+            }
+            let browser = browser.as_ref().expect("launched just above");
+
+            say(settings, &loading_line(index, total));
+            let page = browser.new_page().await?;
+
+            // Before anything is fetched, the document included: the policy has
+            // to be in place for the first request, not the second (D10).
+            let policing = intercept::install(page.session(), plan.requests.clone()).await?;
+
+            page.prepare(&plan.prepare).await?;
+            let report = page.load(document.url(), &object.load, &progress).await?;
+
+            // Before printing, not after. A rejected password leaves the
+            // server's own 401 body as the response, which renders perfectly
+            // well and is not the document anybody asked for (D14).
+            if policing
+                .as_ref()
+                .is_some_and(rchtmltopdf_browser::Interception::credentials_rejected)
+            {
+                return Err(rchtmltopdf_browser::Error::Credentials {
+                    url: document.url().to_string(),
+                });
+            }
+
+            // The document itself. `--load-error-handling` decides, and only
+            // `ignore` prints anything at all: D14 is explicit that a main
+            // document which failed means exit 1 and no PDF.
+            if let Some(failed) = &report.document {
+                match object.load.on_document_error {
+                    LoadErrorHandling::Ignore => {}
+                    LoadErrorHandling::Abort => {
+                        return Err(rchtmltopdf_browser::Error::Navigation {
+                            url: failed.url.clone(),
+                            reason: failed.error.name().to_string(),
+                        });
+                    }
+                    // `skip` drops the failing document and carries on with the
+                    // others. Said now rather than at the end, in wkhtmltopdf's
+                    // words, so the line sits next to the load it belongs to.
+                    LoadErrorHandling::Skip => {
+                        let line =
+                            format!("could not load {}: {}", failed.url, failed.error.name());
+                        if settings.global.log_level.shows_warnings() {
+                            eprintln!(
+                                "{PROGRAM}: warning: failed loading page {} (skipped)",
+                                failed.url
+                            );
+                        }
+                        printed.skipped.push(line);
+                        continue;
+                    }
                 }
             }
-        }
-        say(settings, "Printing pages (2/2)");
-        let pdf = page.print_to_pdf(&plan.print).await?;
 
-        // Read before the guard is dropped, which is what stops interception.
-        let refused = policing
-            .as_ref()
-            .map(intercept::Interception::refused)
-            .unwrap_or_default();
+            printed
+                .documents
+                .push(page.print_to_pdf(&plan.print).await?);
+
+            // Read before the guard is dropped, which is what stops interception.
+            printed.refused.extend(
+                policing
+                    .as_ref()
+                    .map(intercept::Interception::refused)
+                    .unwrap_or_default(),
+            );
+            printed.media.push((index, report.media));
+        }
 
         // Asked to leave rather than killed, so it can finish writing.
-        browser.close().await?;
-        Ok((pdf, refused, report))
+        if let Some(browser) = browser {
+            browser.close().await?;
+        }
+        Ok(printed)
     })
     .await?;
 
@@ -196,10 +281,18 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
     // failure to diagnose, because it renders. Said on stderr, where it cannot
     // corrupt a PDF written to stdout.
     if settings.global.log_level.shows_warnings() {
-        for refusal in &refused {
+        for refusal in &printed.refused {
             eprintln!("{PROGRAM}: warning: {refusal}");
         }
     }
+
+    if printed.documents.is_empty() {
+        return Err(ConvertError::NothingLeft(printed.skipped));
+    }
+
+    say(settings, "Printing pages (2/2)");
+    let parts: Vec<&[u8]> = printed.documents.iter().map(Vec::as_slice).collect();
+    let pdf = rchtmltopdf_pdf::merge(&parts)?;
 
     // The print call takes the title from the document's own `<title>` and
     // offers no override, so `--title` can only be honoured by rewriting the
@@ -211,7 +304,7 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             title: settings.global.title.clone(),
             producer: format!("{PROGRAM} {VERSION}"),
             creator: format!("{PROGRAM} {VERSION}"),
-            created: clock::now(),
+            created: now,
         },
     )?;
 
@@ -220,30 +313,49 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
     // that raises on the exit code still has the PDF to look at.
     output::write(&settings.global.output, &pdf)?;
 
-    let outcome = match (object.load.on_media_error, report.media.as_slice()) {
-        (_, []) | (LoadErrorHandling::Ignore, _) => ExitCode::Success,
-        (LoadErrorHandling::Skip, failures) => {
-            for failed in failures {
-                report_media(settings, failed);
+    // Each document is judged by its own handler. The first `abort` decides the
+    // exit code and writes the line applications grep for; the rest are only
+    // reported.
+    let mut outcome = ExitCode::Success;
+    for (index, failures) in &printed.media {
+        match (objects[*index].load.on_media_error, failures.as_slice()) {
+            (_, []) | (LoadErrorHandling::Ignore, _) => {}
+            (LoadErrorHandling::Skip, failures) => {
+                for failed in failures {
+                    report_media(settings, failed);
+                }
             }
-            ExitCode::Success
-        }
-        (LoadErrorHandling::Abort, failures) => {
-            for failed in failures {
-                report_media(settings, failed);
+            (LoadErrorHandling::Abort, failures) => {
+                for failed in failures {
+                    report_media(settings, failed);
+                }
+                if outcome == ExitCode::Success {
+                    // wkhtmltopdf's exact wording, and not prefixed with the
+                    // program name: applications grep for this line.
+                    println_stderr(&format!(
+                        "Exit with code 1 due to network error: {}",
+                        failures[0].error.name()
+                    ));
+                }
+                outcome = ExitCode::Failure;
             }
-            // wkhtmltopdf's exact wording, and not prefixed with the program
-            // name: applications grep for this line.
-            println_stderr(&format!(
-                "Exit with code 1 due to network error: {}",
-                failures[0].error.name()
-            ));
-            ExitCode::Failure
         }
-    };
+    }
 
     say(settings, "Done");
     Ok(outcome)
+}
+
+/// The progress line for one document, in wkhtmltopdf's shape.
+///
+/// One document keeps the line wrappers have seen since V0. Several say which
+/// one this is, because ten identical lines say nothing.
+fn loading_line(index: usize, total: usize) -> String {
+    if total == 1 {
+        "Loading page (1/2)".to_string()
+    } else {
+        format!("Loading page {} of {total} (1/2)", index + 1)
+    }
 }
 
 /// A progress line, in wkhtmltopdf's shape and on its stream.
@@ -254,7 +366,7 @@ fn say(settings: &Settings, line: &str) {
 }
 
 /// One failed subresource, named the way wkhtmltopdf names it.
-fn report_media(settings: &Settings, failed: &rchtmltopdf_browser::render::Failed) {
+fn report_media(settings: &Settings, failed: &Failed) {
     if settings.global.log_level.shows_warnings() {
         eprintln!("{PROGRAM}: warning: {failed} was not loaded");
     }
@@ -265,41 +377,53 @@ fn println_stderr(line: &str) {
     eprintln!("{line}");
 }
 
-/// V0 converts one page.
+/// The documents to convert, in order.
 ///
-/// Anything else is refused by name. Converting the first of several and saying
-/// nothing would produce a document that looks right and is missing most of
-/// itself, which is the worst outcome available.
-fn only_page(
-    settings: &Settings,
-) -> Result<&rchtmltopdf_core::settings::ObjectSettings, ConvertError> {
-    if settings.objects.len() > 1 {
+/// Pages only, so far. A cover or a table of contents is refused by name:
+/// converting the pages around it and saying nothing would produce a document
+/// that looks right and is missing part of itself, which is the worst outcome
+/// available.
+fn pages(settings: &Settings) -> Result<Vec<&ObjectSettings>, ConvertError> {
+    if settings.objects.is_empty() {
+        return Err(ConvertError::Unsupported("no document to convert".into()));
+    }
+
+    for object in &settings.objects {
+        match object.kind {
+            ObjectKind::Page => {}
+            ObjectKind::Cover => {
+                return Err(ConvertError::Unsupported(
+                    "a cover page is not supported yet (planned for V2)".into(),
+                ));
+            }
+            ObjectKind::Toc => {
+                return Err(ConvertError::Unsupported(
+                    "a table of contents is not supported yet (planned for V3)".into(),
+                ));
+            }
+        }
+    }
+
+    // Standard input is a stream, and the second read of it gets nothing.
+    // Converting an empty document in its place would look like a page that
+    // rendered blank, so it is refused instead.
+    let from_stdin = settings
+        .objects
+        .iter()
+        .filter(|object| object.input == Some(Input::Stdin))
+        .count();
+    if from_stdin > 1 {
         return Err(ConvertError::Unsupported(format!(
-            "{} documents were given, and only one is supported so far (several are planned for V2)",
-            settings.objects.len()
+            "standard input can be read once, and it was given as {from_stdin} documents"
         )));
     }
 
-    let object = settings
-        .objects
-        .first()
-        .ok_or_else(|| ConvertError::Unsupported("no document to convert".into()))?;
-
-    match object.kind {
-        ObjectKind::Page => Ok(object),
-        ObjectKind::Cover => Err(ConvertError::Unsupported(
-            "a cover page is not supported yet (planned for V2)".into(),
-        )),
-        ObjectKind::Toc => Err(ConvertError::Unsupported(
-            "a table of contents is not supported yet (planned for V3)".into(),
-        )),
-    }
+    Ok(settings.objects.iter().collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rchtmltopdf_core::Input;
     use rchtmltopdf_core::settings::ObjectSettings;
 
     fn with(objects: Vec<ObjectSettings>) -> Settings {
@@ -314,26 +438,19 @@ mod tests {
     }
 
     #[test]
-    fn one_page_is_what_v0_converts() {
-        assert!(only_page(&with(vec![page()])).is_ok());
+    fn one_page_or_several_are_what_gets_converted() {
+        assert_eq!(pages(&with(vec![page()])).unwrap().len(), 1);
+        assert_eq!(pages(&with(vec![page(), page(), page()])).unwrap().len(), 3);
     }
 
-    /// Converting the first of several and saying nothing would produce a
-    /// document that looks right and is missing most of itself.
-    #[test]
-    fn several_documents_are_refused_by_name_not_truncated() {
-        let error = only_page(&with(vec![page(), page(), page()])).unwrap_err();
-        let message = error.to_string();
-        assert!(message.contains('3'), "should say how many: {message}");
-        assert!(message.contains("V2"), "should say when: {message}");
-    }
-
+    /// Converting the pages around a cover and saying nothing would produce a
+    /// document that looks right and is missing part of itself.
     #[test]
     fn a_cover_and_a_table_of_contents_say_which_milestone_they_wait_for() {
         let mut cover = page();
         cover.kind = ObjectKind::Cover;
         assert!(
-            only_page(&with(vec![cover]))
+            pages(&with(vec![page(), cover]))
                 .unwrap_err()
                 .to_string()
                 .contains("V2")
@@ -342,15 +459,47 @@ mod tests {
         let mut toc = page();
         toc.kind = ObjectKind::Toc;
         assert!(
-            only_page(&with(vec![toc]))
+            pages(&with(vec![toc, page()]))
                 .unwrap_err()
                 .to_string()
                 .contains("V3")
         );
     }
 
+    /// The second read of a stream gets nothing, and a blank page in its place
+    /// would look like a rendering problem.
+    #[test]
+    fn standard_input_twice_is_refused_rather_than_read_empty() {
+        let stdin = || ObjectSettings::page(Input::Stdin);
+        assert!(pages(&with(vec![stdin(), page()])).is_ok());
+
+        let error = pages(&with(vec![stdin(), page(), stdin()])).unwrap_err();
+        assert!(error.to_string().contains("standard input"), "{error}");
+        assert!(error.to_string().contains('2'), "{error}");
+    }
+
     #[test]
     fn nothing_to_convert_is_reported_rather_than_panicking() {
-        assert!(only_page(&with(vec![])).is_err());
+        assert!(pages(&with(vec![])).is_err());
+    }
+
+    /// One document keeps the line wrappers have seen since V0.
+    #[test]
+    fn the_progress_line_says_which_document_only_when_there_are_several() {
+        assert_eq!(loading_line(0, 1), "Loading page (1/2)");
+        assert_eq!(loading_line(0, 3), "Loading page 1 of 3 (1/2)");
+        assert_eq!(loading_line(2, 3), "Loading page 3 of 3 (1/2)");
+    }
+
+    #[test]
+    fn nothing_left_names_every_document_that_was_skipped() {
+        let error = ConvertError::NothingLeft(vec![
+            "could not load a: ContentNotFoundError".into(),
+            "could not load b: HostNotFoundError".into(),
+        ]);
+        let message = error.to_string();
+        assert!(message.contains("skip"), "{message}");
+        assert!(message.contains("could not load a"), "{message}");
+        assert!(message.contains("could not load b"), "{message}");
     }
 }

@@ -393,8 +393,8 @@ pub struct Settings {
 impl Settings {
     /// The single object, when there is exactly one.
     ///
-    /// V0 converts one document; more than one is refused rather than silently
-    /// truncated.
+    /// For a test that wrote one document and wants its settings without
+    /// indexing. A conversion walks `objects` itself.
     pub fn single_object(&self) -> Option<&ObjectSettings> {
         match self.objects.as_slice() {
             [only] => Some(only),
@@ -570,8 +570,7 @@ mod tests {
         settings
             .objects
             .push(ObjectSettings::page(Input::classify("b.html")));
-        // Two objects must not look like one. V0 refuses rather than converting
-        // only the first.
+        // Two objects must not look like one.
         assert!(settings.single_object().is_none());
     }
 }

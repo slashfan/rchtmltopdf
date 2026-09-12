@@ -29,8 +29,9 @@ GitHub are in English.
 
 ## State
 
-**It converts.** One document at a time, with the paper, margins, orientation, stylesheets,
-and headers and footers you ask for — placeholders included.
+**It converts.** One document or several, with the paper, margins, orientation, stylesheets,
+and headers and footers you ask for — placeholders included. Several documents on one
+command line come out as one PDF, in that order, each printed with its own options.
 
 ```bash
 rchtmltopdf --page-size A4 --margin-top 15mm \
@@ -132,8 +133,9 @@ above.
 | Grammar, option table, translation | `crates/cli` | Working |
 | Units, page sizes, settings model | `crates/core` | Working |
 | Finding, launching and driving Chromium | `crates/browser` | Working |
-| Several documents, cover, table of contents | | V2 and V3 |
-| Merge, metadata, outlines | `crates/pdf` | Not started |
+| Several documents, merged into one PDF | `crates/cli`, `crates/pdf` | Working |
+| Cover, table of contents | | V2 and V3 |
+| Metadata, outlines | `crates/pdf` | Metadata working, outlines V2 |
 
 Still early. Many wkhtmltopdf options are recognised and ignored with a warning rather than
 honoured; `--extended-help` marks which. `--dump-parse` prints how a command line was
