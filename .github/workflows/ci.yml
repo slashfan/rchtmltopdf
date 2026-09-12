@@ -60,23 +60,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Linux only while the repository is private: macOS runners bill at ten
-        # times the Linux rate against the plan's monthly quota. When this repo
-        # goes public, runners are free, so widen this to:
-        #   os: [ubuntu-latest, macos-latest, windows-latest]
-        # macOS and Windows are not decoration here. D09 resolves macOS
-        # application bundles, and the tokenizer does path work on every platform.
-        os: [ubuntu-latest]
+        # macOS is not decoration: D09 resolves application bundles there, and
+        # `locate` is the one module whose behaviour is genuinely per-platform.
+        # It was Linux only while the repository was private, because macOS
+        # runners bill at ten times the Linux rate; public runners are free
+        # (D28).
+        #
+        # Windows is absent and cannot be added. `crates/browser` carries a
+        # `compile_error!` for anything that is not Unix, because the protocol
+        # travels on file descriptors 3 and 4 and the Windows handle transport is
+        # not written. D23 asked for it; D23 was wrong.
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     env:
-      # The runner image ships a Chromium but cannot give it a sandbox: user
-      # namespaces are restricted, and Chromium refuses to start rather than run
-      # unsandboxed. Tests that launch a browser follow suit here. This is a
-      # property of the runner, not a default for the product, where the sandbox
-      # stays on unless a caller explicitly gives it up (D10).
-      RCHTMLTOPDF_TEST_NO_SANDBOX: "1"
-      # Turn "no browser here, skipping" into a failure. The runner image ships
-      # a Chromium, and browser-backed tests silently skipping when it stops
+      # Turn "no browser here, skipping" into a failure. Both runner images ship
+      # a browser, and browser-backed tests silently skipping when one stops
       # doing so is exactly the rot this variable exists to prevent: eighteen
       # tests would stop running and CI would stay green.
       RCHTMLTOPDF_REQUIRE_CHROMIUM: "1"
@@ -85,6 +83,16 @@ jobs:
         with: { persist-credentials: false }
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with: { toolchain: stable }
+
+      # Linux only, and written from a step rather than declared in `env`,
+      # because the tests ask whether the variable is *set* and an expression
+      # evaluating to the empty string still sets it. The Linux runner restricts
+      # user namespaces, so Chromium refuses to start rather than run
+      # unsandboxed; macOS has no such problem and therefore exercises the
+      # sandbox, which is the arrangement the product actually ships (D10).
+      - name: This runner cannot give Chromium a sandbox
+        if: runner.os == 'Linux'
+        run: echo "RCHTMLTOPDF_TEST_NO_SANDBOX=1" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
