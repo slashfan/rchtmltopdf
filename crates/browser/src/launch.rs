@@ -98,6 +98,13 @@ pub struct LaunchOptions {
     ///
     /// Phrased as the negative so the derived default is the ordinary case.
     pub no_images: bool,
+    /// Send everything through this proxy, from `--proxy`.
+    ///
+    /// A launch flag, so it is **process-wide** where wkhtmltopdf scopes it to
+    /// an object. With one document per run that is the same thing; when several
+    /// land (V2) two objects asking for different proxies cannot both be
+    /// honoured, and the one that wins will have to be said out loud.
+    pub proxy: Option<String>,
     /// Use this profile directory instead of a throwaway one.
     pub user_data_dir: Option<PathBuf>,
     /// Override how long to wait for the browser to answer after starting.
@@ -430,6 +437,9 @@ pub fn build_args(
     if options.allow_slow_scripts {
         args.push("--disable-hang-monitor".to_string());
     }
+    if let Some(proxy) = &options.proxy {
+        args.push(format!("--proxy-server={proxy}"));
+    }
 
     // Two of wkhtmltopdf's page options are Blink settings rather than switches,
     // and Chromium takes the lot as one comma-separated flag. Both are
@@ -718,6 +728,23 @@ mod tests {
         assert_eq!(
             written,
             ["--blink-settings=minimumFontSize=9,minimumLogicalFontSize=9,imagesEnabled=false"]
+        );
+    }
+
+    #[test]
+    fn the_proxy_is_a_launch_flag() {
+        assert!(
+            !args(Flavour::HeadlessShell, &LaunchOptions::default())
+                .iter()
+                .any(|arg| arg.starts_with("--proxy-server"))
+        );
+        let asked = LaunchOptions {
+            proxy: Some("http://127.0.0.1:8080".into()),
+            ..LaunchOptions::default()
+        };
+        assert!(
+            args(Flavour::HeadlessShell, &asked)
+                .contains(&"--proxy-server=http://127.0.0.1:8080".to_string())
         );
     }
 

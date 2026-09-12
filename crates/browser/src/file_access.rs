@@ -64,7 +64,11 @@ pub struct Policy {
 }
 
 /// A policy bound to the document it governs.
-#[derive(Debug, Clone)]
+///
+/// The default is the safe one and the useless one at once: no document, so
+/// nothing is local and nothing may be read. Tests that care about the file rule
+/// build one through [`Policy::about`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileAccess {
     enabled: bool,
     /// Canonical, and only the ones that exist. A directory named by `--allow`
@@ -176,9 +180,14 @@ pub fn local_path(url: &str) -> Option<PathBuf> {
     Some(PathBuf::from(percent_decode(&rest[..end])))
 }
 
-/// Undo the encoding `file_url` applies, so a directory with a space in its name
-/// is compared as the path it is.
-fn percent_decode(raw: &str) -> String {
+/// Undo percent-encoding.
+///
+/// Used for a `file://` path, so a directory with a space in its name is
+/// compared as the path it is, and for a cookie value, which wkhtmltopdf's own
+/// help says arrives url encoded. Only `%XX` is decoded: `+` is a form-encoding
+/// convention rather than a URL one, and a cookie value containing a plus sign
+/// is far more likely than one meaning a space.
+pub(crate) fn percent_decode(raw: &str) -> String {
     let bytes = raw.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;

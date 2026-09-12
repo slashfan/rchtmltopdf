@@ -7,11 +7,10 @@
 use crate::{PROGRAM, input, output};
 use rchtmltopdf_browser::Browser;
 use rchtmltopdf_browser::deadline;
-use rchtmltopdf_browser::file_access;
 use rchtmltopdf_browser::intercept;
 use rchtmltopdf_browser::locate::{SystemEnvironment, locate};
 use rchtmltopdf_browser::placeholder::Clock;
-use rchtmltopdf_browser::plan::Plan;
+use rchtmltopdf_browser::plan::{self, Plan};
 use rchtmltopdf_browser::render::Progress;
 use rchtmltopdf_core::settings::{ObjectKind, Settings};
 use std::fmt;
@@ -76,24 +75,24 @@ pub async fn convert(settings: &Settings) -> Result<(), ConvertError> {
     // happens. The page halves are rebuilt from the same functions below rather
     // than passed down, so a test can hold the option table to what a conversion
     // would actually do (D27).
-    let plan = Plan::new(&settings.global, object, Clock::now());
+    let plan = Plan::new(&settings.global, object, Clock::now(), document.url());
 
-    // `--encoding` says how to read a document that does not declare a charset.
-    // There is no protocol command for it and no launch switch, so the only way
-    // in is to answer the document's own request with a Content-Type that says
-    // so — which is possible only for a document we can read ourselves.
-    let serve_as = plan.encoding.as_ref().and_then(|name| {
-        file_access::local_path(document.url()).map(|path| intercept::Charset {
-            url: document.url().to_string(),
-            path,
-            name: name.clone(),
-        })
-    });
-    if plan.encoding.is_some() && serve_as.is_none() && settings.global.log_level.shows_warnings() {
-        eprintln!(
-            "{PROGRAM}: warning: --encoding does not apply to a document fetched over the \
-             network; it is read as the server said it should be"
-        );
+    // Two options that cannot always be applied, said before a browser starts
+    // because both are facts about the command line and the document rather than
+    // about the rendering.
+    if settings.global.log_level.shows_warnings() {
+        if object.web.encoding.is_some() && plan.requests.serve_as.is_none() {
+            eprintln!(
+                "{PROGRAM}: warning: --encoding does not apply to a document fetched over the \
+                 network; it is read as the server said it should be"
+            );
+        }
+        if !object.web.cookies.is_empty() && !plan::takes_cookies(document.url()) {
+            eprintln!(
+                "{PROGRAM}: warning: --cookie needs a document fetched over http or https; \
+                 a local document has no origin to scope a cookie to, so it is being ignored"
+            );
+        }
     }
 
     // Said before the browser starts, because it is a fact about the command
@@ -117,15 +116,22 @@ pub async fn convert(settings: &Settings) -> Result<(), ConvertError> {
 
         // Before anything is fetched, the document included: the policy has to
         // be in place for the first request, not the second (D10).
-        let policing = intercept::install(
-            page.session(),
-            plan.file_access.about(document.url()),
-            serve_as,
-        )
-        .await?;
+        let policing = intercept::install(page.session(), plan.requests.clone()).await?;
 
-        page.prepare(&object.web).await?;
+        page.prepare(&plan.prepare).await?;
         page.load(document.url(), &object.load, &progress).await?;
+
+        // Before printing, not after. A rejected password leaves the server's
+        // own 401 body as the response, which renders perfectly well and is not
+        // the document anybody asked for (D14).
+        if policing
+            .as_ref()
+            .is_some_and(rchtmltopdf_browser::Interception::credentials_rejected)
+        {
+            return Err(rchtmltopdf_browser::Error::Credentials {
+                url: document.url().to_string(),
+            });
+        }
         let pdf = page.print_to_pdf(&plan.print).await?;
 
         // Read before the guard is dropped, which is what stops interception.

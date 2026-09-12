@@ -53,7 +53,7 @@ async fn print(page_setup: PageSetup, web: WebSettings, path: &str) -> Option<Ve
     let browser = launch().await?;
     let server = TestServer::start().await;
     let page = browser.new_page().await.unwrap();
-    page.prepare(&web).await.unwrap();
+    page.prepare(&support::prepare(web.clone())).await.unwrap();
     page.load(
         &server.url(path),
         &LoadSettings::default(),
@@ -69,7 +69,7 @@ async fn print(page_setup: PageSetup, web: WebSettings, path: &str) -> Option<Ve
         page: page_setup,
         ..GlobalSettings::default()
     };
-    let plan = Plan::new(&global, &object, Clock::default());
+    let plan = Plan::new(&global, &object, Clock::default(), "about:blank");
     let pdf = page.print_to_pdf(&plan.print).await.unwrap();
     browser.close().await.unwrap();
     Some(pdf)
@@ -161,7 +161,7 @@ async fn screen_stylesheets_win_by_default_and_print_media_flips_it() {
             ..WebSettings::default()
         };
         let page = browser.new_page().await.unwrap();
-        page.prepare(&web).await.unwrap();
+        page.prepare(&support::prepare(web.clone())).await.unwrap();
         page.load(
             &server.url("/media"),
             &LoadSettings::default(),

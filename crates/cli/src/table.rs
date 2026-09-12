@@ -163,7 +163,6 @@ const V3: &str = "planned for V3";
 // conversion. Each says what is missing rather than which milestone it waits
 // for, because a milestone is not something a user can check and "the band is
 // not drawn" is.
-const NO_NETWORK: &str = "nothing is configured on the browser's network stack yet";
 const NO_ERROR_POLICY: &str = "a failure to load is not classified yet";
 
 /// `General Options` in wkhtmltopdf's extended help. Global scope.
@@ -474,7 +473,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "cookie",
         None,
         Object,
-        Planned(NO_NETWORK),
+        Implemented,
         &["name", "value"],
         "Set an additional cookie (repeatable), value should be url encoded",
     )
@@ -483,7 +482,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "custom-header",
         None,
         Object,
-        Planned(NO_NETWORK),
+        Implemented,
         &["name", "value"],
         "Set an additional HTTP header (repeatable)",
     )
@@ -492,14 +491,14 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "custom-header-propagation",
         None,
         Object,
-        Planned(NO_NETWORK),
+        Implemented,
         "Add HTTP headers specified by --custom-header for each resource request",
     ),
     OptionSpec::flag(
         "no-custom-header-propagation",
         None,
         Object,
-        Planned(NO_NETWORK),
+        Implemented,
         "Do not add HTTP headers specified by --custom-header for each resource request",
     ),
     OptionSpec::flag(
@@ -680,7 +679,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "password",
         None,
         Object,
-        Planned(NO_NETWORK),
+        Implemented,
         &["password"],
         "HTTP Authentication password",
     ),
@@ -734,7 +733,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "proxy",
         Some('p'),
         Object,
-        Planned(NO_NETWORK),
+        Implemented,
         &["proxy"],
         "Use a proxy",
     ),
@@ -855,7 +854,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "username",
         None,
         Object,
-        Planned(NO_NETWORK),
+        Implemented,
         &["username"],
         "HTTP Authentication username",
     ),

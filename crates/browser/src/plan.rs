@@ -34,7 +34,8 @@
 //! [`Page::load`]: crate::launch::Page::load
 
 use crate::band::{self, Edge};
-use crate::file_access::Policy;
+use crate::file_access::{self, Policy};
+use crate::intercept::{Charset, Credentials, Rules};
 use crate::launch::LaunchOptions;
 use crate::placeholder::{Clock, Context};
 use rchtmltopdf_core::settings::{
@@ -143,39 +144,35 @@ pub struct Plan {
     pub unsupported_placeholders: Vec<&'static str>,
     /// The bound over the whole of the above (D16). `None` is `--timeout 0`.
     pub deadline: Option<Duration>,
-    /// What to read a local document as, from `--encoding`.
+    /// What the interception handler will do with each request: the local file
+    /// rule (D10), `--encoding`, the document-only headers and the credentials.
     ///
-    /// Like the file policy below, only half decided here: a document fetched
-    /// over http or https is read as its server said and this does not apply.
-    pub encoding: Option<String>,
-    /// Which local files the document may read (D10).
-    ///
-    /// One of the two halves of a conversion the settings do not finish
-    /// deciding. What a
-    /// policy does depends on the document it is bound to — whether that
-    /// document is itself local, and where it sits — and the document is
-    /// resolved after the settings are read, because standard input becomes a
-    /// file whose name nothing could predict. `Policy::about` is where the two
-    /// meet.
-    pub file_access: Policy,
+    /// Bound to the document, which is why [`Plan::new`] takes one. Everything
+    /// here depends on knowing which request is the document's own, and on
+    /// whether the document is itself local.
+    pub requests: Rules,
 }
 
 impl Plan {
     /// The clock is a parameter rather than read here, because a plan is
     /// compared in tests and two built a second apart must be equal.
-    pub fn new(global: &GlobalSettings, object: &ObjectSettings, clock: Clock) -> Self {
+    pub fn new(
+        global: &GlobalSettings,
+        object: &ObjectSettings,
+        clock: Clock,
+        document_url: &str,
+    ) -> Self {
         let context = context(global, object, clock);
         let printing = print(&global.page, object, &context);
         Self {
             launch: launch(global, object),
-            prepare: prepare(&object.web),
+            prepare: prepare(object, document_url),
             load: LoadPlan::new(&object.load),
             print: printing.command,
             unsupported_placeholders: printing.unsupported,
             context,
             deadline: global.timeout,
-            encoding: object.web.encoding.clone(),
-            file_access: file_access(&object.web),
+            requests: rules(object, document_url),
         }
     }
 }
@@ -207,12 +204,55 @@ pub fn file_access(web: &WebSettings) -> Policy {
     }
 }
 
+/// What the interception handler is being asked to do.
+pub fn rules(object: &ObjectSettings, document_url: &str) -> Rules {
+    let web = &object.web;
+
+    // `--encoding` can only be applied to a document we can read ourselves. A
+    // document fetched over http or https is read as its server said, and there
+    // is nowhere to intervene.
+    let serve_as = web.encoding.as_ref().and_then(|name| {
+        file_access::local_path(document_url).map(|path| Charset {
+            url: document_url.to_string(),
+            path,
+            name: name.clone(),
+        })
+    });
+
+    Rules {
+        files: file_access(web).about(document_url),
+        document: document_url.to_string(),
+        serve_as,
+        // With propagation the headers go on every request instead, through
+        // `Network.setExtraHTTPHeaders` in `prepare`, and there is nothing left
+        // for the handler to add. Without it, only the document's own request
+        // carries them -- which is wkhtmltopdf's asymmetry, not ours.
+        document_headers: match web.propagate_custom_headers {
+            true => Vec::new(),
+            false => web.custom_headers.clone(),
+        },
+        credentials: (web.username.is_some() || web.password.is_some()).then(|| Credentials {
+            username: web.username.clone().unwrap_or_default(),
+            password: web.password.clone().unwrap_or_default(),
+        }),
+    }
+}
+
+/// Whether a document is one a cookie can be set for.
+///
+/// A cookie on a `file://` document is meaningless -- there is no origin to
+/// scope it to -- so it is dropped and the binary says so rather than failing.
+pub fn takes_cookies(document_url: &str) -> bool {
+    document_url.starts_with("http://") || document_url.starts_with("https://")
+}
+
 /// The browser to start.
 pub fn launch(global: &GlobalSettings, object: &ObjectSettings) -> LaunchOptions {
     LaunchOptions {
         no_sandbox: global.browser.no_sandbox,
         extra_args: global.browser.extra_args.clone(),
         allow_slow_scripts: !object.load.stop_slow_scripts,
+        proxy: object.web.proxy.clone(),
         // Blink settings rather than protocol commands, so they have to be
         // decided before the browser starts rather than before the page loads.
         minimum_font_size: object.web.minimum_font_size,
@@ -222,7 +262,8 @@ pub fn launch(global: &GlobalSettings, object: &ObjectSettings) -> LaunchOptions
 }
 
 /// What to put in place before the document arrives.
-pub fn prepare(web: &WebSettings) -> Vec<Command> {
+pub fn prepare(object: &ObjectSettings, document_url: &str) -> Vec<Command> {
+    let web = &object.web;
     // The two domains have to be enabled before anything is expected from them:
     // the load event for a small document can fire before the navigate call has
     // returned.
@@ -232,6 +273,42 @@ pub fn prepare(web: &WebSettings) -> Vec<Command> {
         emulate_media(web),
         viewport(web),
     ];
+
+    // Before the document is asked for, so the first request carries them.
+    if !web.cookies.is_empty() && takes_cookies(document_url) {
+        commands.push(Command::new(
+            "Network.setCookies",
+            json!({
+                "cookies": web
+                    .cookies
+                    .iter()
+                    .map(|cookie| json!({
+                        "name": cookie.name,
+                        // wkhtmltopdf's own help says the value arrives url
+                        // encoded, so it is decoded before the browser sees it.
+                        "value": file_access::percent_decode(&cookie.value),
+                        // Scoped to the document's own origin, which is what
+                        // wkhtmltopdf does and the only sane default.
+                        "url": document_url,
+                    }))
+                    .collect::<Vec<_>>(),
+            }),
+        ));
+    }
+
+    // Every request, not just the document's: that is what propagation means,
+    // and without it the handler puts them on the document alone.
+    if web.propagate_custom_headers && !web.custom_headers.is_empty() {
+        let headers: serde_json::Map<String, Value> = web
+            .custom_headers
+            .iter()
+            .map(|header| (header.name.clone(), Value::String(header.value.clone())))
+            .collect();
+        commands.push(Command::new(
+            "Network.setExtraHTTPHeaders",
+            json!({ "headers": headers }),
+        ));
+    }
 
     // Only sent when it is being turned off. Chromium runs scripts unless told
     // not to, so the absence of this command is the default, and sending it with
@@ -370,14 +447,29 @@ pub struct Printing {
 mod tests {
     use super::*;
     use rchtmltopdf_core::Input;
+    use rchtmltopdf_core::settings::Pair;
 
     fn page_object() -> ObjectSettings {
         ObjectSettings::page(Input::Stdin)
     }
 
+    /// The prepare commands for a page with these web settings, against a real
+    /// origin: cookies are dropped for anything else.
+    fn prepared(web: WebSettings) -> Vec<Command> {
+        let object = ObjectSettings {
+            web,
+            ..page_object()
+        };
+        prepare(&object, "https://example.com/doc")
+    }
+
+    fn methods(commands: &[Command]) -> Vec<&str> {
+        commands.iter().map(|command| command.method).collect()
+    }
+
     #[test]
     fn the_two_domains_are_enabled_before_anything_is_expected_of_them() {
-        let commands = prepare(&WebSettings::default());
+        let commands = prepared(WebSettings::default());
         let methods: Vec<&str> = commands.iter().map(|command| command.method).collect();
         assert_eq!(
             methods,
@@ -448,14 +540,14 @@ mod tests {
     /// make the plan for a default conversion longer than the conversion.
     #[test]
     fn scripting_is_only_mentioned_when_it_is_being_turned_off() {
-        let allowed = prepare(&WebSettings::default());
+        let allowed = prepared(WebSettings::default());
         assert!(
             !allowed
                 .iter()
                 .any(|command| command.method == "Emulation.setScriptExecutionDisabled")
         );
 
-        let refused = prepare(&WebSettings {
+        let refused = prepared(WebSettings {
             javascript: false,
             ..WebSettings::default()
         });
@@ -532,6 +624,105 @@ mod tests {
             LoadPlan::new(&load).settle,
             Settle::WindowStatus("ready".into())
         );
+    }
+
+    #[test]
+    fn cookies_are_set_before_the_document_is_asked_for_and_decoded() {
+        let web = WebSettings {
+            cookies: vec![Pair {
+                name: "session".into(),
+                value: "abc%20def".into(),
+            }],
+            ..WebSettings::default()
+        };
+        let commands = prepared(web.clone());
+        let cookies = commands
+            .iter()
+            .find(|command| command.method == "Network.setCookies")
+            .expect("a cookie should be set");
+
+        let first = &cookies.params["cookies"][0];
+        // wkhtmltopdf's own help says the value arrives url encoded.
+        assert_eq!(first["value"], json!("abc def"));
+        assert_eq!(first["url"], json!("https://example.com/doc"));
+
+        // A cookie on a local document has no origin to be scoped to.
+        let object = ObjectSettings {
+            web,
+            ..page_object()
+        };
+        assert!(
+            !methods(&prepare(&object, "file:///doc.html")).contains(&"Network.setCookies"),
+            "a file:// document takes no cookies"
+        );
+    }
+
+    /// The asymmetry is wkhtmltopdf's: without propagation a header is on the
+    /// document's own request and on nothing else, which needs the interception
+    /// handler; with it, on every request, which is one protocol call.
+    #[test]
+    fn propagation_decides_which_layer_carries_the_header() {
+        let header = Pair {
+            name: "X-Tenant".into(),
+            value: "acme".into(),
+        };
+        let mut web = WebSettings {
+            custom_headers: vec![header.clone()],
+            ..WebSettings::default()
+        };
+
+        let object = ObjectSettings {
+            web: web.clone(),
+            ..page_object()
+        };
+        assert!(!methods(&prepared(web.clone())).contains(&"Network.setExtraHTTPHeaders"));
+        assert_eq!(
+            rules(&object, "https://example.com/doc").document_headers,
+            [header]
+        );
+
+        web.propagate_custom_headers = true;
+        let object = ObjectSettings {
+            web: web.clone(),
+            ..page_object()
+        };
+        assert!(methods(&prepared(web)).contains(&"Network.setExtraHTTPHeaders"));
+        assert!(
+            rules(&object, "https://example.com/doc")
+                .document_headers
+                .is_empty(),
+            "the handler has nothing left to add"
+        );
+    }
+
+    /// Either half is enough to need an answer to a challenge: a server may want
+    /// only a username, and a password with no username is a mistake worth
+    /// sending rather than silently dropping.
+    #[test]
+    fn either_half_of_the_credentials_arms_the_handler() {
+        let object = |web| ObjectSettings {
+            web,
+            ..page_object()
+        };
+        let url = "https://example.com/doc";
+
+        assert!(
+            rules(&object(WebSettings::default()), url)
+                .credentials
+                .is_none()
+        );
+        for web in [
+            WebSettings {
+                username: Some("bob".into()),
+                ..WebSettings::default()
+            },
+            WebSettings {
+                password: Some("hunter2".into()),
+                ..WebSettings::default()
+            },
+        ] {
+            assert!(rules(&object(web), url).credentials.is_some());
+        }
     }
 
     #[test]

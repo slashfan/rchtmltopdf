@@ -3,7 +3,10 @@
 #![allow(dead_code)]
 
 use rchtmltopdf_browser::locate::{Executable, SystemEnvironment, locate};
+use rchtmltopdf_browser::plan::{self, Command};
 use rchtmltopdf_browser::{Browser, LaunchOptions};
+use rchtmltopdf_core::Input;
+use rchtmltopdf_core::settings::{ObjectSettings, WebSettings};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -25,6 +28,18 @@ pub fn browser_or_skip() -> Option<Executable> {
             None
         }
     }
+}
+
+/// What a page has to be sent before a document is opened.
+///
+/// The plan decides these now, so a test asks the plan rather than assembling
+/// protocol calls of its own and drifting from what the product sends.
+pub fn prepare(web: WebSettings) -> Vec<Command> {
+    let object = ObjectSettings {
+        web,
+        ..ObjectSettings::page(Input::Stdin)
+    };
+    plan::prepare(&object, "about:blank")
 }
 
 /// Launch options suited to wherever the tests are running.

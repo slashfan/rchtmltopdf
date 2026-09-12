@@ -7,7 +7,7 @@
 
 #![allow(dead_code)]
 
-use rchtmltopdf::table::{OptionSpec, Scope};
+use rchtmltopdf::table::{OptionSpec, SECTIONS, Scope};
 
 /// Split a command line the way a shell would, honouring single quotes.
 pub fn split(line: &str) -> Vec<String> {
@@ -88,6 +88,19 @@ pub fn written(spec: &OptionSpec) -> Vec<String> {
             .map(|name| placeholder(spec, name).to_string()),
     );
     words
+}
+
+/// The options listed in the same section of the table as this one.
+///
+/// A cheap stand-in for "options that might plausibly interact": the sections
+/// are wkhtmltopdf's own grouping, so `--custom-header` and its two propagation
+/// flags are in one, and the paper options are in another.
+pub fn section_of(spec: &OptionSpec) -> &'static [OptionSpec] {
+    SECTIONS
+        .iter()
+        .find(|(_, options)| options.iter().any(|other| other.long == spec.long))
+        .map(|(_, options)| *options)
+        .unwrap_or(&[])
 }
 
 /// A whole command line writing the given options, each somewhere the grammar

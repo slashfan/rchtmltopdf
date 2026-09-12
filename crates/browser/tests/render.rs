@@ -16,7 +16,9 @@ async fn a_plain_page_settles() {
     };
     let server = TestServer::start().await;
     let page = browser.new_page().await.unwrap();
-    page.prepare(&WebSettings::default()).await.unwrap();
+    page.prepare(&support::prepare(WebSettings::default()))
+        .await
+        .unwrap();
 
     let progress = Progress::new();
     page.load(&server.url("/plain"), &LoadSettings::default(), &progress)
@@ -39,7 +41,9 @@ async fn the_rung_being_climbed_is_visible_from_outside() {
     };
     let server = TestServer::start().await;
     let page = browser.new_page().await.unwrap();
-    page.prepare(&WebSettings::default()).await.unwrap();
+    page.prepare(&support::prepare(WebSettings::default()))
+        .await
+        .unwrap();
 
     let progress = Progress::new();
     let watcher = {
@@ -90,7 +94,9 @@ async fn a_request_that_fails_outright_does_not_hold_the_page_open() {
     };
     let server = TestServer::start().await;
     let page = browser.new_page().await.unwrap();
-    page.prepare(&WebSettings::default()).await.unwrap();
+    page.prepare(&support::prepare(WebSettings::default()))
+        .await
+        .unwrap();
 
     let settled = tokio::time::timeout(
         Duration::from_secs(15),
@@ -118,7 +124,9 @@ async fn a_slow_stylesheet_holds_the_page_open() {
     };
     let server = TestServer::start().await;
     let page = browser.new_page().await.unwrap();
-    page.prepare(&WebSettings::default()).await.unwrap();
+    page.prepare(&support::prepare(WebSettings::default()))
+        .await
+        .unwrap();
 
     let started = Instant::now();
     page.load(
@@ -147,7 +155,9 @@ async fn a_missing_image_does_not_hold_the_page_open() {
     };
     let server = TestServer::start().await;
     let page = browser.new_page().await.unwrap();
-    page.prepare(&WebSettings::default()).await.unwrap();
+    page.prepare(&support::prepare(WebSettings::default()))
+        .await
+        .unwrap();
 
     let settled = tokio::time::timeout(
         Duration::from_secs(15),
@@ -174,7 +184,9 @@ async fn window_status_is_waited_for() {
     };
     let server = TestServer::start().await;
     let page = browser.new_page().await.unwrap();
-    page.prepare(&WebSettings::default()).await.unwrap();
+    page.prepare(&support::prepare(WebSettings::default()))
+        .await
+        .unwrap();
 
     let load = LoadSettings {
         window_status: Some("ready".into()),
@@ -218,7 +230,7 @@ async fn scripting_can_be_disabled_and_the_ladder_still_completes() {
         javascript: false,
         ..WebSettings::default()
     };
-    page.prepare(&web).await.unwrap();
+    page.prepare(&support::prepare(web.clone())).await.unwrap();
 
     let progress = Progress::new();
     page.load(
@@ -260,7 +272,9 @@ async fn an_unreachable_url_fails_rather_than_printing_an_error_page() {
         return;
     };
     let page = browser.new_page().await.unwrap();
-    page.prepare(&WebSettings::default()).await.unwrap();
+    page.prepare(&support::prepare(WebSettings::default()))
+        .await
+        .unwrap();
 
     // Port 1 is reserved and nothing listens there.
     let outcome = page
@@ -295,7 +309,9 @@ async fn a_page_that_ticks_still_settles() {
     };
     let server = TestServer::start().await;
     let page = browser.new_page().await.unwrap();
-    page.prepare(&WebSettings::default()).await.unwrap();
+    page.prepare(&support::prepare(WebSettings::default()))
+        .await
+        .unwrap();
 
     let settled = tokio::time::timeout(
         Duration::from_secs(15),
