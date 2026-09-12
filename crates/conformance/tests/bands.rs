@@ -1,11 +1,12 @@
-//! Headers and footers, drawn into the margins by Chromium's print templates.
+//! Headers and footers, drawn into the margins as sheets stamped onto the pages
+//! (D38).
 //!
 //! # What was measured to write these
 //!
-//! A template is anchored to the **paper edge** and grows towards the content;
-//! its height is whatever its content needs, and `marginTop` has nothing to do
-//! with where it starts. Everything below follows from that, and every number in
-//! `band.rs`'s module documentation came from running these.
+//! A band is anchored to the **paper edge** and reaches towards the content,
+//! in a box at least as tall as the margin on its side; `marginTop` decides the
+//! box, not where the band starts. Everything below follows from that, and
+//! every number in `band.rs`'s module documentation came from running these.
 //!
 //! The rule is the instrument. Text position is not something the inspector
 //! exposes, but `--header-line` paints a rectangle 0.75pt tall across the page,
@@ -212,7 +213,8 @@ fn spacing_opens_a_gap_between_the_band_and_the_content() {
 }
 
 /// A bigger font makes a taller band, and the band grows towards the content
-/// rather than away from the paper.
+/// rather than away from the paper. A 40pt line is about 46pt tall against a
+/// 28pt margin, so the rule lands well below where the 12pt one does.
 #[test]
 fn the_font_size_decides_how_much_room_the_band_needs() {
     let Some(_browser) = require_chromium() else {
@@ -234,7 +236,7 @@ fn the_font_size_decides_how_much_room_the_band_needs() {
     );
 
     assert!(
-        rule(&large).top < rule(&small).top - 20.0,
+        rule(&large).top < rule(&small).top - 15.0,
         "a 40pt band should reach much further down than a 12pt one: {:.2} vs {:.2}",
         rule(&large).top,
         rule(&small).top

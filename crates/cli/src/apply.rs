@@ -260,6 +260,8 @@ pub fn apply_object(
         "include-in-outline" => object.in_outline = true,
         "exclude-from-outline" => object.in_outline = false,
 
+        "page-offset" => object.page_offset = number(occurrence)?,
+
         // --- links --------------------------------------------------------------
         "enable-external-links" => object.links.external = true,
         "disable-external-links" => object.links.external = false,

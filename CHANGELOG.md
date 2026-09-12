@@ -22,7 +22,37 @@ A table of contents is not built. Neither is most of the option surface beyond w
 needed: everything a table of contents needs is understood on the command line and not yet
 acted on.
 
+### Changed
+
+**Headers and footers are drawn after printing, as an overlay** (D38, #38). Until now they
+were Chromium's print templates, which cannot count past the document being printed: `[page]`
+restarted at one for every document of a conversion, `[topage]` was each document's own
+total, and `--page-offset` could not be honoured. Now the documents are printed without
+bands and merged, the page counts are read off the result, one sheet per page is written
+with every placeholder expanded, the same browser prints that document of sheets, and each
+sheet is drawn onto its page. Typography stays Chromium's, and the band's text is
+extractable like any other.
+
+Where a band lands has not changed in the ways that matter and has changed in one that
+does. A band still never moves the content, `--header-spacing` still opens a gap by moving
+the content and not the band, and a band taller than the margin still runs into the content.
+What changed: the rule of a `--header-line` now sits exactly on the margin line, the top
+margin down from the paper edge, where Chromium's template put it about a point lower.
+
 ### Added
+
+**Page numbers across documents** (#39). `[page]` and `[topage]` count across the whole
+output, `[sitepage]` and `[sitepages]` within the document the page came from, and
+`[frompage]` is where that document began. A cover counts in neither frame: the page after
+it is page one and `[topage]` leaves it out.
+
+**`--page-offset`** (#37) shifts `[page]`, `[topage]` and `[frompage]` on the document it
+was written on, and on every document when written before the first input.
+
+**`[section]`, `[subsection]` and `[subsubsection]`** name the heading in force on the page:
+the last `h1`, `h2` or `h3` at or before it, within the same document, read from the
+outline (D36). A band that uses them has the outline generated for its sake even under
+`--no-outline`. They used to expand to nothing with a warning.
 
 **Links** (#41). Chromium writes a link annotation for every `<a href>` it prints, and the
 conversion now finishes the job wkhtmltopdf did around them:

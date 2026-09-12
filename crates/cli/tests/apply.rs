@@ -335,6 +335,13 @@ fn the_outline_options_land_where_they_belong() {
 }
 
 #[test]
+fn the_page_offset_lands_on_its_object() {
+    let settings = settings("--page-offset 10 a.html b.html --page-offset 3 out.pdf");
+    assert_eq!(settings.objects[0].page_offset, 10);
+    assert_eq!(settings.objects[1].page_offset, 3);
+}
+
+#[test]
 fn the_link_options_land_where_they_belong() {
     let off = settings(
         "--disable-external-links --disable-internal-links --keep-relative-links a.html out.pdf",

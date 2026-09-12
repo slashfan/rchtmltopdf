@@ -117,7 +117,7 @@ and fills it white, so that assertion reads `inspect::painted`'s fill colour rat
 box. A test that measured the box passed whether the option worked or not.
 
 **The largest painted box is usually not the fixture's.** The page paints its own background
-across the whole content area, and the band templates add one across the whole sheet, so
+across the whole content area, and the band sheets add one across the whole sheet, so
 `largest_painted_box` is only the right instrument for a fixture that deliberately fills its
 content area. Everything else looks for a box of a known size, or one narrower than the
 paper.
@@ -145,7 +145,7 @@ Read these before changing behaviour they describe. Both are in French; the code
 and everything on GitHub are in English.
 
 - `docs/brief.md` — scope, V0 through V3, and what compatibility does and does not mean
-- `docs/decisions.md` — D01 to D37, binding, with the alternatives that were rejected
+- `docs/decisions.md` — D01 to D38, binding, with the alternatives that were rejected
 - `docs/migration.md` — why a migrated document changes size, for anything touching layout
 - `CONTRIBUTING.md` — the branch, pull request and Conventional Commit workflow
 

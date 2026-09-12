@@ -1,56 +1,60 @@
-//! Turning a header or footer into a Chromium print template.
+//! Turning headers and footers into a document of sheets, one per page.
 //!
-//! # What a template is, and what it is not
+//! # Why the bands are a document of their own
 //!
-//! `Page.printToPDF` takes two fragments of HTML and draws them into the top and
-//! bottom margins. They are not ordinary documents, and four things about them
-//! catch people out:
+//! Until D38 the bands were Chromium's print templates: two fragments of HTML
+//! the print call draws into the margins. A template cannot run a script,
+//! cannot load anything, and above all cannot count: it knows the page number
+//! within the document being printed and nothing else, so `[page]` restarted
+//! at one for every document of a conversion and `--page-offset` could not be
+//! honoured at all (#38, #39).
 //!
-//! - **A template cannot load anything.** No external stylesheet, no web font,
-//!   no image, and no JavaScript at all. Everything has to be inline, which is
-//!   why the markup below carries its styles as attributes. Those limits are
-//!   exactly the ones D04 names as the reason `--header-html` waits for the PDF
-//!   overlay in V2: an arbitrary document cannot be squeezed through here.
-//! - **The default font is about 10px and grey.** A migrated footer that said
-//!   nothing about its font would silently shrink and fade, so size, family and
-//!   colour are always written out, whether or not the user asked.
-//! - **Backgrounds need the colour adjustment property**, or a template that
-//!   paints anything comes out white.
-//! - **Asking for one band gets you Chromium's other one.** Turning
-//!   `displayHeaderFooter` on with only a `headerTemplate` leaves the footer at
-//!   Chromium's default, which is a page number nobody asked for. The empty band
-//!   has to be sent explicitly, which is what [`EMPTY`] is for.
+//! So the bands are printed separately, after everything else has been. One
+//! HTML document is built with one **sheet** per page of the merged output,
+//! each sheet the size of the paper, carrying the header and footer for its
+//! page with every placeholder already expanded — the numbers are known by
+//! then. Chromium prints that document, and `rchtmltopdf_pdf::stamp` draws
+//! each sheet onto its page. Typography stays Chromium's: fonts, shaping,
+//! measurement, and the text extraction the compatibility matrix relies on.
 //!
-//! # Where a band lands, and why spacing is not in here
+//! # Where a band lands
 //!
-//! Measured against the pinned Chromium rather than assumed. A template is
-//! anchored to the **paper edge** and grows towards the content; its height is
-//! whatever its content needs. Three consequences, all of them visible in
-//! `conformance/tests/bands.rs`:
+//! A band is anchored to the **paper edge** and reaches towards the content,
+//! and its box is at least as tall as the margin on that side. Three
+//! consequences, all of them held by `conformance/tests/bands.rs`:
 //!
 //! - **A band never moves the content.** The content box of a document printed
-//!   with a header sits exactly where the same document without one does. Adding
-//!   a header to a migrated command line cannot silently repaginate it.
-//! - **The margin is what has to accommodate the band.** A 12pt band is about
-//!   28.5pt tall and a 10mm margin is 28.3pt, so the default only just fits. At
-//!   `--header-font-size 40` the band runs into the content, and the answer is a
-//!   bigger `--margin-top`. That is wkhtmltopdf's arrangement too, and it is why
-//!   its `--default-header` is documented as needing room.
-//! - **Spacing cannot be padding.** The band is anchored at the top, so padding
-//!   below the rule moves the rule *towards* the content, which is backwards,
-//!   and padding under an inner rule is invisible because nothing is drawn below
-//!   it. The only thing that can open a gap between a band and the content is
-//!   the print margin, so `--header-spacing` is added there (see `plan::print`)
-//!   and this module knows nothing about it.
+//!   with a header sits exactly where the same document without one does.
+//!   Adding a header to a migrated command line cannot silently repaginate it.
+//! - **The rule sits on the margin line.** The band's row is aligned to the
+//!   content side of its box, so with a header the rule is exactly the top
+//!   margin down from the paper edge, right above the content.
+//! - **A band taller than the margin grows into the content.** The box has a
+//!   minimum height, not a fixed one, so a 40pt band in a 10mm margin runs over
+//!   the text rather than being clipped at the paper edge. That is
+//!   wkhtmltopdf's arrangement too, and why its `--default-header` is
+//!   documented as needing room: the margin is what has to accommodate the
+//!   band.
+//!
+//! **Spacing is not in here.** `--header-spacing` opens a gap between the band
+//! and the content, and the only thing that can move the content is the print
+//! margin, so it is added there (see `plan::print`). The band's own box is
+//! sized by the margin alone, which keeps the rule where it was.
+//!
+//! # Exactly one sheet per page
+//!
+//! Every sheet is the paper's exact size, with `overflow: hidden` and a page
+//! break after it, so nothing a band does can spill a sheet onto a second
+//! page. `stamp` checks the count and refuses a mismatch rather than drawing
+//! page three's footer on page four.
 //!
 //! # Placeholders
 //!
 //! `[page]`, `[date]` and the rest are expanded by [`crate::placeholder`], which
-//! also does the escaping: a band's text is somebody's document title, and
-//! `[page]` has to survive as a `<span>` while everything around it does not.
+//! also does the escaping: a band's text is somebody's document title.
 
-use crate::placeholder::{self, Context};
-use rchtmltopdf_core::settings::Band;
+use crate::placeholder::{self, Context, Numbers};
+use rchtmltopdf_core::settings::{Band, PageSetup};
 
 /// wkhtmltopdf's default band font, which is not Chromium's.
 const FONT: &str = "Arial";
@@ -59,64 +63,47 @@ const FONT: &str = "Arial";
 /// is two thirds of this.
 const SIZE_PT: f64 = 12.0;
 
-/// An explicitly empty band.
-///
-/// Not an empty string: an empty `footerTemplate` is treated as "no template
-/// given", and Chromium falls back to its own. A div that draws nothing is the
-/// way to ask for nothing.
-pub const EMPTY: &str = "<div></div>";
-
-/// A band's markup, and what it could not expand.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Template {
-    pub html: String,
-    /// Placeholders that are real in wkhtmltopdf and empty here. The binary says
-    /// so once per name, however many bands and cells used it.
-    pub unsupported: Vec<&'static str>,
-}
-
 /// Which end of the page a band is at.
 ///
-/// The only difference is which side the rule goes on, and which way the spacing
-/// pushes — but both differences are invisible until you see them the wrong way
-/// round on a printed page.
+/// The only difference is which side the rule goes on, and which way the band
+/// reaches — but both differences are invisible until you see them the wrong
+/// way round on a printed page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Edge {
     Header,
     Footer,
 }
 
-/// The template for one band, ready to hand to the print call.
+/// The header and footer of one page, as rows of markup ready to place.
 ///
-/// `left` and `right` are the page's side margins in millimetres: a template
-/// spans the full width of the paper, where wkhtmltopdf's band spans the content
-/// width, so the difference is padded out here.
-pub fn template(
+/// Empty strings for a page that has none: the sheet is still there, blank, so
+/// the sheets and the pages stay in step.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Sheet {
+    pub header: String,
+    pub footer: String,
+}
+
+/// One band's row: three cells, the font, and the rule if asked.
+///
+/// `left` and `right` are the page's side margins in millimetres: the row spans
+/// the full width of the paper, where wkhtmltopdf's band spans the content
+/// width, so the difference is padded out here. Empty for an empty band.
+pub fn row(
     band: &Band,
     edge: Edge,
     left_mm: f64,
     right_mm: f64,
     context: &Context,
-) -> Template {
+    numbers: &Numbers,
+) -> String {
     if band.is_empty() {
-        return Template {
-            html: EMPTY.to_string(),
-            unsupported: Vec::new(),
-        };
+        return String::new();
     }
 
-    let mut unsupported: Vec<&'static str> = Vec::new();
-    let mut cell = |text: Option<&str>| -> String {
-        let Some(text) = text else {
-            return String::new();
-        };
-        let expansion = placeholder::expand(text, context);
-        for name in expansion.unsupported {
-            if !unsupported.contains(&name) {
-                unsupported.push(name);
-            }
-        }
-        expansion.html
+    let cell = |text: Option<&str>| -> String {
+        text.map(|text| placeholder::expand(text, context, numbers))
+            .unwrap_or_default()
     };
     let (left, centre, right) = (
         cell(band.left.as_deref()),
@@ -135,7 +122,7 @@ pub fn template(
         (true, Edge::Footer) => "border-top:0.5pt solid #000;".to_string(),
     };
 
-    let html = format!(
+    format!(
         "<div style=\"\
          -webkit-print-color-adjust:exact;print-color-adjust:exact;\
          box-sizing:border-box;width:100%;margin:0;\
@@ -150,19 +137,63 @@ pub fn template(
         centre,
         right,
         family = placeholder::escape(family),
-    );
+    )
+}
 
-    Template { html, unsupported }
+/// The document of sheets, one per page, ready to print with no margins.
+pub fn document(paper: &PageSetup, sheets: &[Sheet]) -> String {
+    let size = paper.effective_size();
+    let (width, height) = (size.width.to_mm(), size.height.to_mm());
+    let (top, bottom) = (paper.margins.top.to_mm(), paper.margins.bottom.to_mm());
+
+    let mut html = format!(
+        "<!doctype html>\n<html><head><meta charset=\"utf-8\"><title>bands</title><style>\n\
+         @page {{ size: {width}mm {height}mm; margin: 0; }}\n\
+         html, body {{ margin: 0; padding: 0; }}\n\
+         .sheet {{ position: relative; width: {width}mm; height: {height}mm; \
+         overflow: hidden; page-break-after: always; }}\n\
+         .sheet:last-child {{ page-break-after: auto; }}\n\
+         .header, .footer {{ position: absolute; left: 0; right: 0; \
+         display: flex; flex-direction: column; }}\n\
+         .header {{ top: 0; min-height: {top}mm; justify-content: flex-end; }}\n\
+         .footer {{ bottom: 0; min-height: {bottom}mm; justify-content: flex-start; }}\n\
+         </style></head><body>\n"
+    );
+    for sheet in sheets {
+        html.push_str("<div class=\"sheet\">");
+        if !sheet.header.is_empty() {
+            html.push_str("<div class=\"header\">");
+            html.push_str(&sheet.header);
+            html.push_str("</div>");
+        }
+        if !sheet.footer.is_empty() {
+            html.push_str("<div class=\"footer\">");
+            html.push_str(&sheet.footer);
+            html.push_str("</div>");
+        }
+        html.push_str("</div>\n");
+    }
+    html.push_str("</body></html>\n");
+    html
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rchtmltopdf_core::settings::Margins;
+    use rchtmltopdf_core::units::Length;
 
-    /// The template's markup, expanded against an empty context: these tests are
-    /// about layout and escaping, and `placeholder.rs` covers expansion.
+    /// A row's markup, expanded against an empty context: these tests are about
+    /// layout and escaping, and `placeholder.rs` covers expansion.
     fn markup(band: &Band, edge: Edge, left: f64, right: f64) -> String {
-        template(band, edge, left, right, &Context::default()).html
+        row(
+            band,
+            edge,
+            left,
+            right,
+            &Context::default(),
+            &Numbers::default(),
+        )
     }
 
     fn band(center: &str) -> Band {
@@ -172,16 +203,13 @@ mod tests {
         }
     }
 
-    /// An empty string would leave Chromium drawing its own footer, which is a
-    /// page number the user did not ask for.
     #[test]
-    fn an_empty_band_is_still_a_template() {
-        assert_eq!(markup(&Band::default(), Edge::Footer, 10.0, 10.0), EMPTY);
-        assert!(!EMPTY.is_empty());
+    fn an_empty_band_is_no_row_at_all() {
+        assert_eq!(markup(&Band::default(), Edge::Footer, 10.0, 10.0), "");
     }
 
-    /// Both are written on every template. Chromium's own defaults are about
-    /// 10px and grey, so a migrated band that said nothing about its font would
+    /// Both are written on every row. Chromium's own defaults are about 10px
+    /// and grey, so a migrated band that said nothing about its font would
     /// silently shrink and fade.
     #[test]
     fn the_font_is_wkhtmltopdfs_default_rather_than_chromiums() {
@@ -224,7 +252,7 @@ mod tests {
     /// to the paper edge: padding below the rule moves the rule towards the
     /// content, which is the wrong way round. `plan::print` is where it lands.
     #[test]
-    fn spacing_does_not_appear_in_the_template_at_all() {
+    fn spacing_does_not_appear_in_the_row_at_all() {
         let spaced = Band {
             spacing: Some(5.0),
             ..band("x")
@@ -234,7 +262,7 @@ mod tests {
         assert_eq!(html, markup(&band("x"), Edge::Header, 10.0, 10.0));
     }
 
-    /// A template spans the paper; wkhtmltopdf's band spans the content. The
+    /// A row spans the paper; wkhtmltopdf's band spans the content. The
     /// difference is the side margins, and without this a centred footer is not
     /// centred on the text above it whenever the two margins differ.
     #[test]
@@ -274,7 +302,7 @@ mod tests {
         assert!(html.contains("&quot;"), "{html}");
     }
 
-    /// A template that paints anything comes out white without it.
+    /// A row that paints anything comes out white without it.
     #[test]
     fn colours_are_asked_to_print() {
         let html = markup(&band("x"), Edge::Header, 10.0, 10.0);
@@ -287,5 +315,85 @@ mod tests {
     fn the_three_cells_divide_the_width_evenly() {
         let html = markup(&band("x"), Edge::Header, 10.0, 10.0);
         assert_eq!(html.matches("flex:1 1 0").count(), 3, "{html}");
+    }
+
+    // --- the document of sheets --------------------------------------------------
+
+    fn paper() -> PageSetup {
+        PageSetup {
+            margins: Margins {
+                top: Length::mm(15.0),
+                bottom: Length::mm(20.0),
+                ..Margins::default()
+            },
+            ..PageSetup::default()
+        }
+    }
+
+    /// One sheet per page, blank ones included, so the sheets and the pages
+    /// stay in step.
+    #[test]
+    fn there_is_one_sheet_per_page_blank_or_not() {
+        let sheets = [
+            Sheet {
+                header: "<div>H1</div>".into(),
+                footer: String::new(),
+            },
+            Sheet::default(),
+            Sheet {
+                header: String::new(),
+                footer: "<div>F3</div>".into(),
+            },
+        ];
+        let html = document(&paper(), &sheets);
+        assert_eq!(html.matches("class=\"sheet\"").count(), 3, "{html}");
+        assert_eq!(html.matches("class=\"header\"").count(), 1, "{html}");
+        assert_eq!(html.matches("class=\"footer\"").count(), 1, "{html}");
+        assert!(html.contains("H1") && html.contains("F3"));
+    }
+
+    /// The sheet is the paper, exactly, and cannot spill.
+    #[test]
+    fn a_sheet_is_the_papers_size_and_clips() {
+        let html = document(&paper(), &[Sheet::default()]);
+        assert!(
+            html.contains("@page { size: 210mm 297mm; margin: 0; }"),
+            "{html}"
+        );
+        assert!(html.contains("width: 210mm; height: 297mm"), "{html}");
+        assert!(
+            html.contains("overflow: hidden; page-break-after: always"),
+            "{html}"
+        );
+        assert!(html.contains("page-break-after: auto"), "{html}");
+    }
+
+    /// The box is at least the margin, and the row sits on the content side of
+    /// it: the header's at its bottom, the footer's at its top.
+    #[test]
+    fn a_band_fills_its_margin_from_the_paper_edge() {
+        let html = document(&paper(), &[Sheet::default()]);
+        assert!(
+            html.contains(".header { top: 0; min-height: 15mm; justify-content: flex-end; }"),
+            "{html}"
+        );
+        assert!(
+            html.contains(".footer { bottom: 0; min-height: 20mm; justify-content: flex-start; }"),
+            "{html}"
+        );
+    }
+
+    /// Landscape swaps the sheet, as it swaps the paper.
+    #[test]
+    fn the_sheet_follows_the_orientation() {
+        let landscape = PageSetup {
+            orientation: rchtmltopdf_core::page_size::Orientation::Landscape,
+            ..PageSetup::default()
+        };
+        let html = document(&landscape, &[Sheet::default()]);
+        assert!(
+            html.contains("@page { size: 297mm 210mm; margin: 0; }"),
+            "{html}"
+        );
     }
 }

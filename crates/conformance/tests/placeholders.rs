@@ -1,8 +1,10 @@
 //! wkhtmltopdf's `[page]`, `[date]` and the rest, in a real document.
 //!
-//! The page numbers are the only ones the browser answers, and they are the only
-//! ones a unit test cannot check: nobody knows how many pages a document has
-//! until it has been laid out, which happens inside the print call.
+//! The page numbers are the ones a unit test cannot check: nobody knows how
+//! many pages a document has until it has been laid out, which happens inside
+//! the print call. Since D38 the bands are drawn afterwards, from counts read
+//! off the printed pages, and `numbering.rs` holds the counts across several
+//! documents; this file holds the placeholders within one.
 
 use rchtmltopdf_conformance::binary::{Outcome, Run};
 use rchtmltopdf_conformance::fixture::{self, Scratch};
@@ -171,32 +173,57 @@ fn replace_defines_a_placeholder() {
     assert!(pdf.text().contains("For Acme Ltd"), "{:?}", pdf.text());
 }
 
-/// The three that name a position in the outline. Empty rather than their own
-/// name, and said once on stderr rather than silently.
+/// The three that name a heading, read from the outline (D36): the last
+/// `h1`, `h2` or `h3` at or before the page.
 #[test]
-fn what_needs_an_outline_is_empty_and_reported() {
+fn the_section_placeholders_name_the_heading_in_force() {
     let Some(_browser) = require_chromium() else {
         return;
     };
-    let scratch = Scratch::new("placeholders-outline");
-    let document = page(&scratch);
+    let scratch = Scratch::new("placeholders-section");
+    let document = fixture::write(
+        scratch.path(),
+        "s.html",
+        "<h1>Alpha</h1><h2>Alpha One</h2>\
+         <div style=\"page-break-after:always\"></div>\
+         <p>still alpha</p>\
+         <div style=\"page-break-after:always\"></div>\
+         <h1>Beta</h1>",
+    );
 
-    let (pdf, outcome) = run(&document, &["--footer-center", "in [section] here"]);
-    let text = flat(&pdf);
-    assert!(text.contains("in") && text.contains("here"), "{text:?}");
+    let (pdf, outcome) = run(
+        &document,
+        &[
+            "--no-outline",
+            "--footer-center",
+            "in [section] / [subsection] here",
+        ],
+    );
+    assert_eq!(pdf.page_count(), 3, "{}", pdf.describe());
+    let flatten = |page: usize| pdf.page_text(page).replace('\n', "");
     assert!(
-        !text.contains("section"),
-        "the placeholder should expand to nothing, not to its own name: {text:?}"
+        flatten(1).contains("in Alpha / Alpha One here"),
+        "{}",
+        flatten(1)
+    );
+    // A page with no heading of its own is still in the section that began
+    // before it.
+    assert!(
+        flatten(2).contains("in Alpha / Alpha One here"),
+        "{}",
+        flatten(2)
     );
     assert!(
-        outcome.stderr.contains("[section]") && outcome.stderr.contains("V2"),
-        "should say what is missing and when:\n{}",
-        outcome.stderr
+        flatten(3).contains("in Beta / Alpha One here"),
+        "{}",
+        flatten(3)
     );
-    assert_eq!(
-        outcome.stderr.matches("[section]").count(),
-        1,
-        "once per name, however many pages:\n{}",
+    // `--no-outline` kept the outline out of the file, and the band still had
+    // its headings: the outline was generated for the band's sake.
+    assert!(pdf.outline().is_empty());
+    assert!(
+        !outcome.stderr.contains("[section]"),
+        "nothing to warn about any more:\n{}",
         outcome.stderr
     );
 }
