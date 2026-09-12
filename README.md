@@ -133,8 +133,8 @@ above.
 | Grammar, option table, translation | `crates/cli` | Working |
 | Units, page sizes, settings model | `crates/core` | Working |
 | Finding, launching and driving Chromium | `crates/browser` | Working |
-| Several documents, merged into one PDF | `crates/cli`, `crates/pdf` | Working |
-| Cover, table of contents | | V2 and V3 |
+| Several documents and covers, merged into one PDF | `crates/cli`, `crates/pdf` | Working |
+| Table of contents | | V3 |
 | Metadata, outlines | `crates/pdf` | Metadata working, outlines V2 |
 
 Still early. Many wkhtmltopdf options are recognised and ignored with a warning rather than

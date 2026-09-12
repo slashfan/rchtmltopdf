@@ -107,6 +107,14 @@ fn build_object(object: &Object, inherited: &ObjectSettings) -> Result<ObjectSet
         input,
         ..inherited.clone()
     };
+    // A cover "does not have headers and footers", in wkhtmltopdf's words: the
+    // bands every object inherits are cleared before its own options are read,
+    // so a footer given before the first input decorates the pages and not the
+    // cover, while one written after `cover` still applies to it.
+    if kind == SettingsObjectKind::Cover {
+        settings.header = Band::default();
+        settings.footer = Band::default();
+    }
     for occurrence in &object.options {
         apply_object(occurrence, &mut settings)?;
     }

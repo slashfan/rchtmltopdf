@@ -135,7 +135,9 @@ runner, on a Mac and in the Docker image, and a page count that passes locally f
 for a reason unrelated to the change. `fixture::document` embeds the vendored font as a
 `data:` URI and asks for a family name no system font answers to, with no fallback. See
 `crates/conformance/fixtures/fonts/README.md`, and do not add a fallback to make something
-render.
+render. **And no headings or bold in a fixture**: the font has one weight, a synthesised bold
+comes out of Chromium as a Type 3 font of outlines, and the text on that page cannot be
+extracted, so a sentinel in an `<h1>` fails a test for a reason unrelated to the change.
 
 ## Deeper reading
 

@@ -35,3 +35,13 @@ one assertion.
 ```bash
 shasum -a 256 crates/conformance/fixtures/fonts/noto-sans-latin-400-normal.woff2
 ```
+
+## Regular only, so no headings and no bold in a fixture
+
+The file carries weight 400 and nothing else. Ask for bold — an `<h1>`, a `<b>`, a
+`font-weight` — and Chromium synthesises it, and what it then writes into the PDF is a
+Type 3 font of glyph outlines rather than the embedded face: the text is drawn, and it is
+**not extractable**. `page_text` on such a page gives glyph indices shifted into ASCII
+(`COVERTEXT` came back as `&29(57(;7`), so an assertion on a sentinel fails for a reason
+that has nothing to do with the option under test. Write sentinels in a `div`.
+

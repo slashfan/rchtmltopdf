@@ -18,9 +18,19 @@ screen or print stylesheets, whether scripts run, and how long to wait before pr
 Options it does not act on are accepted and warned about rather than breaking a command
 line that uses them.
 
-Covers and a table of contents are not built. Neither is most of the option surface beyond
-what V0 needed: the outline and everything a table of contents needs are understood on the
-command line and not yet acted on.
+A table of contents is not built. Neither is most of the option surface beyond what V0
+needed: the outline and everything a table of contents needs are understood on the command
+line and not yet acted on.
+
+### Added
+
+**The cover object** (#37). `cover <input>` is printed like a page, with two differences
+wkhtmltopdf documents: it has no headers and footers — the bands given as defaults reach
+every page and not the cover, while a band written after `cover` is the cover's own — and
+it does not count, so the first page after it is page one and `[topage]` leaves it out.
+Leaving it out of the outline waits for the outline (#40); `--page-offset` waits for
+numbering across documents (#39), because a Chromium template cannot add to the number it
+is handed.
 
 ### Added
 

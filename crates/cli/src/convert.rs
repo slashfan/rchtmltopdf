@@ -379,10 +379,11 @@ fn println_stderr(line: &str) {
 
 /// The documents to convert, in order.
 ///
-/// Pages only, so far. A cover or a table of contents is refused by name:
-/// converting the pages around it and saying nothing would produce a document
-/// that looks right and is missing part of itself, which is the worst outcome
-/// available.
+/// Pages and covers. A cover is a page that was given no bands and will be
+/// left out of the outline (#40); nothing about printing it differs. A table
+/// of contents is refused by name: converting the pages around it and saying
+/// nothing would produce a document that looks right and is missing part of
+/// itself, which is the worst outcome available.
 fn pages(settings: &Settings) -> Result<Vec<&ObjectSettings>, ConvertError> {
     if settings.objects.is_empty() {
         return Err(ConvertError::Unsupported("no document to convert".into()));
@@ -390,12 +391,7 @@ fn pages(settings: &Settings) -> Result<Vec<&ObjectSettings>, ConvertError> {
 
     for object in &settings.objects {
         match object.kind {
-            ObjectKind::Page => {}
-            ObjectKind::Cover => {
-                return Err(ConvertError::Unsupported(
-                    "a cover page is not supported yet (planned for V2)".into(),
-                ));
-            }
+            ObjectKind::Page | ObjectKind::Cover => {}
             ObjectKind::Toc => {
                 return Err(ConvertError::Unsupported(
                     "a table of contents is not supported yet (planned for V3)".into(),
@@ -443,19 +439,17 @@ mod tests {
         assert_eq!(pages(&with(vec![page(), page(), page()])).unwrap().len(), 3);
     }
 
-    /// Converting the pages around a cover and saying nothing would produce a
-    /// document that looks right and is missing part of itself.
     #[test]
-    fn a_cover_and_a_table_of_contents_say_which_milestone_they_wait_for() {
+    fn a_cover_is_converted_like_a_page() {
         let mut cover = page();
         cover.kind = ObjectKind::Cover;
-        assert!(
-            pages(&with(vec![page(), cover]))
-                .unwrap_err()
-                .to_string()
-                .contains("V2")
-        );
+        assert_eq!(pages(&with(vec![cover, page()])).unwrap().len(), 2);
+    }
 
+    /// Converting the pages around it and saying nothing would produce a
+    /// document that looks right and is missing part of itself.
+    #[test]
+    fn a_table_of_contents_says_which_milestone_it_waits_for() {
         let mut toc = page();
         toc.kind = ObjectKind::Toc;
         assert!(
