@@ -157,6 +157,35 @@ pub struct BrowserSettings {
     pub no_sandbox: bool,
 }
 
+/// The outline — bookmarks, in a reader's sidebar — and what to do with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutlineSettings {
+    /// `--outline` and `--no-outline`. On, as in wkhtmltopdf.
+    pub enabled: bool,
+    /// `--outline-depth`: headings deeper than this are left out.
+    pub depth: u32,
+    /// `--dump-outline`: where to write the outline as XML, if anywhere.
+    pub dump: Option<PathBuf>,
+}
+
+impl Default for OutlineSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            depth: 4,
+            dump: None,
+        }
+    }
+}
+
+impl OutlineSettings {
+    /// Whether the browser has to produce one at all: to keep, or to dump.
+    /// `--no-outline --dump-outline x` still needs it generated.
+    pub fn wanted(&self) -> bool {
+        self.enabled || self.dump.is_some()
+    }
+}
+
 /// Settings for the run as a whole.
 ///
 /// Paper, orientation and margins live here rather than per object because
@@ -173,6 +202,7 @@ pub struct GlobalSettings {
     pub timeout: Option<Duration>,
     pub log_level: LogLevel,
     pub browser: BrowserSettings,
+    pub outline: OutlineSettings,
 }
 
 impl Default for GlobalSettings {
@@ -181,6 +211,7 @@ impl Default for GlobalSettings {
             page: PageSetup::default(),
             output: Output::Stdout,
             title: None,
+            outline: OutlineSettings::default(),
             // wkhtmltopdf has no deadline at all, which leaves a hung browser
             // blocking the caller for ever. Thirty seconds covers real documents
             // and still protects a web worker (D16).
@@ -365,6 +396,10 @@ pub struct ObjectSettings {
     /// Replacements applied to header and footer text before placeholders are
     /// expanded.
     pub replacements: Vec<Pair>,
+    /// `--include-in-outline` and `--exclude-from-outline`: whether this
+    /// document's headings go into the outline and the table of contents.
+    /// Off for a cover.
+    pub in_outline: bool,
 }
 
 impl ObjectSettings {
@@ -379,6 +414,7 @@ impl ObjectSettings {
             header: Band::default(),
             footer: Band::default(),
             replacements: Vec::new(),
+            in_outline: true,
         }
     }
 }
@@ -472,6 +508,23 @@ mod tests {
 
         assert!(object.header.is_empty());
         assert!(object.footer.is_empty());
+
+        // An outline, four levels deep, with every page in it.
+        assert!(settings.global.outline.enabled);
+        assert_eq!(settings.global.outline.depth, 4);
+        assert!(settings.global.outline.dump.is_none());
+        assert!(object.in_outline);
+    }
+
+    /// `--no-outline --dump-outline x` still needs the browser to produce one.
+    #[test]
+    fn an_outline_is_wanted_to_keep_or_to_dump() {
+        let mut outline = OutlineSettings::default();
+        assert!(outline.wanted());
+        outline.enabled = false;
+        assert!(!outline.wanted());
+        outline.dump = Some(PathBuf::from("o.xml"));
+        assert!(outline.wanted());
     }
 
     #[test]

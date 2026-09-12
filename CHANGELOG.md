@@ -19,10 +19,28 @@ Options it does not act on are accepted and warned about rather than breaking a 
 line that uses them.
 
 A table of contents is not built. Neither is most of the option surface beyond what V0
-needed: the outline and everything a table of contents needs are understood on the command
-line and not yet acted on.
+needed: everything a table of contents needs is understood on the command line and not yet
+acted on.
 
 ### Added
+
+**The outline** (#40): the bookmarks a reader lists in its sidebar, derived from the
+headings, nested by level, one destination each. On by default as in wkhtmltopdf;
+`--no-outline` leaves it out; `--outline-depth` cuts it, four levels deep by default;
+`--exclude-from-outline` keeps one document's headings out of it and a cover is out of it
+by construction. Across several documents the outlines are joined end to end, in order,
+each entry pointing at the page it landed on after the merge.
+
+Chromium builds the outline during the print call, all or nothing per document (D36). The
+depth is cut afterwards in the `pdf` crate, which unhooks the entries below the boundary
+and prunes them from the file rather than leaving titles in the bytes that no reader shows.
+
+`--dump-outline <file>` writes it in the XML wkhtmltopdf's scripts read: an `outline` root in
+the `http://wkhtmltopdf.org/outline` namespace, `item` elements nested as the headings were,
+each with `title`, `page`, `link` and `backLink`. `page` is the 1-based page in the file.
+`link` and `backLink` are written empty: they named anchors wkhtmltopdf planted so a table of
+contents could point at a section and back, and nothing plants those yet (#43). The dump is
+written even with `--no-outline`, and describes the outline after `--outline-depth`.
 
 **The cover object** (#37). `cover <input>` is printed like a page, with two differences
 wkhtmltopdf documents: it has no headers and footers — the bands given as defaults reach

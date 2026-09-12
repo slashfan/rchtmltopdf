@@ -340,6 +340,16 @@ L'asymétrie compte aussi. Ne pas l'intégrer laisse les deux options ouvertes �
 
 **Écarté.** Un navigateur par document : simple, correct, et dix fois plus lent pour le cas courant. Charger toutes les pages avant d'en imprimer une : un `--javascript-delay` par page se recouvre, mais la mémoire est celle de tous les documents à la fois, et l'ordre d'impression doit être reconstitué. Un pool ou un démon : toujours différé (D11).
 
+## D36 — Outline : celui que Chromium génère à l'impression, borné et fusionné après coup
+
+**Choix.** `Page.printToPDF` est appelé avec `generateDocumentOutline`, et Chromium dérive l'outline des titres `<h1>` à `<h6>`, imbriqués par niveau, avec une destination par entrée. Le crate `pdf` fait le reste après l'impression : `--outline-depth` décroche les entrées sous la borne et les élague du fichier, `--no-outline` retire la racine, la fusion (#36) enchaîne les outlines des documents sous une racine unique, et `--dump-outline` écrit ce que le fichier porte, au format XML de wkhtmltopdf. Un document `--exclude-from-outline`, ou un `cover`, est simplement imprimé sans outline.
+
+**Pourquoi.** C'est le chemin le moins cher, et #40 demandait de l'essayer avant de construire quoi que ce soit. L'alternative — extraire les titres par script, puis retrouver la page de chacun — bute sur le problème que la table des matières (V3) devra résoudre de toute façon : quelle page porte tel titre n'est connu qu'après l'impression. Chromium le sait au moment d'imprimer, et l'écrit.
+
+**Ce que ça coûte.** L'outline de Chromium est tout ou rien par document : la profondeur se coupe après coup, ce qui est une passe de plus sur le fichier. Les titres sont ceux que Chromium extrait — balisage retiré, entités résolues — et non le HTML brut. `page` dans le XML est la page physique dans le fichier ; quand `--page-offset` existera (#39), c'est là qu'il faudra choisir entre page physique et page affichée. `link` et `backLink` sont vides : ils nommaient des ancres que wkhtmltopdf plantait dans le document, et rien ne les plante encore (#43).
+
+**Écarté.** Extraire les titres soi-même (voir ci-dessus). Imprimer avec l'outline seulement quand `--outline-depth` vaut sa valeur par défaut, pour économiser la passe : la passe est aussi celle qui lit l'outline pour `--dump-outline`, et deux chemins pour un même résultat sont deux chemins à tester.
+
 ---
 
 ## Conséquences transverses
