@@ -16,6 +16,13 @@ use std::time::Duration;
 /// A document with a sentinel in it, served at a real URL.
 pub const PAGE: &str = "/page";
 
+/// A stylesheet, for `--user-style-sheet` written as a URL.
+pub const STYLESHEET: &str = "/stylesheet.css";
+
+/// What [`STYLESHEET`] serves: taller than A4's content area, so a document that
+/// applies it needs a second page and one that does not needs one.
+pub const TALL_CSS: &str = "#pad { height: 400mm; }";
+
 /// A document that pulls in whatever URL follows `?href=`, as a stylesheet.
 ///
 /// For the question only a real origin can ask: what a page fetched over http is
@@ -59,6 +66,11 @@ impl Server {
                         // not accumulate parked threads for ever; the deadline
                         // under test is far shorter than this.
                         std::thread::sleep(Duration::from_secs(120));
+                        return;
+                    }
+
+                    if path.starts_with(STYLESHEET) {
+                        let _ = respond(&mut stream, "200 OK", "text/css", TALL_CSS);
                         return;
                     }
 

@@ -69,6 +69,22 @@ pub enum Error {
     Launch {
         detail: String,
     },
+    /// A user stylesheet could not be read.
+    ///
+    /// Named explicitly on the command line, so a missing one is a mistake to
+    /// report rather than a subresource to shrug at.
+    StyleSheet {
+        path: PathBuf,
+        reason: String,
+    },
+    /// A `--run-script` threw.
+    ///
+    /// Carries the script as it was written, because a command line usually
+    /// carries several and "a script failed" names none of them.
+    Script {
+        source: String,
+        message: String,
+    },
     /// The browser answered the command with an error.
     Protocol(ProtocolError),
     /// The connection went away before the reply arrived. Usually means the
@@ -111,6 +127,14 @@ impl fmt::Display for Error {
                 write!(f, "could not load {url}: {reason}")
             }
             Error::Launch { detail } => write!(f, "{detail}"),
+            Error::StyleSheet { path, reason } => write!(
+                f,
+                "could not read the user stylesheet {}: {reason}",
+                path.display()
+            ),
+            Error::Script { source, message } => {
+                write!(f, "--run-script {source} failed: {message}")
+            }
             Error::Protocol(error) => write!(f, "the browser rejected the command: {error}"),
             Error::ConnectionClosed => write!(f, "the connection to the browser closed"),
             Error::MessageTooLarge { limit } => write!(

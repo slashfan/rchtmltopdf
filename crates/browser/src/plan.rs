@@ -39,6 +39,7 @@ use rchtmltopdf_core::settings::{
     GlobalSettings, LoadSettings, MediaType, ObjectSettings, PageSetup, WebSettings,
 };
 use serde_json::{Value, json};
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// One protocol call, decided but not yet sent.
@@ -67,15 +68,38 @@ pub enum Settle {
     WindowStatus(String),
 }
 
+/// A user stylesheet, and how it gets into the document.
+///
+/// `--user-style-sheet` takes either a path or a URL, and they are not the same
+/// thing to do. A path is read by us and inlined, which is deliberately not the
+/// same as letting the document fetch it: the user named this file on the
+/// command line, so the policy governing what the *document* may reach off the
+/// disk has nothing to say about it (D10). A URL is left to the browser, and is
+/// fetched before the network is judged idle because it is put in first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Injection {
+    File(PathBuf),
+    Link(String),
+}
+
 /// What the wait ladder has been asked to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadPlan {
+    /// Put in place once the document exists and **before the wait for web
+    /// fonts**. A user stylesheet that declares a font face arriving after that
+    /// wait makes the wait meaningless: it resolves against the fonts the page
+    /// had, and the one being introduced is still being fetched when the page is
+    /// printed.
+    pub inject: Option<Injection>,
     pub settle: Settle,
+    /// Run in order once the page has settled, each awaited.
+    pub scripts: Vec<String>,
 }
 
 impl LoadPlan {
     pub fn new(load: &LoadSettings) -> Self {
         Self {
+            inject: load.user_style_sheet.as_deref().map(injection),
             // Naming a status replaces the delay rather than adding to it, which
             // is what wkhtmltopdf does: the delay is the fallback for having no
             // signal, and a page that publishes one does not need it.
@@ -83,7 +107,18 @@ impl LoadPlan {
                 Some(wanted) => Settle::WindowStatus(wanted.clone()),
                 None => Settle::Delay(load.javascript_delay),
             },
+            scripts: load.run_scripts.clone(),
         }
+    }
+}
+
+/// Tell a path from a URL the way every other option here tells them apart, so
+/// `C:\styles.css` cannot be a path to one option and a URL to another.
+fn injection(written: &str) -> Injection {
+    if rchtmltopdf_core::has_url_scheme(written) {
+        Injection::Link(written.to_string())
+    } else {
+        Injection::File(PathBuf::from(written))
     }
 }
 
@@ -367,6 +402,40 @@ mod tests {
         // 297mm, the long edge, is now the width.
         let width = command.params["paperWidth"].as_f64().unwrap();
         assert!((width - 297.0 / 25.4).abs() < 1e-9, "{width}");
+    }
+
+    #[test]
+    fn a_stylesheet_is_a_file_to_read_or_a_url_to_fetch() {
+        let mut load = LoadSettings::default();
+        assert_eq!(LoadPlan::new(&load).inject, None);
+
+        load.user_style_sheet = Some("/srv/print.css".into());
+        assert_eq!(
+            LoadPlan::new(&load).inject,
+            Some(Injection::File(PathBuf::from("/srv/print.css")))
+        );
+
+        load.user_style_sheet = Some("https://example.com/print.css".into());
+        assert_eq!(
+            LoadPlan::new(&load).inject,
+            Some(Injection::Link("https://example.com/print.css".into()))
+        );
+
+        // A drive letter is not a scheme, here as everywhere else.
+        load.user_style_sheet = Some(r"C:\styles\print.css".into());
+        assert!(matches!(
+            LoadPlan::new(&load).inject,
+            Some(Injection::File(_))
+        ));
+    }
+
+    #[test]
+    fn scripts_keep_the_order_they_were_written_in() {
+        let load = LoadSettings {
+            run_scripts: vec!["first()".into(), "second()".into()],
+            ..LoadSettings::default()
+        };
+        assert_eq!(LoadPlan::new(&load).scripts, ["first()", "second()"]);
     }
 
     #[test]

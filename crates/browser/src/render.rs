@@ -18,11 +18,26 @@
 //!
 //! The current rung is published as it goes, so a conversion that gets stuck can
 //! say where rather than leaving it to be guessed.
+//!
+//! # Two things happen around the ladder, and where matters
+//!
+//! **The user stylesheet goes in after the load event and before rung 2.** It has
+//! to be after, because there is no `document.head` to put it in until the
+//! document exists. It has to be before rung 2 so a stylesheet named by URL is
+//! still counted as in flight, and before rung 3 because a stylesheet that
+//! declares a font face makes the wait for fonts meaningless if it arrives
+//! afterwards: the wait resolves against the fonts the page already had, and the
+//! one being introduced is still being fetched when the page is printed.
+//!
+//! **`--run-script` runs after the whole ladder.** It is for a page that has
+//! finished arriving; a script that ran before the network went quiet would see
+//! a different document on every run.
 
 use crate::cdp::{Event, Session};
+use crate::error::Error;
 use crate::error::Result;
 use crate::launch::Page;
-use crate::plan::{self, Settle};
+use crate::plan::{self, Injection, LoadPlan, Settle};
 use rchtmltopdf_core::settings::{LoadSettings, WebSettings};
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -53,10 +68,12 @@ pub enum Stage {
     #[default]
     Navigating,
     AwaitingLoad,
+    Injecting,
     AwaitingNetworkIdle,
     AwaitingFonts,
     AwaitingWindowStatus,
     Delaying,
+    RunningScripts,
     Settled,
 }
 
@@ -66,10 +83,12 @@ impl Stage {
         match self {
             Stage::Navigating => "opening the document",
             Stage::AwaitingLoad => "waiting for the page to load",
+            Stage::Injecting => "putting the user stylesheet into the document",
             Stage::AwaitingNetworkIdle => "waiting for the network to go idle",
             Stage::AwaitingFonts => "waiting for web fonts",
             Stage::AwaitingWindowStatus => "waiting for window.status",
             Stage::Delaying => "waiting out the JavaScript delay",
+            Stage::RunningScripts => "running --run-script",
             Stage::Settled => "finishing",
         }
     }
@@ -128,6 +147,7 @@ impl Page {
     /// (D16), which can then say which rung it interrupted.
     pub async fn load(&self, url: &str, load: &LoadSettings, progress: &Progress) -> Result<()> {
         let session = self.session();
+        let ladder = LoadPlan::new(load);
 
         // Subscribe before navigating. The load event for a small document can
         // arrive before the navigate call has even returned.
@@ -153,6 +173,14 @@ impl Page {
             return Err(crate::error::Error::ConnectionClosed);
         }
 
+        // Before the network is judged idle, so a stylesheet named by URL is
+        // still counted as in flight, and before the wait for fonts, so one that
+        // declares a font face is waited for rather than raced.
+        if let Some(injection) = &ladder.inject {
+            progress.enter(Stage::Injecting);
+            inject(session, injection).await?;
+        }
+
         progress.enter(Stage::AwaitingNetworkIdle);
         wait_for_quiet_network(&mut traffic).await;
 
@@ -161,7 +189,7 @@ impl Page {
 
         // The last rung is the only one there is a choice about, and the choice
         // was made in the plan rather than here.
-        match &plan::LoadPlan::new(load).settle {
+        match &ladder.settle {
             Settle::WindowStatus(wanted) => {
                 progress.enter(Stage::AwaitingWindowStatus);
                 wait_for_window_status(session, wanted).await;
@@ -172,9 +200,118 @@ impl Page {
             }
         }
 
+        // After the ladder, not on it: `--run-script` is for a page that has
+        // finished arriving, and a script that ran before the network went quiet
+        // would see a different document each time.
+        if !ladder.scripts.is_empty() {
+            progress.enter(Stage::RunningScripts);
+            for source in &ladder.scripts {
+                run_script(session, source).await?;
+            }
+        }
+
         progress.enter(Stage::Settled);
         Ok(())
     }
+}
+
+/// Put the user stylesheet into the document.
+///
+/// A file is read here and inlined rather than left to the browser to fetch:
+/// the user named it on the command line, so the policy governing what the
+/// *document* may read off the disk has nothing to say about it (D10).
+///
+/// It goes at the end of the head, which is where wkhtmltopdf's own help says it
+/// goes. That is not quite what Qt did — a Qt user stylesheet was a separate
+/// cascade origin and beat author rules outright, and an injected `<style>` is
+/// an author rule that beats only the ones before it. A document whose own rules
+/// carry `!important` still wins, and no protocol command offers the other
+/// thing.
+async fn inject(session: &Session, injection: &Injection) -> Result<()> {
+    let expression = match injection {
+        Injection::File(path) => {
+            let css = std::fs::read_to_string(path).map_err(|error| Error::StyleSheet {
+                path: path.clone(),
+                reason: error.to_string(),
+            })?;
+            format!(
+                "(() => {{ const sheet = document.createElement('style'); \
+                 sheet.textContent = {}; document.head.appendChild(sheet); }})()",
+                js_string(&css)
+            )
+        }
+        Injection::Link(url) => format!(
+            "(() => {{ const link = document.createElement('link'); \
+             link.rel = 'stylesheet'; link.href = {}; document.head.appendChild(link); }})()",
+            js_string(url)
+        ),
+    };
+
+    if let Some(message) = evaluate(session, &expression).await? {
+        return Err(Error::StyleSheet {
+            path: match injection {
+                Injection::File(path) => path.clone(),
+                Injection::Link(url) => std::path::PathBuf::from(url),
+            },
+            reason: message,
+        });
+    }
+    Ok(())
+}
+
+/// Run one `--run-script`, and fail the conversion if it throws.
+///
+/// Failing is the default error handling and, for now, the only one:
+/// `--load-error-handling` is not wired up yet (#28). A script that throws and
+/// is ignored leaves a document that renders and is missing whatever the script
+/// was there to do, which is the outcome D14 exists to avoid.
+async fn run_script(session: &Session, source: &str) -> Result<()> {
+    match evaluate(session, source).await? {
+        Some(message) => Err(Error::Script {
+            source: source.to_string(),
+            message,
+        }),
+        None => Ok(()),
+    }
+}
+
+/// Evaluate an expression, awaiting a promise, and report what it threw.
+///
+/// A thrown exception is **not** a protocol error: the command succeeds and the
+/// throw is a field in the reply. Ignoring that field is how a script that fails
+/// every time looks like one that works.
+async fn evaluate(session: &Session, expression: &str) -> Result<Option<String>> {
+    let answer = session
+        .send(
+            "Runtime.evaluate",
+            json!({
+                "expression": expression,
+                "awaitPromise": true,
+                "returnByValue": true,
+            }),
+        )
+        .await?;
+    Ok(thrown(&answer))
+}
+
+/// What an evaluation threw, if it threw.
+fn thrown(answer: &Value) -> Option<String> {
+    let details = answer.get("exceptionDetails")?;
+    let described = details
+        .get("exception")
+        .and_then(|exception| exception.get("description"))
+        .and_then(Value::as_str);
+    let text = details.get("text").and_then(Value::as_str);
+    Some(described.or(text).unwrap_or("the script threw").to_string())
+}
+
+/// A Rust string as a JavaScript string literal.
+///
+/// JSON's string syntax is JavaScript's, so this is exactly the escaping needed
+/// and is how a stylesheet containing a quote, a backslash or a newline reaches
+/// the page as itself rather than as a syntax error.
+fn js_string(raw: &str) -> String {
+    serde_json::to_string(raw).unwrap_or_else(|_| "\"\"".to_string())
 }
 
 /// Wait until nothing has been in flight for a while.
@@ -387,10 +524,12 @@ mod tests {
         for stage in [
             Stage::Navigating,
             Stage::AwaitingLoad,
+            Stage::Injecting,
             Stage::AwaitingNetworkIdle,
             Stage::AwaitingFonts,
             Stage::AwaitingWindowStatus,
             Stage::Delaying,
+            Stage::RunningScripts,
             Stage::Settled,
         ] {
             assert!(!stage.describe().is_empty());

@@ -9,7 +9,7 @@ pub mod page_size;
 pub mod settings;
 pub mod units;
 
-pub use document::{Input, Output};
+pub use document::{Input, Output, has_url_scheme};
 pub use error::{ExitCode, LoadErrorHandling};
 pub use page_size::{Orientation, PageDimensions};
 pub use settings::{GlobalSettings, ObjectSettings, PageSetup, Settings};
