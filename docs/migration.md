@@ -82,6 +82,27 @@ donc le même binaire écrit une chaîne différente sur deux machines et il n'y
 à reproduire. Nous écrivons la date locale au format `AAAA-MM-JJ`, non ambigu ; `[isodate]`
 ajoute l'heure et le décalage UTC.
 
+## Cookies, en-têtes, identifiants et proxy
+
+**`--custom-header` ne se propage pas aux sous-ressources sans `--custom-header-propagation`.**
+C'est le comportement de wkhtmltopdf, et c'est celui qui surprend : sans l'option, l'en-tête
+part avec la requête du document et avec aucune autre. Si votre feuille de style ou vos
+images sont derrière la même authentification que la page, il faut l'option.
+
+**`--cookie` demande un document en http ou https.** Un document local n'a pas d'origine à
+laquelle rattacher un cookie ; l'option est alors signalée et ignorée plutôt que fatale. La
+valeur est décodée avant d'être posée, comme l'aide de wkhtmltopdf l'annonce.
+
+**`--username` / `--password` répondent à un 401**, ils ne sont pas envoyés d'avance. Un
+mauvais mot de passe fait échouer la conversion au lieu d'imprimer la page d'erreur du
+serveur.
+
+**`--proxy` est un drapeau de lancement**, donc il vaut pour tout le processus alors que la
+table le range parmi les options d'objet. Avec un seul document c'est la même chose ; à
+partir de V2 deux objets demandant des proxys différents ne pourront pas être satisfaits tous
+les deux. Attention aussi : **Chromium contourne le proxy pour localhost**, quoi que dise
+`--proxy-server`.
+
 ## `--encoding` et les documents distants
 
 `--encoding` dit dans quel jeu de caractères lire un document qui ne le déclare pas. Il

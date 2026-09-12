@@ -81,6 +81,7 @@ async fn print(handler: Handler) -> Result<Vec<u8>, Error> {
         &GlobalSettings::default(),
         &ObjectSettings::page(rchtmltopdf_core::Input::Stdin),
         Clock::default(),
+        "about:blank",
     );
     page.print_to_pdf(&plan.print).await
 }

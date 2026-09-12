@@ -18,8 +18,35 @@ stylesheets, whether scripts run, and how long to wait before printing. Options 
 act on are accepted and warned about rather than breaking a command line that uses them.
 
 Several documents, covers and a table of contents are not built. Neither is most of the
-option surface beyond what V0 needed: cookies and custom headers, credentials and proxies,
-and PDF metadata are all understood on the command line and not yet acted on.
+option surface beyond what V0 needed: PDF metadata, the load error handling options and the
+outline are all understood on the command line and not yet acted on.
+
+### Added
+
+**Cookies, custom headers, HTTP credentials and the proxy are honoured.**
+`--cookie` values are decoded before they are set, as the option's own help says they arrive;
+`--username` and `--password` answer a 401 rather than being sent ahead of one; `--proxy`
+becomes a launch flag.
+
+Two asymmetries worth knowing, both wkhtmltopdf's rather than ours:
+
+- **`--custom-header` does not reach subresources** unless `--custom-header-propagation` is
+  given. Without it the header is on the document's own request and on nothing else.
+- **`--cookie` needs a document fetched over http or https.** A local document has no origin
+  to scope a cookie to, so the option is reported and ignored rather than fatal.
+
+`--proxy` is process-wide where the table scopes it per object, which is the same thing while
+one document converts. **Chromium bypasses the proxy for localhost** whatever it is told,
+which is worth knowing before testing one.
+
+A rejected password now fails the conversion. Cancelling the second challenge stops Chromium
+asking for ever, and it also makes the server's own 401 body the response — which renders
+perfectly well as a page, and is not the document anybody asked for.
+
+**A main document that fails to load is reported, whatever failed.** `Page.navigate` carries
+an error for a host that does not resolve and nothing at all for a proxy that refuses the
+connection, so the network events are watched instead. A failed *subresource* still produces
+a PDF, which is what `--load-media-error-handling` will make a choice (#28).
 
 ### Added
 

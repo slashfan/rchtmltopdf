@@ -77,6 +77,10 @@ pub enum Error {
         path: PathBuf,
         reason: String,
     },
+    /// The server would not accept `--username` and `--password`.
+    Credentials {
+        url: String,
+    },
     /// A `--run-script` threw.
     ///
     /// Carries the script as it was written, because a command line usually
@@ -131,6 +135,10 @@ impl fmt::Display for Error {
                 f,
                 "could not read the user stylesheet {}: {reason}",
                 path.display()
+            ),
+            Error::Credentials { url } => write!(
+                f,
+                "{url} refused the credentials given with --username and --password"
             ),
             Error::Script { source, message } => {
                 write!(f, "--run-script {source} failed: {message}")

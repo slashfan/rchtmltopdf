@@ -37,8 +37,8 @@ use crate::cdp::{Event, Session};
 use crate::error::Error;
 use crate::error::Result;
 use crate::launch::Page;
-use crate::plan::{self, Injection, LoadPlan, Settle};
-use rchtmltopdf_core::settings::{LoadSettings, WebSettings};
+use crate::plan::{Command, Injection, LoadPlan, Settle};
+use rchtmltopdf_core::settings::LoadSettings;
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -130,12 +130,14 @@ impl Page {
     /// document arrives, not after: media queries decide which resources are
     /// fetched at all.
     ///
-    /// Sends what [`plan::prepare`] decided, in order, and nothing else.
-    /// Deciding anything here instead would put it outside the plan, where the
-    /// guard that holds the option table honest cannot see it (D27).
-    pub async fn prepare(&self, web: &WebSettings) -> Result<()> {
-        for command in plan::prepare(web) {
-            self.session().send(command.method, command.params).await?;
+    /// Takes the commands the plan decided rather than the settings they were
+    /// decided from. There is nothing left here to decide, which is the point:
+    /// a choice that never reached the plan cannot be made on the way out (D27).
+    pub async fn prepare(&self, commands: &[Command]) -> Result<()> {
+        for command in commands {
+            self.session()
+                .send(command.method, command.params.clone())
+                .await?;
         }
         Ok(())
     }
@@ -182,7 +184,13 @@ impl Page {
         }
 
         progress.enter(Stage::AwaitingNetworkIdle);
-        wait_for_quiet_network(&mut traffic).await;
+        let document = wait_for_quiet_network(&mut traffic).await;
+        if let Some(reason) = document.failure {
+            return Err(crate::error::Error::Navigation {
+                url: url.to_string(),
+                reason,
+            });
+        }
 
         progress.enter(Stage::AwaitingFonts);
         wait_for_fonts(session).await;
@@ -314,20 +322,37 @@ fn js_string(raw: &str) -> String {
     serde_json::to_string(raw).unwrap_or_else(|_| "\"\"".to_string())
 }
 
+/// The main document's request, and whether it failed.
+///
+/// **`Page.navigate` does not report every failure.** It carries an `errorText`
+/// for a host that does not resolve, and nothing at all for a proxy that refuses
+/// the connection or for credentials the server would not accept — the call
+/// succeeds and Chromium renders its own error page, which is then printed. D14
+/// says that is exit 1 and no PDF, so the network events are watched instead.
+///
+/// Only the document. A subresource that fails still produces a PDF, which is
+/// what `--load-media-error-handling` defaults to (#28 makes it a choice).
+#[derive(Debug, Default)]
+struct MainDocument {
+    id: Option<String>,
+    failure: Option<String>,
+}
+
 /// Wait until nothing has been in flight for a while.
 ///
 /// Counts by request id rather than by a running total, so a reply that arrives
 /// for a request we never counted cannot drive the total negative and declare
 /// the page idle early.
-async fn wait_for_quiet_network(events: &mut crate::cdp::Events) {
+async fn wait_for_quiet_network(events: &mut crate::cdp::Events) -> MainDocument {
     let mut in_flight: HashSet<String> = HashSet::new();
+    let mut document = MainDocument::default();
 
     loop {
         let next = if in_flight.is_empty() {
             // Nothing outstanding: give the page a moment to start something
             // else before calling it quiet.
             match tokio::time::timeout(QUIET_PERIOD, events.next()).await {
-                Err(_) => return,
+                Err(_) => return document,
                 Ok(event) => event,
             }
         } else {
@@ -337,19 +362,28 @@ async fn wait_for_quiet_network(events: &mut crate::cdp::Events) {
         let Some(event) = next else {
             // The connection went away. Whatever happens next will report it
             // better than this loop can.
-            return;
+            return document;
         };
-        apply_traffic(&event, &mut in_flight);
+        apply_traffic(&event, &mut in_flight, &mut document);
     }
 }
 
-fn apply_traffic(event: &Event, in_flight: &mut HashSet<String>) {
+fn apply_traffic(event: &Event, in_flight: &mut HashSet<String>, document: &mut MainDocument) {
     let Some(id) = event.params.get("requestId").and_then(Value::as_str) else {
         return;
     };
 
     match event.method.as_str() {
         "Network.requestWillBeSent" => {
+            // The first document-type request is the one being converted. A
+            // redirect reuses the id, so following one keeps this pointing at
+            // the navigation rather than at whatever it landed on.
+            if document.id.is_none()
+                && event.params.get("type").and_then(Value::as_str) == Some("Document")
+            {
+                document.id = Some(id.to_string());
+            }
+
             // Inline data never touches the network, and counting it means
             // waiting for something that will never be reported as finished.
             let url = event
@@ -363,8 +397,21 @@ fn apply_traffic(event: &Event, in_flight: &mut HashSet<String>) {
             }
             in_flight.insert(id.to_string());
         }
-        "Network.loadingFinished" | "Network.loadingFailed" => {
+        "Network.loadingFinished" => {
             in_flight.remove(id);
+        }
+        "Network.loadingFailed" => {
+            in_flight.remove(id);
+            if document.id.as_deref() == Some(id) {
+                document.failure = Some(
+                    event
+                        .params
+                        .get("errorText")
+                        .and_then(Value::as_str)
+                        .unwrap_or("the request failed")
+                        .to_string(),
+                );
+            }
         }
         _ => {}
     }
@@ -442,12 +489,14 @@ mod tests {
                 json!({ "requestId": "R1", "request": { "url": "https://example.com/a.css" } }),
             ),
             &mut in_flight,
+            &mut MainDocument::default(),
         );
         assert_eq!(in_flight.len(), 1);
 
         apply_traffic(
             &event("Network.loadingFinished", json!({ "requestId": "R1" })),
             &mut in_flight,
+            &mut MainDocument::default(),
         );
         assert!(in_flight.is_empty());
     }
@@ -461,10 +510,12 @@ mod tests {
                 json!({ "requestId": "R1", "request": { "url": "https://example.com/gone.png" } }),
             ),
             &mut in_flight,
+            &mut MainDocument::default(),
         );
         apply_traffic(
             &event("Network.loadingFailed", json!({ "requestId": "R1" })),
             &mut in_flight,
+            &mut MainDocument::default(),
         );
         assert!(
             in_flight.is_empty(),
@@ -484,6 +535,7 @@ mod tests {
                     json!({ "requestId": "R1", "request": { "url": url } }),
                 ),
                 &mut in_flight,
+                &mut MainDocument::default(),
             );
         }
         assert!(in_flight.is_empty());
@@ -497,6 +549,7 @@ mod tests {
         apply_traffic(
             &event("Network.loadingFinished", json!({ "requestId": "ghost" })),
             &mut in_flight,
+            &mut MainDocument::default(),
         );
         apply_traffic(
             &event(
@@ -504,6 +557,7 @@ mod tests {
                 json!({ "requestId": "R1", "request": { "url": "https://example.com/a" } }),
             ),
             &mut in_flight,
+            &mut MainDocument::default(),
         );
         assert_eq!(in_flight.len(), 1, "the real request is still outstanding");
     }
@@ -511,12 +565,98 @@ mod tests {
     #[test]
     fn unrelated_events_are_ignored() {
         let mut in_flight = HashSet::new();
-        apply_traffic(&event("Page.loadEventFired", json!({})), &mut in_flight);
+        apply_traffic(
+            &event("Page.loadEventFired", json!({})),
+            &mut in_flight,
+            &mut MainDocument::default(),
+        );
         apply_traffic(
             &event("Runtime.consoleAPICalled", json!({ "requestId": "R1" })),
             &mut in_flight,
+            &mut MainDocument::default(),
         );
         assert!(in_flight.is_empty());
+    }
+
+    /// The document's own request is the one whose failure matters. A
+    /// subresource that fails still produces a PDF (#28 makes that a choice).
+    #[test]
+    fn only_the_documents_own_failure_is_a_navigation_failure() {
+        let mut in_flight = HashSet::new();
+        let mut document = MainDocument::default();
+
+        apply_traffic(
+            &event(
+                "Network.requestWillBeSent",
+                json!({
+                    "requestId": "DOC",
+                    "type": "Document",
+                    "request": { "url": "https://example.com/a" }
+                }),
+            ),
+            &mut in_flight,
+            &mut document,
+        );
+        apply_traffic(
+            &event(
+                "Network.requestWillBeSent",
+                json!({
+                    "requestId": "IMG",
+                    "type": "Image",
+                    "request": { "url": "https://example.com/a.png" }
+                }),
+            ),
+            &mut in_flight,
+            &mut document,
+        );
+
+        // An image that 404s is not a failed conversion.
+        apply_traffic(
+            &event(
+                "Network.loadingFailed",
+                json!({ "requestId": "IMG", "errorText": "net::ERR_FAILED" }),
+            ),
+            &mut in_flight,
+            &mut document,
+        );
+        assert!(document.failure.is_none());
+
+        // The document is.
+        apply_traffic(
+            &event(
+                "Network.loadingFailed",
+                json!({ "requestId": "DOC", "errorText": "net::ERR_PROXY_CONNECTION_FAILED" }),
+            ),
+            &mut in_flight,
+            &mut document,
+        );
+        assert_eq!(
+            document.failure.as_deref(),
+            Some("net::ERR_PROXY_CONNECTION_FAILED")
+        );
+    }
+
+    /// A redirect reuses the request id, so the first document-type request
+    /// stays the one being watched rather than whatever it landed on.
+    #[test]
+    fn a_later_document_request_does_not_steal_the_first() {
+        let mut in_flight = HashSet::new();
+        let mut document = MainDocument::default();
+        for id in ["FIRST", "IFRAME"] {
+            apply_traffic(
+                &event(
+                    "Network.requestWillBeSent",
+                    json!({
+                        "requestId": id,
+                        "type": "Document",
+                        "request": { "url": "https://example.com/a" }
+                    }),
+                ),
+                &mut in_flight,
+                &mut document,
+            );
+        }
+        assert_eq!(document.id.as_deref(), Some("FIRST"));
     }
 
     #[test]

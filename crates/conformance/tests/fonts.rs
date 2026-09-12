@@ -20,7 +20,7 @@
 use rchtmltopdf_browser::render::Progress;
 use rchtmltopdf_browser::{Browser, LaunchOptions};
 use rchtmltopdf_conformance::{fixture, require_chromium, sandbox_unavailable};
-use rchtmltopdf_core::settings::{LoadSettings, WebSettings};
+use rchtmltopdf_core::settings::LoadSettings;
 use serde_json::json;
 
 /// The name inside the vendored file, which is not the family the fixture asks
@@ -53,9 +53,12 @@ async fn glyphs_come_from_the_vendored_font_and_not_a_system_one() {
     .expect("the browser should start");
 
     let page = browser.new_page().await.expect("a page should open");
-    page.prepare(&WebSettings::default())
-        .await
-        .expect("the page should be preparable");
+    page.prepare(&rchtmltopdf_browser::plan::prepare(
+        &rchtmltopdf_core::settings::ObjectSettings::page(rchtmltopdf_core::Input::Stdin),
+        "about:blank",
+    ))
+    .await
+    .expect("the page should be preparable");
     page.load(
         &format!("file://{}", page_path.display()),
         &LoadSettings::default(),
