@@ -1,8 +1,17 @@
 # Security policy
 
+**This is a weekend project, not a maintained product** — see the warning at the top of the
+README. What follows says what the code tries to do and what counts as a bug in it. It is
+not an undertaking to answer within any particular time, and it is not evidence that the
+code succeeds at what it tries.
+
+Reports are still welcome, and the threat model below is the part worth reading before
+rendering HTML you did not write.
+
 ## Supported versions
 
-Until 1.0, only the latest release receives fixes.
+There are no releases. `main` is the only thing there is, and it is the only thing that gets
+fixed.
 
 ## Reporting a vulnerability
 

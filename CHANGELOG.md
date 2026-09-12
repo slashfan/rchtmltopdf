@@ -22,6 +22,12 @@ option surface beyond what V0 needed: headers and footers, cookies and custom he
 credentials and proxies, and PDF metadata are all understood on the command line and not
 yet acted on.
 
+### Changed
+
+**The README says what this is.** A weekend project, not a maintained product: no release,
+no support, and no undertaking that any of it keeps working. `SECURITY.md` says the same,
+so its threat model is not read as a promise that the code meets it.
+
 ### Added
 
 **`--encoding`, `--minimum-font-size`, `--viewport-size` and `--no-images` are honoured.**
