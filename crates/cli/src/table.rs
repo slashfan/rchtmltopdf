@@ -676,7 +676,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "page-offset",
         None,
         Object,
-        Planned(V2),
+        Implemented,
         &["offset"],
         "Set the starting page number (default 0)",
     ),

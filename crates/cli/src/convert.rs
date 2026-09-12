@@ -17,10 +17,20 @@
 //! Every input is resolved before any browser starts, so a missing file at the
 //! end of a ten document command line fails in a millisecond rather than after
 //! nine conversions.
+//!
+//! # The bands come last
+//!
+//! Headers and footers are not drawn while a document prints. Nobody knows how
+//! many pages it has until it has been laid out, and `[page]` counts across
+//! every document of the conversion (#39), so the bands wait: the documents are
+//! printed without them and merged, the counts are read, one sheet per page is
+//! written with every placeholder expanded, the browser prints that document
+//! of sheets, and each sheet is drawn onto its page (D38).
 
-use crate::{PROGRAM, VERSION, input, output};
+use crate::{PROGRAM, VERSION, input, numbering, output};
 use rchtmltopdf_browser::Browser;
 use rchtmltopdf_browser::LaunchOptions;
+use rchtmltopdf_browser::band::{self, Edge, Sheet};
 use rchtmltopdf_browser::clock;
 use rchtmltopdf_browser::deadline;
 use rchtmltopdf_browser::intercept;
@@ -178,12 +188,6 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
                         .into(),
                 );
             }
-            for name in &plan.unsupported_placeholders {
-                warn(format!(
-                    "[{name}] names a position in the document outline, which is not built \
-                     yet (planned for V2); it is being left empty"
-                ));
-            }
         }
     }
 
@@ -191,8 +195,9 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
     let total = objects.len();
     // The browser is created inside the deadline, so expiry drops it and its Drop
     // stops the process group and removes the profile. Cleanup is not a step that
-    // could be skipped.
-    let printed = deadline::within(settings.global.timeout, &progress, async {
+    // could be skipped. The merge and the bands are inside it too: the bands
+    // need the browser, and D16 bounds the whole conversion.
+    let (pdf, printed) = deadline::within(settings.global.timeout, &progress, async {
         let mut printed = Printed {
             documents: Vec::with_capacity(total),
             refused: Vec::new(),
@@ -236,7 +241,8 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             {
                 return Err(rchtmltopdf_browser::Error::Credentials {
                     url: document.url().to_string(),
-                });
+                }
+                .into());
             }
 
             // The document itself. `--load-error-handling` decides, and only
@@ -249,7 +255,8 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
                         return Err(rchtmltopdf_browser::Error::Navigation {
                             url: failed.url.clone(),
                             reason: failed.error.name().to_string(),
-                        });
+                        }
+                        .into());
                     }
                     // `skip` drops the failing document and carries on with the
                     // others. Said now rather than at the end, in wkhtmltopdf's
@@ -283,11 +290,127 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             printed.media.push((index, report.media));
         }
 
+        if printed.documents.is_empty() {
+            return Err(ConvertError::NothingLeft(printed.skipped));
+        }
+
+        say(settings, "Printing pages (2/2)");
+        let parts: Vec<rchtmltopdf_pdf::Part<'_>> = printed
+            .documents
+            .iter()
+            .map(|(index, pdf)| rchtmltopdf_pdf::Part {
+                pdf,
+                url: &plans[*index].finish.document_url,
+                links: &plans[*index].finish.links,
+            })
+            .collect();
+        let merged = rchtmltopdf_pdf::merge(&parts)?;
+
+        // The outline the browser wrote is all or nothing per document, so the
+        // depth is cut here, and the dump describes what the file will carry.
+        // The treatment is global, so the first plan's copy is every plan's.
+        let finish = &plans[0].finish;
+        let (pdf, items) = rchtmltopdf_pdf::outline(
+            &merged.pdf,
+            &rchtmltopdf_pdf::OutlineTreatment {
+                keep: finish.outline.enabled,
+                depth: finish.outline.depth,
+            },
+        )?;
+        if let Some(path) = &finish.outline.dump {
+            std::fs::write(path, crate::outline::xml(&items)).map_err(|error| {
+                ConvertError::Dump {
+                    path: path.clone(),
+                    reason: error.to_string(),
+                }
+            })?;
+        }
+
+        // The bands, now that every count is known (#39): one sheet per page,
+        // printed by the browser that printed the pages, drawn onto them (D38).
+        let pdf = if printed
+            .documents
+            .iter()
+            .any(|(index, _)| !plans[*index].finish.bands.is_empty())
+        {
+            let numbered = numbering::number(
+                &printed
+                    .documents
+                    .iter()
+                    .zip(&merged.pages)
+                    .map(|((index, _), pages)| numbering::Part {
+                        pages: *pages,
+                        counted: plans[*index].finish.bands.counted,
+                        page_offset: plans[*index].finish.bands.page_offset,
+                    })
+                    .collect::<Vec<_>>(),
+                &items,
+            );
+            let (left, right) = (
+                settings.global.page.margins.left.to_mm(),
+                settings.global.page.margins.right.to_mm(),
+            );
+            let sheets: Vec<Sheet> = numbered
+                .iter()
+                .map(|(part, numbers)| {
+                    let plan = &plans[printed.documents[*part].0];
+                    let bands = &plan.finish.bands;
+                    Sheet {
+                        header: band::row(
+                            &bands.header,
+                            Edge::Header,
+                            left,
+                            right,
+                            &plan.context,
+                            numbers,
+                        ),
+                        footer: band::row(
+                            &bands.footer,
+                            Edge::Footer,
+                            left,
+                            right,
+                            &plan.context,
+                            numbers,
+                        ),
+                    }
+                })
+                .collect();
+            let sheet_document =
+                input::scratch_document("bands", &band::document(&settings.global.page, &sheets))?;
+
+            let browser = browser
+                .as_ref()
+                .expect("a document was printed, so a browser is running");
+            let page = browser.new_page().await?;
+            // No interception: the document is ours and fetches nothing.
+            page.prepare(&plan::band_prepare()).await?;
+            let report = page
+                .load(sheet_document.url(), &plan::band_load(), &progress)
+                .await?;
+            if let Some(failed) = &report.document {
+                return Err(rchtmltopdf_browser::Error::Navigation {
+                    url: failed.url.clone(),
+                    reason: format!(
+                        "{} (the document of headers and footers, which is written by \
+                         this program)",
+                        failed.error.name()
+                    ),
+                }
+                .into());
+            }
+            let sheets_pdf = page
+                .print_to_pdf(&plan::band_print(&settings.global.page))
+                .await?;
+            rchtmltopdf_pdf::stamp(&pdf, &sheets_pdf)?
+        } else {
+            pdf
+        };
+
         // Asked to leave rather than killed, so it can finish writing.
         if let Some(browser) = browser {
             browser.close().await?;
         }
-        Ok(printed)
+        Ok((pdf, printed))
     })
     .await?;
 
@@ -298,40 +421,6 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
         for refusal in &printed.refused {
             eprintln!("{PROGRAM}: warning: {refusal}");
         }
-    }
-
-    if printed.documents.is_empty() {
-        return Err(ConvertError::NothingLeft(printed.skipped));
-    }
-
-    say(settings, "Printing pages (2/2)");
-    let parts: Vec<rchtmltopdf_pdf::Part<'_>> = printed
-        .documents
-        .iter()
-        .map(|(index, pdf)| rchtmltopdf_pdf::Part {
-            pdf,
-            url: &plans[*index].finish.document_url,
-            links: &plans[*index].finish.links,
-        })
-        .collect();
-    let pdf = rchtmltopdf_pdf::merge(&parts)?;
-
-    // The outline the browser wrote is all or nothing per document, so the
-    // depth is cut here, and the dump describes what the file will carry. The
-    // treatment is global, so the first plan's copy is every plan's.
-    let finish = &plans[0].finish;
-    let (pdf, items) = rchtmltopdf_pdf::outline(
-        &pdf,
-        &rchtmltopdf_pdf::OutlineTreatment {
-            keep: finish.outline.enabled,
-            depth: finish.outline.depth,
-        },
-    )?;
-    if let Some(path) = &finish.outline.dump {
-        std::fs::write(path, crate::outline::xml(&items)).map_err(|error| ConvertError::Dump {
-            path: path.clone(),
-            reason: error.to_string(),
-        })?;
     }
 
     // The print call takes the title from the document's own `<title>` and
@@ -419,9 +508,9 @@ fn println_stderr(line: &str) {
 
 /// The documents to convert, in order.
 ///
-/// Pages and covers. A cover is a page that was given no bands and will be
-/// left out of the outline (#40); nothing about printing it differs. A table
-/// of contents is refused by name: converting the pages around it and saying
+/// Pages and covers. A cover is a page that was given no bands and is left
+/// out of the outline and the count; nothing about printing it differs. A
+/// table of contents is refused by name: converting the pages around it and saying
 /// nothing would produce a document that looks right and is missing part of
 /// itself, which is the worst outcome available.
 fn pages(settings: &Settings) -> Result<Vec<&ObjectSettings>, ConvertError> {

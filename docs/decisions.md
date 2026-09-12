@@ -362,6 +362,20 @@ L'asymétrie compte aussi. Ne pas l'intégrer laisse les deux options ouvertes �
 
 **Écarté.** Fusionner les tables `Dests` en préfixant les noms par document : plus d'objets pour le même résultat, et un lien entre documents aurait de toute façon dû être réécrit. Produire des champs de formulaire soi-même à partir du DOM : c'est écrire un moteur de formulaires PDF pour une option que wkhtmltopdf lui-même désactivait par défaut.
 
+## D38 — En-têtes et pieds de page : imprimés par Chromium en feuilles, une par page, puis apposés
+
+**Choix.** Les documents sont imprimés sans bandeaux et fusionnés. Le nombre de pages de chacun est alors lu sur le résultat, la numérotation est calculée dans les deux repères de wkhtmltopdf (`[page]`/`[topage]` sur l'ensemble, `[sitepage]`/`[sitepages]` dans le document, `[frompage]`, décalage `--page-offset`, couverture non comptée), et un document HTML d'une **feuille par page** est construit, chaque feuille aux dimensions du papier portant l'en-tête et le pied de sa page avec tous les placeholders déjà substitués. Le navigateur qui a imprimé les pages imprime ce document, et le crate `pdf` appose chaque feuille sur sa page : les ressources de la feuille sont déplacées sur la page sous des noms qui lui sont propres, chaque opérateur qui les nomme est réécrit, et le dessin de la feuille est ajouté **en ligne** après celui de la page, encadré par `q`/`Q`.
+
+**Pourquoi.** D04 prévoyait un overlay dessiné par nous-mêmes, et #38 en liste le prix : embarquer une police, la sous-ensembler, écrire son descripteur et sa table `ToUnicode`, mesurer le texte pour centrer et aligner à droite, substituer `Arial` sur une machine qui ne l'a pas. Faire imprimer les bandeaux par Chromium supprime tout cela : la typographie, les polices, la mesure, l'extraction du texte restent celles du navigateur, et le coût est **une impression supplémentaire par conversion**, pas par page. Ce qui est réellement écrit à la main tient en une fonction : renommer des ressources et concaténer des flux de contenu. Le même mécanisme portera `--header-html` et `--footer-html`, chaque feuille embarquant alors le document de l'utilisateur.
+
+**Pourquoi en ligne et pas en Form XObject.** Un XObject serait plus propre — une ressource par page, un `Do` — mais le texte qu'il contient est invisible pour les extracteurs, celui de lopdf compris, et un pied de page que personne ne peut extraire fait échouer les assertions de la matrice de compatibilité elle-même (D15).
+
+**Géométrie.** Un bandeau est ancré au bord du papier dans une boîte d'au moins la hauteur de la marge de ce côté, sa ligne alignée côté contenu. Conséquences, toutes tenues par `conformance/tests/bands.rs` : le contenu ne bouge jamais ; le filet d'un `--header-line` est exactement sur la ligne de marge ; `--header-spacing` écarte le contenu et pas le bandeau ; un bandeau plus haut que la marge grandit vers le contenu et mord dessus, comme dans wkhtmltopdf. Un seul écart mesuré avec les gabarits Chromium : le filet du bandeau par défaut remonte d'environ un point, sur la marge au lieu d'un peu en dessous.
+
+**Numérotation.** `[page]` = décalage + rang courant parmi les pages comptées ; `[topage]` = décalage + total des pages comptées ; `[frompage]` = décalage + rang de la première page du document ; une couverture ne compte pas et le décalage est celui de l'objet. `[section]`, `[subsection]`, `[subsubsection]` : le dernier titre du niveau sur la page ou avant elle, dans le même document, lu dans l'outline (D36), qui est alors généré même sous `--no-outline`.
+
+**Écarté.** L'overlay maison de D04 (voir ci-dessus). Imprimer deux fois chaque document, la seconde avec les bons numéros dans les gabarits : le double du coût, et faux pour toute page à effets de bord, contenu daté ou nonce (#39). Un gabarit Chromium par page via une impression par page : N impressions au lieu d'une.
+
 ---
 
 ## Conséquences transverses

@@ -40,7 +40,8 @@
 //! big endian with the mark in front. Invoices in French are the ordinary case
 //! here, not the exotic one.
 
-use lopdf::{Document, Object, ObjectId, dictionary};
+use lopdf::content::Content;
+use lopdf::{Dictionary, Document, Object, ObjectId, Stream, dictionary};
 use rchtmltopdf_core::Clock;
 use rchtmltopdf_core::settings::LinkSettings;
 use std::collections::BTreeMap;
@@ -123,6 +124,15 @@ pub struct Part<'a> {
     pub links: &'a LinkSettings,
 }
 
+/// What a merge produced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Merged {
+    pub pdf: Vec<u8>,
+    /// How many pages each part contributed, in order. What the page numbers
+    /// are worked out from (#39).
+    pub pages: Vec<usize>,
+}
+
 /// Combine several printed documents into one, in the order given.
 ///
 /// One document that asks nothing of its links comes back untouched, bytes for
@@ -143,7 +153,7 @@ pub struct Part<'a> {
 /// The old catalogs and page trees are not copied across. A new tree holds
 /// every page, the trailer points at a new catalog, and whatever is no longer
 /// reachable from the trailer is pruned before the numbers are compacted.
-pub fn merge(parts: &[Part<'_>]) -> Result<Vec<u8>, Error> {
+pub fn merge(parts: &[Part<'_>]) -> Result<Merged, Error> {
     match parts {
         [] => {
             return Err(Error {
@@ -227,18 +237,24 @@ pub fn merge(parts: &[Part<'_>]) -> Result<Vec<u8>, Error> {
 
     let mut out = Vec::with_capacity(parts.iter().map(|part| part.pdf.len()).sum());
     merged.save_to(&mut out).map_err(fail)?;
-    Ok(out)
+    Ok(Merged {
+        pdf: out,
+        pages: absorbed_parts.iter().map(|part| part.pages.len()).collect(),
+    })
 }
 
 /// One document alone: nothing to combine, and its catalog kept whole.
-fn alone(part: &Part<'_>) -> Result<Vec<u8>, Error> {
-    if part.links.leaves_everything() {
-        return Ok(part.pdf.to_vec());
-    }
+fn alone(part: &Part<'_>) -> Result<Merged, Error> {
     let mut document = Document::load_mem(part.pdf).map_err(fail)?;
     let pages: Vec<ObjectId> = document.page_iter().collect();
     if pages.is_empty() {
         return Err(fail("it has no pages"));
+    }
+    if part.links.leaves_everything() {
+        return Ok(Merged {
+            pdf: part.pdf.to_vec(),
+            pages: vec![pages.len()],
+        });
     }
     let names = named_destinations(&document);
     let anchors = [Anchor {
@@ -250,7 +266,10 @@ fn alone(part: &Part<'_>) -> Result<Vec<u8>, Error> {
 
     let mut out = Vec::with_capacity(part.pdf.len());
     document.save_to(&mut out).map_err(fail)?;
-    Ok(out)
+    Ok(Merged {
+        pdf: out,
+        pages: vec![pages.len()],
+    })
 }
 
 /// What one document contributed to a merge, numbered as the target knows it.
@@ -614,6 +633,202 @@ fn relative_to(uri: &str, document_url: &str) -> Option<String> {
     let directory = &document_url[..=document_url.rfind('/')?];
     let rest = uri.strip_prefix(directory)?;
     (!rest.is_empty()).then(|| rest.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Stamping: the bands, drawn onto the pages.
+
+/// Draw each page of `overlay` onto the same-numbered page of `document`.
+///
+/// The overlay is a document Chromium printed with one sheet per page of the
+/// target, the bands positioned on each sheet where they belong on its page
+/// (D38). The sheet's drawing is appended to the page's own content rather
+/// than wrapped in a form XObject, because text inside a form is invisible to
+/// every extractor the tests use, and a footer nobody can extract fails the
+/// compatibility matrix's own assertions (#38). Appending means the sheet's
+/// resources move onto the page under names of their own, and every operator
+/// that names a resource is rewritten to match.
+///
+/// The page's own drawing is wrapped in `q` … `Q` first, so whatever state or
+/// transformation it left behind cannot move the band.
+pub fn stamp(document: &[u8], overlay: &[u8]) -> Result<Vec<u8>, Error> {
+    let mut target = Document::load_mem(document).map_err(fail)?;
+    let sheets =
+        Document::load_mem(overlay).map_err(|error| fail(format!("the band document: {error}")))?;
+    let pages: Vec<ObjectId> = target.page_iter().collect();
+
+    let absorbed = absorb(&mut target, sheets)
+        .map_err(|error| fail(format!("the band document: {}", error.reason)))?;
+    if absorbed.pages.len() != pages.len() {
+        return Err(fail(format!(
+            "the band document has {} pages for a document of {}; a sheet did not fit its page",
+            absorbed.pages.len(),
+            pages.len()
+        )));
+    }
+
+    for (index, (page, sheet)) in pages.iter().zip(&absorbed.pages).enumerate() {
+        stamp_page(&mut target, *page, *sheet, index)?;
+    }
+    // The overlay's own catalog and page tree, and the sheets themselves now
+    // that their drawing and resources have moved on.
+    target.prune_objects();
+
+    let mut out = Vec::with_capacity(document.len() + overlay.len());
+    target.save_to(&mut out).map_err(fail)?;
+    Ok(out)
+}
+
+/// The resource categories whose entries are named by operators.
+///
+/// `ProcSet` is an array rather than names, and nothing reads it; it is left
+/// as the page had it.
+const RESOURCE_CATEGORIES: [&[u8]; 6] = [
+    b"Font",
+    b"XObject",
+    b"ExtGState",
+    b"ColorSpace",
+    b"Pattern",
+    b"Shading",
+];
+
+/// Which operators name a resource, and in which category.
+fn category_of(operator: &str) -> Option<&'static [u8]> {
+    Some(match operator {
+        "Tf" => b"Font",
+        "Do" => b"XObject",
+        "gs" => b"ExtGState",
+        "cs" | "CS" => b"ColorSpace",
+        "scn" | "SCN" => b"Pattern",
+        "sh" => b"Shading",
+        _ => return None,
+    })
+}
+
+fn stamp_page(
+    document: &mut Document,
+    page: ObjectId,
+    sheet: ObjectId,
+    index: usize,
+) -> Result<(), Error> {
+    // The sheet's resources, by category. `absorb` has copied down anything
+    // the sheet inherited, so they are on the sheet itself.
+    let sheet_resources = document
+        .get_dictionary(sheet)
+        .map_err(fail)?
+        .get(b"Resources")
+        .ok()
+        .and_then(|resources| document.dereference(resources).ok())
+        .and_then(|(_, resources)| resources.as_dict().ok())
+        .cloned()
+        .unwrap_or_default();
+    let prefix = format!("Ov{index}");
+    let mut moved: Vec<(&[u8], Vec<u8>, Object)> = Vec::new();
+    for category in RESOURCE_CATEGORIES {
+        let Some(entries) = sheet_resources
+            .get(category)
+            .ok()
+            .and_then(|entries| document.dereference(entries).ok())
+            .and_then(|(_, entries)| entries.as_dict().ok())
+        else {
+            continue;
+        };
+        for (name, value) in entries.iter() {
+            let mut renamed = prefix.clone().into_bytes();
+            renamed.extend_from_slice(name);
+            moved.push((category, renamed, value.clone()));
+        }
+    }
+    let renamed = |category: &[u8], name: &[u8]| -> Option<Vec<u8>> {
+        moved
+            .iter()
+            .find(|(c, r, _)| *c == category && r[prefix.len()..] == *name)
+            .map(|(_, r, _)| r.clone())
+    };
+
+    // The sheet's drawing, every resource it names renamed to match.
+    let raw = document.get_page_content(sheet);
+    let mut content = Content::decode(&raw).map_err(|error| {
+        fail(format!(
+            "the band document's page {} would not decode: {error}",
+            index + 1
+        ))
+    })?;
+    for operation in &mut content.operations {
+        let Some(category) = category_of(&operation.operator) else {
+            continue;
+        };
+        for operand in &mut operation.operands {
+            if let Object::Name(name) = operand
+                && let Some(new) = renamed(category, name)
+            {
+                *name = new;
+            }
+        }
+    }
+    let drawing = content.encode().map_err(fail)?;
+
+    // Onto the page: its resources first.
+    let resources = own_resources(document, page)?;
+    for (category, name, value) in moved {
+        let entries = own_dictionary(document, resources, category)?;
+        document
+            .get_dictionary_mut(entries)
+            .map_err(fail)?
+            .set(name, value);
+    }
+
+    // Then its content: the page's own, wrapped, and the sheet's after it.
+    let save = document.add_object(Stream::new(dictionary! {}, b"q\n".to_vec()));
+    let restore = document.add_object(Stream::new(dictionary! {}, b"Q\n".to_vec()));
+    let band = document.add_object(Stream::new(dictionary! {}, drawing));
+    let dictionary = document.get_dictionary_mut(page).map_err(fail)?;
+    let mut contents = vec![Object::Reference(save)];
+    match dictionary.get(b"Contents") {
+        Ok(Object::Array(existing)) => contents.extend(existing.iter().cloned()),
+        Ok(other) => contents.push(other.clone()),
+        Err(_) => {}
+    }
+    contents.push(Object::Reference(restore));
+    contents.push(Object::Reference(band));
+    dictionary.set("Contents", Object::Array(contents));
+    Ok(())
+}
+
+/// The page's resource dictionary as an object of its own, made so if it was
+/// written inline, so it can be edited by number.
+fn own_resources(document: &mut Document, page: ObjectId) -> Result<ObjectId, Error> {
+    own_dictionary(document, page, b"Resources")
+}
+
+/// The dictionary under `key` of `holder` as an object of its own: moved out
+/// if it was inline, created if it was absent, and shared with nothing else
+/// afterwards — a page whose resources were a dictionary shared with another
+/// page must not gain that page's bands.
+fn own_dictionary(
+    document: &mut Document,
+    holder: ObjectId,
+    key: &[u8],
+) -> Result<ObjectId, Error> {
+    let current = document
+        .get_dictionary(holder)
+        .map_err(fail)?
+        .get(key)
+        .ok()
+        .cloned();
+    let owned = match current {
+        Some(Object::Reference(id)) => {
+            let copy = document.get_dictionary(id).map_err(fail)?.clone();
+            document.add_object(Object::Dictionary(copy))
+        }
+        Some(Object::Dictionary(inline)) => document.add_object(Object::Dictionary(inline)),
+        _ => document.add_object(Object::Dictionary(Dictionary::new())),
+    };
+    document
+        .get_dictionary_mut(holder)
+        .map_err(fail)?
+        .set(key.to_vec(), Object::Reference(owned));
+    Ok(owned)
 }
 
 // ---------------------------------------------------------------------------
@@ -1206,7 +1421,17 @@ mod tests {
 
     fn merge_all(parts: &[&[u8]]) -> Result<Vec<u8>, Error> {
         let parts: Vec<Part<'_>> = parts.iter().map(|pdf| part(pdf)).collect();
-        merge(&parts)
+        merge(&parts).map(|merged| merged.pdf)
+    }
+
+    /// The counts the numbering is worked out from.
+    #[test]
+    fn a_merge_reports_how_many_pages_each_part_gave() {
+        let a = pages(&["A1", "A2"], None);
+        let b = pages(&["B1"], None);
+        let parts = [part(&a), part(&b)];
+        assert_eq!(merge(&parts).expect("should merge").pages, [2, 1]);
+        assert_eq!(merge(&parts[..1]).expect("alone").pages, [2]);
     }
 
     #[test]
@@ -1749,7 +1974,8 @@ mod tests {
             with_links(&a, "file:///d/a.html", &DEFAULT_LINKS),
             with_links(&b, "file:///d/b.html", &DEFAULT_LINKS),
         ])
-        .expect("should merge");
+        .expect("should merge")
+        .pdf;
         assert_eq!(
             links_on(&out, 1),
             [
@@ -1779,7 +2005,9 @@ mod tests {
             internal: false,
             ..DEFAULT_LINKS
         };
-        let out = merge(&[with_links(&pdf, "file:///d/p.html", &no_internal)]).expect("alone");
+        let out = merge(&[with_links(&pdf, "file:///d/p.html", &no_internal)])
+            .expect("alone")
+            .pdf;
         assert_eq!(
             links_on(&out, 1),
             [Followed::Uri("https://example.com/".into())]
@@ -1794,7 +2022,9 @@ mod tests {
             external: false,
             ..DEFAULT_LINKS
         };
-        let out = merge(&[with_links(&pdf, "file:///d/p.html", &no_external)]).expect("alone");
+        let out = merge(&[with_links(&pdf, "file:///d/p.html", &no_external)])
+            .expect("alone")
+            .pdf;
         // The named one is resolved on the way, as it would be in a merge.
         assert_eq!(links_on(&out, 1), [Followed::Page(2), Followed::Page(2)]);
     }
@@ -1817,7 +2047,9 @@ mod tests {
             resolve_relative: false,
             ..DEFAULT_LINKS
         };
-        let out = merge(&[with_links(&pdf, "file:///d/p.html", &keep)]).expect("alone");
+        let out = merge(&[with_links(&pdf, "file:///d/p.html", &keep)])
+            .expect("alone")
+            .pdf;
         assert_eq!(
             links_on(&out, 1),
             [
@@ -1832,7 +2064,7 @@ mod tests {
     #[test]
     fn a_document_alone_that_asks_nothing_of_its_links_is_untouched() {
         let pdf = linked(&["P1"], &[("t", 0)], &[LinkSpec::Named("t")]);
-        assert_eq!(merge(&[part(&pdf)]).expect("alone"), pdf);
+        assert_eq!(merge(&[part(&pdf)]).expect("alone").pdf, pdf);
     }
 
     #[test]
@@ -1847,5 +2079,176 @@ mod tests {
             relative_to("https://h/p/q.html#f", "https://h/p/index.html").as_deref(),
             Some("q.html#f")
         );
+    }
+
+    // --- stamping ---------------------------------------------------------------
+
+    /// A document whose pages each draw one word with a font named `F1`, so a
+    /// sheet stamped onto it has a resource name to collide with.
+    fn worded(words: &[&str]) -> Vec<u8> {
+        let mut document = Document::load_mem(&pages(words, None)).expect("should parse");
+        let page_ids: Vec<ObjectId> = document.page_iter().collect();
+        let font = document.add_object(dictionary! {
+            "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica",
+        });
+        for (page, word) in page_ids.iter().zip(words) {
+            let contents = document.add_object(Stream::new(
+                dictionary! {},
+                format!("BT /F1 12 Tf 20 20 Td ({word}) Tj ET").into_bytes(),
+            ));
+            let dictionary = document.get_dictionary_mut(*page).expect("a page");
+            dictionary.set("Contents", Object::Reference(contents));
+            dictionary.set(
+                "Resources",
+                Object::Dictionary(dictionary! {
+                    "Font" => dictionary! { "F1" => font },
+                }),
+            );
+        }
+        let mut out = Vec::new();
+        document.save_to(&mut out).expect("should save");
+        out
+    }
+
+    /// The font dictionary of a 1-based page, following references on the way.
+    fn fonts_of(document: &Document, page: u32) -> Dictionary {
+        let id = document.get_pages()[&page];
+        let resolve = |object: &Object| document.dereference(object).ok().map(|(_, o)| o.clone());
+        document
+            .get_dictionary(id)
+            .ok()
+            .and_then(|page| page.get(b"Resources").ok())
+            .and_then(resolve)
+            .and_then(|resources| {
+                resources
+                    .as_dict()
+                    .ok()
+                    .and_then(|r| r.get(b"Font").ok())
+                    .and_then(resolve)
+            })
+            .and_then(|fonts| fonts.as_dict().cloned().ok())
+            .expect("a font dictionary")
+    }
+
+    /// Every word drawn on a 1-based page, in order, with the font each used.
+    fn drawn(pdf: &[u8], page: usize) -> Vec<(String, String)> {
+        let document = Document::load_mem(pdf).expect("should parse");
+        let id = document.get_pages()[&(page as u32)];
+        let content = Content::decode(&document.get_page_content(id)).expect("should decode");
+        let mut font = String::new();
+        let mut out = Vec::new();
+        for operation in content.operations {
+            match operation.operator.as_str() {
+                "Tf" => {
+                    font = String::from_utf8_lossy(operation.operands[0].as_name().unwrap())
+                        .into_owned();
+                }
+                "Tj" => out.push((
+                    String::from_utf8_lossy(operation.operands[0].as_str().unwrap()).into_owned(),
+                    font.clone(),
+                )),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_sheet_is_drawn_after_its_page_under_names_of_its_own() {
+        let body = worded(&["one", "two"]);
+        let bands = worded(&["FOOT1", "FOOT2"]);
+
+        let out = stamp(&body, &bands).expect("should stamp");
+
+        // Both words, the page's first, and the sheet's font renamed rather
+        // than colliding with the page's own `F1`.
+        assert_eq!(
+            drawn(&out, 1),
+            [
+                ("one".to_string(), "F1".to_string()),
+                ("FOOT1".to_string(), "Ov0F1".to_string())
+            ]
+        );
+        assert_eq!(drawn(&out, 2)[1].0, "FOOT2");
+
+        let document = Document::load_mem(&out).expect("should parse");
+        assert_eq!(document.get_pages().len(), 2, "the sheets are not pages");
+        let fonts = fonts_of(&document, 1);
+        assert!(fonts.has(b"F1") && fonts.has(b"Ov0F1"), "{fonts:?}");
+        // And the text is extractable, which is the whole reason for inlining.
+        let text = document.extract_text(&[1]).expect("text");
+        assert!(text.contains("one") && text.contains("FOOT1"), "{text}");
+    }
+
+    /// The page's own drawing is wrapped, so a transformation it left behind
+    /// cannot move the band.
+    #[test]
+    fn the_pages_own_drawing_is_wrapped_before_the_sheet() {
+        let out = stamp(&worded(&["one"]), &worded(&["FOOT"])).expect("should stamp");
+        let document = Document::load_mem(&out).expect("should parse");
+        let id = document.get_pages()[&1];
+        let content = Content::decode(&document.get_page_content(id)).expect("should decode");
+        let operators: Vec<&str> = content
+            .operations
+            .iter()
+            .map(|o| o.operator.as_str())
+            .collect();
+        assert_eq!(operators.first(), Some(&"q"));
+        let restore = operators.iter().position(|o| *o == "Q").expect("a Q");
+        let band = operators
+            .iter()
+            .rposition(|o| *o == "Tj")
+            .expect("the band's text");
+        assert!(
+            restore < band,
+            "the band was drawn inside the page's own state: {operators:?}"
+        );
+    }
+
+    #[test]
+    fn a_band_document_with_the_wrong_number_of_pages_is_refused() {
+        let error = stamp(&worded(&["one", "two"]), &worded(&["FOOT"])).expect_err("should refuse");
+        assert!(
+            error.to_string().contains("1 pages for a document of 2"),
+            "{error}"
+        );
+    }
+
+    /// Two pages sharing one resource dictionary must not gain each other's
+    /// bands: the dictionary is copied per page before it is added to.
+    #[test]
+    fn pages_sharing_resources_are_given_their_own() {
+        let mut document = Document::load_mem(&worded(&["one", "two"])).expect("should parse");
+        let page_ids: Vec<ObjectId> = document.page_iter().collect();
+        let shared = document
+            .get_dictionary(page_ids[0])
+            .unwrap()
+            .get(b"Resources")
+            .unwrap()
+            .clone();
+        let shared = document.add_object(shared);
+        for page in &page_ids {
+            document
+                .get_dictionary_mut(*page)
+                .unwrap()
+                .set("Resources", Object::Reference(shared));
+        }
+        let mut body = Vec::new();
+        document.save_to(&mut body).expect("should save");
+
+        let out = stamp(&body, &worded(&["FOOT1", "FOOT2"])).expect("should stamp");
+        let document = Document::load_mem(&out).expect("should parse");
+        for (page, own) in [(1u32, b"Ov0F1".as_slice()), (2, b"Ov1F1".as_slice())] {
+            let fonts = fonts_of(&document, page);
+            assert!(
+                fonts.has(own),
+                "page {page} lacks its own band font: {fonts:?}"
+            );
+            assert_eq!(
+                fonts.len(),
+                2,
+                "page {page} gained another page's band: {fonts:?}"
+            );
+        }
     }
 }

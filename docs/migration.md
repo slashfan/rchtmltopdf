@@ -55,27 +55,28 @@ contre le premier (D03).
 
 ## En-têtes et pieds de page : la marge doit les contenir
 
-Un bandeau est ancré au **bord du papier** et grandit vers le contenu ; sa hauteur est celle
-de son contenu, et `--margin-top` ne décide pas où il commence. Trois conséquences, toutes
-mesurées :
+Un bandeau est ancré au **bord du papier** et grandit vers le contenu, dans une boîte d'au
+moins la hauteur de la marge de ce côté (voir [D38](decisions.md)). Trois conséquences,
+toutes mesurées :
 
 * **Ajouter un bandeau ne déplace jamais le contenu.** Le document imprimé avec un en-tête
   occupe exactement la même zone que sans. Ajouter `--header-center` à une ligne de commande
   migrée ne peut pas la repaginer en silence.
-* **C'est à la marge de faire la place.** Un bandeau de 12 pt mesure environ 28,5 pt de haut
-  et une marge de 10 mm en fait 28,3 : le défaut tient tout juste. À `--header-font-size 40`,
-  le bandeau mord sur le contenu, et la réponse est un `--margin-top` plus grand.
+* **C'est à la marge de faire la place.** Un bandeau de 12 pt tient dans la marge de 10 mm
+  par défaut, son filet posé sur la ligne de marge. À `--header-font-size 40`, le bandeau
+  mord sur le contenu, et la réponse est un `--margin-top` plus grand.
 * **`--header-spacing` agit sur la marge, pas sur le bandeau.** C'est la seule chose qui
   puisse ouvrir un espace entre les deux : `--header-spacing 5` descend le contenu de 5 mm et
   laisse le bandeau où il est.
 
 ### Placeholders
 
-`[page]`, `[topage]`, `[frompage]`, `[sitepage]`, `[sitepages]`, `[webpage]`, `[title]`,
-`[doctitle]`, `[date]`, `[isodate]` et `[time]` sont substitués, ainsi que ceux définis par
-`--replace`. `[section]`, `[subsection]` et `[subsubsection]` désignent une position dans le
-plan du document, qui n'existe pas encore : ils s'effacent, et l'option est signalée une fois
-sur stderr.
+`[page]`, `[topage]`, `[frompage]`, `[sitepage]`, `[sitepages]`, `[section]`,
+`[subsection]`, `[subsubsection]`, `[webpage]`, `[title]`, `[doctitle]`, `[date]`, `[isodate]`
+et `[time]` sont substitués, ainsi que ceux définis par `--replace`. `[page]` et `[topage]`
+comptent sur l'ensemble du document produit, une couverture exclue ; `[sitepage]` et
+`[sitepages]` dans le document d'origine ; `--page-offset` décale les premiers. Les trois
+`[section]` nomment le dernier titre `h1`, `h2` ou `h3` sur la page ou avant elle.
 
 **`[date]` n'est pas identique à celui de wkhtmltopdf.** Qt le rend via la locale du système,
 donc le même binaire écrit une chaîne différente sur deux machines et il n'y a pas de format

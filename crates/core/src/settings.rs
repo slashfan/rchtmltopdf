@@ -431,6 +431,9 @@ pub struct ObjectSettings {
     /// Off for a cover.
     pub in_outline: bool,
     pub links: LinkSettings,
+    /// `--page-offset`: added to `[page]`, `[topage]` and `[frompage]` on this
+    /// document's pages. Nought, as in wkhtmltopdf.
+    pub page_offset: i64,
 }
 
 impl ObjectSettings {
@@ -447,6 +450,7 @@ impl ObjectSettings {
             replacements: Vec::new(),
             in_outline: true,
             links: LinkSettings::default(),
+            page_offset: 0,
         }
     }
 }
@@ -552,6 +556,7 @@ mod tests {
         assert!(object.links.internal);
         assert!(object.links.resolve_relative);
         assert!(object.links.leaves_everything());
+        assert_eq!(object.page_offset, 0);
     }
 
     /// `--no-outline --dump-outline x` still needs the browser to produce one.

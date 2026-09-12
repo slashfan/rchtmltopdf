@@ -1,26 +1,22 @@
 //! wkhtmltopdf's `[page]`, `[date]` and the rest, expanded into a band.
 //!
-//! # Why these are not Chromium's
+//! # Why none of these are Chromium's
 //!
 //! A print template understands five classes of its own — `pageNumber`,
-//! `totalPages`, `date`, `title`, `url` — and only the first two are used here.
-//! The other three are a different program's idea of the answer: Chromium's date
-//! format is not wkhtmltopdf's, and its `title` and `url` come from the page
-//! rather than from the command line, where `--title` lives. Everything except
-//! the page numbers is therefore rendered here, from settings.
+//! `totalPages`, `date`, `title`, `url` — and none of them is used. Three are a
+//! different program's idea of the answer: Chromium's date format is not
+//! wkhtmltopdf's, and its `title` and `url` come from the page rather than
+//! from the command line, where `--title` lives. The two page numbers were
+//! used until D38, and could count only within the document being printed:
+//! `[page]` restarted at one for every document of a conversion. Now the
+//! bands are printed after everything else, when the counts are known, and
+//! every number arrives here in [`Numbers`], worked out by the conversion.
 //!
-//! The page numbers cannot be. Nobody knows how many pages a document has until
-//! it has been laid out, and that happens inside the print call, so `[page]` and
-//! `[topage]` become the two spans Chromium fills in for itself.
+//! # Escaping happens here
 //!
-//! # Escaping happens here, not around here
-//!
-//! The text is somebody's document title and the result is HTML, so the obvious
-//! move is to escape the lot. That cannot work: `[page]` has to come out as a
-//! `<span>`, and a `&lt;span&gt;` prints as itself. So the text is walked
-//! instead, escaping each literal run and each substituted value, and inserting
-//! the spans raw. Nothing reaches the output unescaped except markup this module
-//! wrote.
+//! The text is somebody's document title and the result is HTML, so each
+//! literal run and each substituted value is escaped on the way. Nothing
+//! reaches the output unescaped.
 
 use rchtmltopdf_core::Clock;
 use rchtmltopdf_core::settings::Pair;
@@ -43,102 +39,91 @@ pub struct Context {
     pub clock: Clock,
 }
 
-/// The result of expanding one band cell.
+/// What one page's numbers are, in wkhtmltopdf's two frames (#39).
+///
+/// `page` and `topage` count across the whole output; `sitepage` and
+/// `sitepages` within the document the page came from; `frompage` is where
+/// that document began in the first frame. A cover is in neither count. The
+/// three sections name the heading in force on the page, from the outline.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Expansion {
-    /// Ready to drop into a template.
-    pub html: String,
-    /// Placeholders that are real in wkhtmltopdf and empty here, in the order
-    /// they were met. The binary says so once per name.
-    pub unsupported: Vec<&'static str>,
+pub struct Numbers {
+    pub page: i64,
+    pub topage: i64,
+    pub frompage: i64,
+    pub sitepage: i64,
+    pub sitepages: i64,
+    pub section: String,
+    pub subsection: String,
+    pub subsubsection: String,
 }
 
-/// Placeholders that need something V1 does not have.
-///
-/// All three name a position in the document outline, which is #40's work and
-/// does not exist until a table of contents does. They expand to nothing rather
-/// than to their own name, because a footer reading `[section]` on every page of
-/// a printed invoice is worse than a blank.
-const NEEDS_AN_OUTLINE: &[&str] = &["section", "subsection", "subsubsection"];
+/// The placeholders that need the page counts, and so the outline for the
+/// three that name a heading. Used to decide whether a band asks for the
+/// outline to be generated at all.
+pub const SECTION_PLACEHOLDERS: &[&str] = &["section", "subsection", "subsubsection"];
 
-/// Expand one band cell.
-pub fn expand(text: &str, context: &Context) -> Expansion {
-    let mut expansion = Expansion::default();
+/// Whether a band's text names a heading.
+pub fn names_a_section(text: &str) -> bool {
+    SECTION_PLACEHOLDERS
+        .iter()
+        .any(|name| text.contains(&format!("[{name}]")))
+}
+
+/// Expand one band cell into markup.
+pub fn expand(text: &str, context: &Context, numbers: &Numbers) -> String {
+    let mut html = String::with_capacity(text.len());
     let mut rest = text;
 
     while let Some(open) = rest.find('[') {
-        expansion.html.push_str(&escape(&rest[..open]));
+        html.push_str(&escape(&rest[..open]));
         let after = &rest[open + 1..];
 
         let Some(close) = after.find(']') else {
             // An unclosed bracket is text. Somebody's footer says "[draft".
-            expansion.html.push_str(&escape(&rest[open..]));
-            return expansion;
+            html.push_str(&escape(&rest[open..]));
+            return html;
         };
 
         let name = &after[..close];
-        match resolve(name, context) {
-            Some(Resolved::Text(value)) => expansion.html.push_str(&escape(&value)),
-            Some(Resolved::Markup(html)) => expansion.html.push_str(html),
-            Some(Resolved::Nothing(known)) => {
-                if !expansion.unsupported.contains(&known) {
-                    expansion.unsupported.push(known);
-                }
-            }
+        match resolve(name, context, numbers) {
+            Some(value) => html.push_str(&escape(&value)),
             // Not a placeholder at all: `[see note]` is text.
-            None => expansion
-                .html
-                .push_str(&escape(&rest[open..open + close + 2])),
+            None => html.push_str(&escape(&rest[open..open + close + 2])),
         }
         rest = &after[close + 1..];
     }
 
-    expansion.html.push_str(&escape(rest));
-    expansion
+    html.push_str(&escape(rest));
+    html
 }
 
-enum Resolved {
-    /// A value to escape and insert.
-    Text(String),
-    /// Markup this module wrote, inserted as it is.
-    Markup(&'static str),
-    /// Recognised, and nothing to show for it yet.
-    Nothing(&'static str),
-}
-
-fn resolve(name: &str, context: &Context) -> Option<Resolved> {
+fn resolve(name: &str, context: &Context, numbers: &Numbers) -> Option<String> {
     // `--replace` first, so a user who defines `[page]` gets their own answer.
     // Its value is inserted literally and never rescanned, so a replacement
     // containing `[page]` prints those six characters.
     if let Some(pair) = context.replacements.iter().find(|pair| pair.name == name) {
-        return Some(Resolved::Text(pair.value.clone()));
-    }
-
-    if let Some(known) = NEEDS_AN_OUTLINE.iter().find(|known| **known == name) {
-        return Some(Resolved::Nothing(known));
+        return Some(pair.value.clone());
     }
 
     Some(match name {
-        // --- the two only the browser can answer ----------------------------
-        //
-        // **V2 has to split this.** With one document, the page number within
-        // the document and within the whole file are the same number, and so are
-        // the two totals. They stop being the same the moment `--page-offset` or
-        // a second document exists, and then `[page]` counts across the file
-        // while `[sitepage]` counts within the document.
-        "page" | "sitepage" => Resolved::Markup("<span class=\"pageNumber\"></span>"),
-        "topage" | "sitepages" => Resolved::Markup("<span class=\"totalPages\"></span>"),
-        // One document starts at its first page.
-        "frompage" => Resolved::Text("1".to_string()),
+        // --- the counts, worked out after printing (#39) ----------------------
+        "page" => numbers.page.to_string(),
+        "topage" => numbers.topage.to_string(),
+        "frompage" => numbers.frompage.to_string(),
+        "sitepage" => numbers.sitepage.to_string(),
+        "sitepages" => numbers.sitepages.to_string(),
+        "section" => numbers.section.clone(),
+        "subsection" => numbers.subsection.clone(),
+        "subsubsection" => numbers.subsubsection.clone(),
 
         // --- from the command line ------------------------------------------
-        "webpage" => Resolved::Text(context.webpage.clone()),
-        "title" | "doctitle" => Resolved::Text(context.title.clone()),
+        "webpage" => context.webpage.clone(),
+        "title" | "doctitle" => context.title.clone(),
 
-        // --- rendered here, not by the template ------------------------------
-        "date" => Resolved::Text(context.clock.date()),
-        "isodate" => Resolved::Text(context.clock.iso()),
-        "time" => Resolved::Text(context.clock.time()),
+        // --- rendered here, not by the browser ---------------------------------
+        "date" => context.clock.date(),
+        "isodate" => context.clock.iso(),
+        "time" => context.clock.time(),
 
         _ => return None,
     })
@@ -185,31 +170,49 @@ mod tests {
         }
     }
 
+    fn numbers() -> Numbers {
+        Numbers {
+            page: 4,
+            topage: 5,
+            frompage: 4,
+            sitepage: 1,
+            sitepages: 2,
+            section: "Chapter Two".into(),
+            subsection: "Section 2.1".into(),
+            subsubsection: String::new(),
+        }
+    }
+
     fn html(text: &str) -> String {
-        expand(text, &context(&[])).html
+        expand(text, &context(&[]), &numbers())
     }
 
     /// The literal example from the brief, from `grammar.rs`, and from the
     /// README's own first code block.
     #[test]
     fn the_example_everything_quotes_expands() {
-        assert_eq!(
-            html("Page [page] / [topage]"),
-            "Page <span class=\"pageNumber\"></span> / <span class=\"totalPages\"></span>"
-        );
+        assert_eq!(html("Page [page] / [topage]"), "Page 4 / 5");
     }
 
-    /// Nobody knows the page count until the document has been laid out, which
-    /// happens inside the print call. These two are the only placeholders
-    /// Chromium has to answer.
+    /// Two frames: across the output, and within the document (#39).
     #[test]
-    fn only_the_page_numbers_are_left_to_the_browser() {
-        assert!(html("[page]").contains("class=\"pageNumber\""));
-        assert!(html("[topage]").contains("class=\"totalPages\""));
-        // With one document these are the same numbers. V2 splits them.
-        assert_eq!(html("[sitepage]"), html("[page]"));
-        assert_eq!(html("[sitepages]"), html("[topage]"));
-        assert_eq!(html("[frompage]"), "1");
+    fn the_counts_come_from_the_conversion_in_both_frames() {
+        assert_eq!(html("[page]/[topage]"), "4/5");
+        assert_eq!(html("[sitepage]/[sitepages]"), "1/2");
+        assert_eq!(html("[frompage]"), "4");
+    }
+
+    /// The heading in force on the page, and nothing where there is none.
+    #[test]
+    fn the_sections_name_the_headings_in_force() {
+        assert_eq!(
+            html("[section] / [subsection] / [subsubsection]"),
+            "Chapter Two / Section 2.1 / "
+        );
+        assert!(names_a_section("in [section] here"));
+        assert!(names_a_section("[subsubsection]"));
+        assert!(!names_a_section("[page] of [topage]"));
+        assert!(!names_a_section("section"));
     }
 
     #[test]
@@ -231,24 +234,6 @@ mod tests {
         assert!(behind.iso().ends_with("-05:30"), "{}", behind.iso());
     }
 
-    /// The three that name a position in the outline. Empty rather than their
-    /// own name: a footer reading `[section]` on every page is worse than a
-    /// blank.
-    #[test]
-    fn what_needs_an_outline_expands_to_nothing_and_says_so() {
-        let expansion = expand("a[section]b[subsection]c", &context(&[]));
-        assert_eq!(expansion.html, "abc");
-        assert_eq!(expansion.unsupported, ["section", "subsection"]);
-    }
-
-    /// One line per name however many times it appears, because the alternative
-    /// is a page of identical warnings.
-    #[test]
-    fn an_unsupported_placeholder_is_reported_once() {
-        let expansion = expand("[section] [section] [section]", &context(&[]));
-        assert_eq!(expansion.unsupported, ["section"]);
-    }
-
     /// `--replace` defines placeholders of the user's own, and is consulted
     /// before the built-in ones so it can override them.
     #[test]
@@ -263,8 +248,8 @@ mod tests {
                 value: "none of your business".into(),
             },
         ];
-        let expansion = expand("[client] [page]", &context(&replacements));
-        assert_eq!(expansion.html, "Acme Ltd none of your business");
+        let expansion = expand("[client] [page]", &context(&replacements), &numbers());
+        assert_eq!(expansion, "Acme Ltd none of your business");
     }
 
     /// Literal, not a pattern: a replacement value is inserted as it is and
@@ -275,21 +260,30 @@ mod tests {
             name: "x".into(),
             value: "[page]".into(),
         }];
-        let expansion = expand("[x]", &context(&replacements));
-        assert_eq!(expansion.html, "[page]");
-        assert!(!expansion.html.contains("span"));
+        let expansion = expand("[x]", &context(&replacements), &numbers());
+        assert_eq!(expansion, "[page]");
     }
 
-    /// Everything substituted is escaped, and the spans are the only markup that
-    /// survives. A title with an ampersand in it is ordinary.
+    /// Everything substituted is escaped. A title with an ampersand in it is
+    /// ordinary, and so is a heading.
     #[test]
     fn substituted_values_are_escaped() {
         let context = Context {
             title: "Tom & Jerry <b>".into(),
             ..context(&[])
         };
-        let expansion = expand("[title]", &context);
-        assert_eq!(expansion.html, "Tom &amp; Jerry &lt;b&gt;");
+        assert_eq!(
+            expand("[title]", &context, &numbers()),
+            "Tom &amp; Jerry &lt;b&gt;"
+        );
+        let numbers = Numbers {
+            section: "Terms & <Conditions>".into(),
+            ..numbers()
+        };
+        assert_eq!(
+            expand("[section]", &context, &numbers),
+            "Terms &amp; &lt;Conditions&gt;"
+        );
     }
 
     #[test]
@@ -298,8 +292,8 @@ mod tests {
             name: "x".into(),
             value: "<script>alert(1)</script>".into(),
         }];
-        let expansion = expand("[x]", &context(&replacements));
-        assert!(!expansion.html.contains("<script>"), "{}", expansion.html);
+        let expansion = expand("[x]", &context(&replacements), &numbers());
+        assert!(!expansion.contains("<script>"), "{expansion}");
     }
 
     /// Brackets are ordinary punctuation in a footer. Anything that is not a
@@ -314,7 +308,7 @@ mod tests {
 
     #[test]
     fn text_around_a_placeholder_survives() {
-        assert_eq!(html("v1.2 — [frompage] of many"), "v1.2 — 1 of many");
+        assert_eq!(html("v1.2 — [frompage] of many"), "v1.2 — 4 of many");
         assert_eq!(html(""), "");
         assert_eq!(html("no placeholders here"), "no placeholders here");
     }
@@ -327,6 +321,6 @@ mod tests {
             title: String::new(),
             ..context(&[])
         };
-        assert_eq!(expand("[title]", &context).html, "");
+        assert_eq!(expand("[title]", &context, &numbers()), "");
     }
 }

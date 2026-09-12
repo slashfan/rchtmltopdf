@@ -23,6 +23,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub mod apply;
 pub mod convert;
 pub mod input;
+pub mod numbering;
 pub mod outline;
 pub mod output;
 pub mod table;

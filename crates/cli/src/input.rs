@@ -154,6 +154,27 @@ fn from_stdin(stdin: &mut dyn Read, directory: &Path) -> Result<Resolved, InputE
     })
 }
 
+/// Write a document of our own to a file the browser can open, removed when
+/// the result is dropped.
+///
+/// The system temporary directory rather than the working one: unlike a
+/// document read from standard input, this one has no relative links to
+/// resolve, and it should not appear next to the user's files.
+pub fn scratch_document(label: &str, html: &str) -> Result<Resolved, InputError> {
+    let fail = |reason: String| InputError {
+        input: format!("the {label} document"),
+        reason,
+    };
+    let path =
+        std::env::temp_dir().join(format!(".rchtmltopdf-{label}-{}.html", std::process::id()));
+    std::fs::write(&path, html).map_err(|error| fail(error.to_string()))?;
+    let canonical = std::fs::canonicalize(&path).unwrap_or(path.clone());
+    Ok(Resolved {
+        url: file_url(&canonical),
+        scratch: Some(Scratch { path }),
+    })
+}
+
 /// Build a `file://` URL from an absolute path.
 ///
 /// Percent-encodes everything outside the unreserved set, so a directory with a

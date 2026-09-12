@@ -33,15 +33,15 @@
 //! [`Page::print_to_pdf`]: crate::launch::Page::print_to_pdf
 //! [`Page::load`]: crate::launch::Page::load
 
-use crate::band::{self, Edge};
 use crate::file_access::{self, Policy};
 use crate::intercept::{Charset, Credentials, Rules};
 use crate::launch::LaunchOptions;
+use crate::placeholder;
 use crate::placeholder::Context;
 use rchtmltopdf_core::Clock;
 use rchtmltopdf_core::settings::{
-    GlobalSettings, LinkSettings, LoadSettings, MediaType, ObjectSettings, OutlineSettings,
-    PageSetup, WebSettings,
+    Band, GlobalSettings, LinkSettings, LoadSettings, MediaType, ObjectKind, ObjectSettings,
+    OutlineSettings, PageSetup, WebSettings,
 };
 use rchtmltopdf_core::units::Length;
 use serde_json::{Value, json};
@@ -142,8 +142,6 @@ pub struct Plan {
     /// can be given the same clock: a plan built twice a second apart must not
     /// differ, or every option would look as though it changed something.
     pub context: Context,
-    /// Placeholders the bands asked for and V1 cannot answer, once each.
-    pub unsupported_placeholders: Vec<&'static str>,
     /// The bound over the whole of the above (D16). `None` is `--timeout 0`.
     pub deadline: Option<Duration>,
     /// What is done to the printed document once the browser is finished with
@@ -169,13 +167,11 @@ impl Plan {
         document_url: &str,
     ) -> Self {
         let context = context(global, object, clock);
-        let printing = print(&global.page, object, &context, &global.outline);
         Self {
             launch: launch(global, object),
             prepare: prepare(object, document_url),
             load: LoadPlan::new(&object.load),
-            print: printing.command,
-            unsupported_placeholders: printing.unsupported,
+            print: print(&global.page, object, &global.outline),
             context,
             deadline: global.timeout,
             requests: rules(object, document_url),
@@ -185,9 +181,12 @@ impl Plan {
 }
 
 /// What happens to the printed document after the browser is done with it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Finishing {
     pub outline: OutlineSettings,
+    /// The bands to draw on this document's pages, once the counts are known
+    /// (D38). Expanded against [`Plan::context`] and the page's numbers.
+    pub bands: Bands,
     /// This document's links: which kinds stay, and whether a relative one is
     /// written back relative.
     pub links: LinkSettings,
@@ -197,10 +196,57 @@ pub struct Finishing {
     pub document_url: String,
 }
 
+/// One document's bands and how its pages count.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Bands {
+    pub header: Band,
+    pub footer: Band,
+    /// Whether the pages count towards `[page]` and `[topage]`: a cover's do
+    /// not.
+    pub counted: bool,
+    /// `--page-offset`.
+    pub page_offset: i64,
+}
+
+impl Bands {
+    /// Whether anything at all would be drawn.
+    pub fn is_empty(&self) -> bool {
+        self.header.is_empty() && self.footer.is_empty()
+    }
+
+    /// Whether a band names a heading, and so needs the outline generated even
+    /// when nobody asked to keep it.
+    pub fn names_a_section(&self) -> bool {
+        [&self.header, &self.footer].iter().any(|band| {
+            [&band.left, &band.center, &band.right]
+                .iter()
+                .any(|cell| cell.as_deref().is_some_and(placeholder::names_a_section))
+        })
+    }
+}
+
+/// Whether the outline has to be generated for this document: to keep, to
+/// dump, or to name sections in a band.
+pub fn outline_wanted(outline: &OutlineSettings, object: &ObjectSettings) -> bool {
+    let bands = Bands {
+        header: object.header.clone(),
+        footer: object.footer.clone(),
+        counted: true,
+        page_offset: 0,
+    };
+    (outline.wanted() || bands.names_a_section()) && object.in_outline
+}
+
 /// The post-print treatment the command line asked for.
 pub fn finish(global: &GlobalSettings, object: &ObjectSettings, document_url: &str) -> Finishing {
     Finishing {
         outline: global.outline.clone(),
+        bands: Bands {
+            header: object.header.clone(),
+            footer: object.footer.clone(),
+            counted: object.kind != ObjectKind::Cover,
+            page_offset: object.page_offset,
+        },
         links: object.links.clone(),
         document_url: document_url.to_string(),
     }
@@ -392,49 +438,32 @@ pub fn viewport(web: &WebSettings) -> Command {
     )
 }
 
-/// The print call.
+/// The print call for one document.
 ///
 /// Orientation is resolved here rather than passed on, so the paper handed over
 /// is already the right way round. Letting the protocol rotate it as well would
 /// apply the swap twice. Paper geometry is global in wkhtmltopdf; backgrounds
 /// and zoom belong to the object. Both are needed, and they come from different
 /// places.
-pub fn print(
-    page: &PageSetup,
-    object: &ObjectSettings,
-    context: &Context,
-    outline: &OutlineSettings,
-) -> Printing {
+///
+/// No bands: since D38 they are printed afterwards as a document of their own
+/// and stamped onto the pages, so the browser is told to draw none and the
+/// margins are all that is decided here.
+pub fn print(page: &PageSetup, object: &ObjectSettings, outline: &OutlineSettings) -> Command {
     let web = &object.web;
 
-    // Chromium draws its own footer -- a page number -- when asked to display
-    // bands and handed only one template. Both are always sent, and an unused
-    // one is a div that draws nothing rather than an empty string, which reads
-    // to Chromium as "no template given".
-    let bands = !object.header.is_empty() || !object.footer.is_empty();
-    let (left, right) = (page.margins.left.to_mm(), page.margins.right.to_mm());
-
-    // A band is anchored to the paper edge and grows towards the content, so it
-    // cannot open a gap below itself: the print margin is the only thing that
-    // decides where the content starts. `--header-spacing` therefore lands here
-    // rather than in the template, and only for a band that draws something,
+    // A band is anchored to the paper edge and reaches towards the content, so
+    // it cannot open a gap below itself: the print margin is the only thing
+    // that decides where the content starts. `--header-spacing` therefore lands
+    // here rather than in the band, and only for a band that draws something,
     // because spacing under nothing is nothing. Measured, not assumed --
     // `crates/browser/src/band.rs` carries the evidence.
-    let gap = |band: &rchtmltopdf_core::settings::Band| match band.is_empty() {
+    let gap = |band: &Band| match band.is_empty() {
         true => 0.0,
         false => Length::mm(band.spacing.unwrap_or(0.0)).to_inches(),
     };
 
-    let header = band::template(&object.header, Edge::Header, left, right, context);
-    let footer = band::template(&object.footer, Edge::Footer, left, right, context);
-    let mut unsupported = header.unsupported;
-    for name in footer.unsupported {
-        if !unsupported.contains(&name) {
-            unsupported.push(name);
-        }
-    }
-
-    let command = Command::new(
+    Command::new(
         "Page.printToPDF",
         json!({
             "paperWidth": page.width_inches(),
@@ -451,35 +480,65 @@ pub fn print(
             // override --page-size, and wkhtmltopdf does not do that, so neither
             // do we.
             "preferCSSPageSize": false,
-            "displayHeaderFooter": bands,
-            "headerTemplate": header.html,
-            "footerTemplate": footer.html,
+            // Nothing: the bands are drawn afterwards (D38). Chromium would
+            // otherwise draw its own footer, a page number nobody asked for.
+            "displayHeaderFooter": false,
             // Chromium derives an outline from the headings, nested by level,
             // with a destination on each. All or nothing per document: the
             // depth is cut afterwards (`Finishing`), and a document kept out
             // of the outline is one that was never asked for it.
-            "generateDocumentOutline": outline.wanted() && object.in_outline,
+            "generateDocumentOutline": outline_wanted(outline, object),
             // Not the default. The default returns the whole document
             // base64-encoded inside one protocol message, and a document of any
             // size exceeds the message limit.
             "transferMode": "ReturnAsStream",
         }),
-    );
+    )
+}
 
-    Printing {
-        command,
-        unsupported,
+/// What to put in place before the document of band sheets is opened.
+///
+/// Only the two domains the wait needs. The sheets are ours: no cookies, no
+/// headers, no media to emulate — the document has no queries — and the
+/// window is irrelevant to absolutely positioned boxes.
+pub fn band_prepare() -> Vec<Command> {
+    vec![
+        Command::new("Page.enable", Value::Null),
+        Command::new("Network.enable", Value::Null),
+    ]
+}
+
+/// How to wait for the document of band sheets: the load event and the
+/// fonts, and nothing more. There is no script to give time to.
+pub fn band_load() -> LoadSettings {
+    LoadSettings {
+        javascript_delay: Duration::ZERO,
+        ..LoadSettings::default()
     }
 }
 
-/// The print call, and what the bands could not expand.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Printing {
-    pub command: Command,
-    /// Placeholders that are real in wkhtmltopdf and empty here, once each. The
-    /// binary reports them; nothing downstream of the print call can, because by
-    /// then the band is a string.
-    pub unsupported: Vec<&'static str>,
+/// The print call for the document of band sheets: the same paper, no
+/// margins, backgrounds on so a rule is drawn, and nothing of the browser's
+/// own.
+pub fn band_print(page: &PageSetup) -> Command {
+    Command::new(
+        "Page.printToPDF",
+        json!({
+            "paperWidth": page.width_inches(),
+            "paperHeight": page.height_inches(),
+            "marginTop": 0.0,
+            "marginBottom": 0.0,
+            "marginLeft": 0.0,
+            "marginRight": 0.0,
+            "printBackground": true,
+            "scale": 1.0,
+            "landscape": false,
+            "preferCSSPageSize": false,
+            "displayHeaderFooter": false,
+            "generateDocumentOutline": false,
+            "transferMode": "ReturnAsStream",
+        }),
+    )
 }
 
 #[cfg(test)]
@@ -609,13 +668,7 @@ mod tests {
             orientation: Orientation::Landscape,
             ..PageSetup::default()
         };
-        let command = print(
-            &landscape,
-            &page_object(),
-            &Context::default(),
-            &OutlineSettings::default(),
-        )
-        .command;
+        let command = print(&landscape, &page_object(), &OutlineSettings::default());
         assert_eq!(command.params["landscape"], json!(false));
         // 297mm, the long edge, is now the width.
         let width = command.params["paperWidth"].as_f64().unwrap();

@@ -1,0 +1,173 @@
+//! Page numbers across several documents (#39), and `--page-offset` (#37).
+//!
+//! Nobody knows how many pages a document has until it has been laid out, and
+//! `[page]` counts across every document of a conversion, so the bands are
+//! drawn after the merge from counts read off the printed pages (D38). What
+//! is asserted here is each of wkhtmltopdf's two frames on a real conversion:
+//! across the output, and within the document.
+
+use rchtmltopdf_conformance::binary::Run;
+use rchtmltopdf_conformance::fixture::{self, Scratch};
+use rchtmltopdf_conformance::inspect::Pdf;
+use rchtmltopdf_conformance::require_chromium;
+
+const THREE_PAGES: &str = "<div style=\"page-break-after:always\">one</div>\
+                           <div style=\"page-break-after:always\">two</div>\
+                           <div>three</div>";
+const TWO_PAGES: &str = "<div style=\"page-break-after:always\">four</div><div>five</div>";
+const COVER: &str = "<div>COVERTEXT</div>";
+
+fn fixtures(scratch: &Scratch) -> (String, String, String) {
+    let a = fixture::write(scratch.path(), "a.html", THREE_PAGES);
+    let b = fixture::write(scratch.path(), "b.html", TWO_PAGES);
+    let c = fixture::write(scratch.path(), "c.html", COVER);
+    (
+        a.display().to_string(),
+        b.display().to_string(),
+        c.display().to_string(),
+    )
+}
+
+fn convert(args: &[&str]) -> Pdf {
+    let outcome = Run::new().args(args.iter().copied()).arg("-").output();
+    outcome.succeeded();
+    Pdf::from_bytes(&outcome.stdout)
+}
+
+/// A page's text with every space removed, because each number is its own
+/// text run and extraction puts its own spacing between runs.
+fn compact(pdf: &Pdf, page: usize) -> String {
+    pdf.page_text(page)
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect()
+}
+
+/// **The point of D38.** `[page]` and `[topage]` count across both documents;
+/// a Chromium template restarted at one for the second.
+#[test]
+fn page_and_topage_count_across_documents() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("numbering-across");
+    let (a, b, _) = fixtures(&scratch);
+
+    let pdf = convert(&["--footer-center", "P[page]/[topage]", &a, &b]);
+    assert_eq!(pdf.page_count(), 5, "{}", pdf.describe());
+    for page in 1..=5 {
+        let expected = format!("P{page}/5");
+        assert!(
+            compact(&pdf, page).contains(&expected),
+            "page {page}: {}",
+            compact(&pdf, page)
+        );
+    }
+}
+
+/// The other frame: within the document, and where the document began.
+#[test]
+fn sitepage_sitepages_and_frompage_count_within_the_document() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("numbering-within");
+    let (a, b, _) = fixtures(&scratch);
+
+    let pdf = convert(&[
+        "--footer-left",
+        "F[frompage]",
+        "--footer-right",
+        "S[sitepage]/[sitepages]",
+        &a,
+        &b,
+    ]);
+    let expected = ["F1S1/3", "F1S2/3", "F1S3/3", "F4S1/2", "F4S2/2"];
+    for (page, expected) in expected.iter().enumerate() {
+        let text = compact(&pdf, page + 1);
+        assert!(text.contains(expected), "page {}: {text}", page + 1);
+    }
+}
+
+/// A cover counts in neither frame: the page after it is page one and
+/// `[topage]` leaves it out. Numbering keeps running into the next document.
+#[test]
+fn a_cover_is_not_counted_and_the_count_runs_past_it() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("numbering-cover");
+    let (a, b, c) = fixtures(&scratch);
+
+    let pdf = convert(&["--footer-center", "P[page]/[topage]", "cover", &c, &a, &b]);
+    assert_eq!(pdf.page_count(), 6);
+    assert!(
+        !compact(&pdf, 1).contains("P"),
+        "the cover has no band: {}",
+        compact(&pdf, 1)
+    );
+    for page in 2..=6 {
+        let expected = format!("P{}/5", page - 1);
+        assert!(
+            compact(&pdf, page).contains(&expected),
+            "page {page}: {}",
+            compact(&pdf, page)
+        );
+    }
+}
+
+/// `--page-offset` shifts the numbers of the document it was written on.
+#[test]
+fn page_offset_shifts_the_numbers_of_its_document() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("numbering-offset");
+    let (a, b, _) = fixtures(&scratch);
+
+    // As a default, so both documents carry it.
+    let pdf = convert(&[
+        "--page-offset",
+        "10",
+        "--footer-center",
+        "P[page]/[topage]",
+        &a,
+        &b,
+    ]);
+    assert!(compact(&pdf, 1).contains("P11/15"), "{}", compact(&pdf, 1));
+    assert!(compact(&pdf, 5).contains("P15/15"), "{}", compact(&pdf, 5));
+
+    // On the second document only.
+    let pdf = convert(&[
+        "--footer-center",
+        "P[page]/[topage]",
+        &a,
+        &b,
+        "--page-offset",
+        "100",
+    ]);
+    assert!(compact(&pdf, 3).contains("P3/5"), "{}", compact(&pdf, 3));
+    assert!(
+        compact(&pdf, 4).contains("P104/105"),
+        "{}",
+        compact(&pdf, 4)
+    );
+}
+
+/// The band is drawn on top of the page, so the page's own text is still
+/// there under it, and the band's text is extractable like any other.
+#[test]
+fn the_band_and_the_page_are_both_there() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("numbering-both");
+    let (a, _, _) = fixtures(&scratch);
+
+    let pdf = convert(&["--header-left", "HEAD", "--footer-right", "FOOT", &a]);
+    let text = pdf.page_text(2);
+    assert!(
+        text.contains("two") && text.contains("HEAD") && text.contains("FOOT"),
+        "{text}"
+    );
+}
