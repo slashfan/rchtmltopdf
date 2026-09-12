@@ -18,6 +18,7 @@ compile_error!(
      is not written."
 );
 
+pub mod band;
 pub mod cdp;
 pub mod deadline;
 pub mod error;

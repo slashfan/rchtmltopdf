@@ -4,7 +4,7 @@ use crate::error::{Error, Result};
 use crate::launch::Page;
 use crate::plan;
 use base64::Engine;
-use rchtmltopdf_core::settings::{PageSetup, WebSettings};
+use rchtmltopdf_core::settings::{ObjectSettings, PageSetup};
 use serde_json::{Value, json};
 
 /// How much of the PDF stream to ask for at a time.
@@ -16,8 +16,8 @@ impl Page {
     /// Sends what [`plan::print`] decided and nothing else, so every choice
     /// about paper, margins, backgrounds and zoom is visible to the guard that
     /// holds the option table honest (D27).
-    pub async fn print_to_pdf(&self, page: &PageSetup, web: &WebSettings) -> Result<Vec<u8>> {
-        let command = plan::print(page, web);
+    pub async fn print_to_pdf(&self, page: &PageSetup, object: &ObjectSettings) -> Result<Vec<u8>> {
+        let command = plan::print(page, object);
         let result = self.session().send(command.method, command.params).await?;
 
         let handle = result

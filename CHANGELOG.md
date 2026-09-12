@@ -18,9 +18,25 @@ stylesheets, whether scripts run, and how long to wait before printing. Options 
 act on are accepted and warned about rather than breaking a command line that uses them.
 
 Several documents, covers and a table of contents are not built. Neither is most of the
-option surface beyond what V0 needed: headers and footers, cookies and custom headers,
-credentials and proxies, and PDF metadata are all understood on the command line and not
-yet acted on.
+option surface beyond what V0 needed: header and footer placeholders, cookies and custom
+headers, credentials and proxies, and PDF metadata are all understood on the command line
+and not yet acted on.
+
+### Added
+
+**Headers and footers are drawn.** `--header-left/center/right`, the same three for the
+footer, the font name and size, the rules and `--default-header` all render through
+Chromium's print templates. The text is used as written; `[page]` and the other placeholders
+are not substituted yet and the option says so.
+
+Three things about where a band lands, measured rather than assumed:
+
+- **A band never moves the content.** It is drawn inside the margin, so adding a header to a
+  migrated command line cannot silently repaginate it.
+- **The margin has to accommodate the band.** A 12pt band is about 28.5pt tall and a 10mm
+  margin is 28.3pt, so the default only just fits; a larger font needs a larger margin.
+- **`--header-spacing` moves the content, not the band.** A band is anchored to the paper
+  edge, so the print margin is the only thing that can open a gap below it.
 
 ### Changed
 

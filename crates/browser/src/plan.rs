@@ -33,11 +33,13 @@
 //! [`Page::print_to_pdf`]: crate::launch::Page::print_to_pdf
 //! [`Page::load`]: crate::launch::Page::load
 
+use crate::band::{self, Edge};
 use crate::file_access::Policy;
 use crate::launch::LaunchOptions;
 use rchtmltopdf_core::settings::{
     GlobalSettings, LoadSettings, MediaType, ObjectSettings, PageSetup, WebSettings,
 };
+use rchtmltopdf_core::units::Length;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -157,7 +159,7 @@ impl Plan {
             launch: launch(global, object),
             prepare: prepare(&object.web),
             load: LoadPlan::new(&object.load),
-            print: print(&global.page, &object.web),
+            print: print(&global.page, object),
             deadline: global.timeout,
             encoding: object.web.encoding.clone(),
             file_access: file_access(&object.web),
@@ -259,14 +261,34 @@ pub fn viewport(web: &WebSettings) -> Command {
 /// apply the swap twice. Paper geometry is global in wkhtmltopdf; backgrounds
 /// and zoom belong to the object. Both are needed, and they come from different
 /// places.
-pub fn print(page: &PageSetup, web: &WebSettings) -> Command {
+pub fn print(page: &PageSetup, object: &ObjectSettings) -> Command {
+    let web = &object.web;
+
+    // Chromium draws its own footer -- a page number -- when asked to display
+    // bands and handed only one template. Both are always sent, and an unused
+    // one is a div that draws nothing rather than an empty string, which reads
+    // to Chromium as "no template given".
+    let bands = !object.header.is_empty() || !object.footer.is_empty();
+    let (left, right) = (page.margins.left.to_mm(), page.margins.right.to_mm());
+
+    // A band is anchored to the paper edge and grows towards the content, so it
+    // cannot open a gap below itself: the print margin is the only thing that
+    // decides where the content starts. `--header-spacing` therefore lands here
+    // rather than in the template, and only for a band that draws something,
+    // because spacing under nothing is nothing. Measured, not assumed --
+    // `crates/browser/src/band.rs` carries the evidence.
+    let gap = |band: &rchtmltopdf_core::settings::Band| match band.is_empty() {
+        true => 0.0,
+        false => Length::mm(band.spacing.unwrap_or(0.0)).to_inches(),
+    };
+
     Command::new(
         "Page.printToPDF",
         json!({
             "paperWidth": page.width_inches(),
             "paperHeight": page.height_inches(),
-            "marginTop": page.margins.top.to_inches(),
-            "marginBottom": page.margins.bottom.to_inches(),
+            "marginTop": page.margins.top.to_inches() + gap(&object.header),
+            "marginBottom": page.margins.bottom.to_inches() + gap(&object.footer),
             "marginLeft": page.margins.left.to_inches(),
             "marginRight": page.margins.right.to_inches(),
             "printBackground": web.background,
@@ -277,6 +299,9 @@ pub fn print(page: &PageSetup, web: &WebSettings) -> Command {
             // override --page-size, and wkhtmltopdf does not do that, so neither
             // do we.
             "preferCSSPageSize": false,
+            "displayHeaderFooter": bands,
+            "headerTemplate": band::template(&object.header, Edge::Header, left, right),
+            "footerTemplate": band::template(&object.footer, Edge::Footer, left, right),
             // Not the default. The default returns the whole document
             // base64-encoded inside one protocol message, and a document of any
             // size exceeds the message limit.
@@ -397,7 +422,7 @@ mod tests {
             orientation: Orientation::Landscape,
             ..PageSetup::default()
         };
-        let command = print(&landscape, &WebSettings::default());
+        let command = print(&landscape, &page_object());
         assert_eq!(command.params["landscape"], json!(false));
         // 297mm, the long edge, is now the width.
         let width = command.params["paperWidth"].as_f64().unwrap();

@@ -114,9 +114,7 @@ pub async fn convert(settings: &Settings) -> Result<(), ConvertError> {
 
         page.prepare(&object.web).await?;
         page.load(document.url(), &object.load, &progress).await?;
-        let pdf = page
-            .print_to_pdf(&settings.global.page, &object.web)
-            .await?;
+        let pdf = page.print_to_pdf(&settings.global.page, object).await?;
 
         // Read before the guard is dropped, which is what stops interception.
         let refused = policing

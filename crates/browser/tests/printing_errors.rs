@@ -10,7 +10,7 @@
 use base64::Engine;
 use rchtmltopdf_browser::cdp::framing::{Framed, frame};
 use rchtmltopdf_browser::{Client, Error, Page};
-use rchtmltopdf_core::settings::{PageSetup, WebSettings};
+use rchtmltopdf_core::settings::{ObjectSettings, PageSetup};
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 
@@ -75,8 +75,11 @@ fn streaming(chunks: Vec<(String, bool)>) -> Handler {
 
 async fn print(handler: Handler) -> Result<Vec<u8>, Error> {
     let (_client, page) = page_over(handler);
-    page.print_to_pdf(&PageSetup::default(), &WebSettings::default())
-        .await
+    page.print_to_pdf(
+        &PageSetup::default(),
+        &ObjectSettings::page(rchtmltopdf_core::Input::Stdin),
+    )
+    .await
 }
 
 /// The loop has only ever run once in any test, because every real fixture fits

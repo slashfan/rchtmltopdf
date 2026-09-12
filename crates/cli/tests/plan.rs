@@ -158,12 +158,12 @@ fn nothing_the_table_calls_unbuilt_changes_the_conversion() {
 /// field, which is what the test above holds.
 #[test]
 fn an_option_that_is_not_built_may_still_be_understood() {
-    let header_left = table::lookup_long("header-left").expect("in the table");
-    assert!(matches!(header_left.support, Support::Planned(_)));
+    let replace = table::lookup_long("replace").expect("in the table");
+    assert!(matches!(replace.support, Support::Planned(_)));
 
-    let settings = settings_for(&[header_left]);
+    let settings = settings_for(&[replace]);
     let object = settings.single_object().expect("one object");
-    assert_eq!(object.header.left.as_deref(), Some("x"));
+    assert_eq!(object.replacements[0].name, "x");
 }
 
 /// The exemption list is a promise about tests elsewhere. An entry naming an
@@ -192,7 +192,7 @@ fn the_advertised_surface_is_the_audited_one() {
         .filter(|spec| spec.support == Support::Implemented)
         .count();
     assert_eq!(
-        implemented, 30,
+        implemented, 47,
         "the number of options honoured end to end changed; \
          if that is deliberate, the audit and this number move together"
     );

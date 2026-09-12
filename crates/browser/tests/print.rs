@@ -3,9 +3,12 @@
 mod support;
 
 use rchtmltopdf_browser::render::Progress;
+use rchtmltopdf_core::Input;
 use rchtmltopdf_core::Orientation;
 use rchtmltopdf_core::page_size;
-use rchtmltopdf_core::settings::{LoadSettings, Margins, MediaType, PageSetup, WebSettings};
+use rchtmltopdf_core::settings::{
+    LoadSettings, Margins, MediaType, ObjectSettings, PageSetup, WebSettings,
+};
 use rchtmltopdf_core::units::Length;
 use support::{TestServer, launch, one_at_a_time};
 
@@ -56,7 +59,11 @@ async fn print(page_setup: PageSetup, web: WebSettings, path: &str) -> Option<Ve
     )
     .await
     .unwrap();
-    let pdf = page.print_to_pdf(&page_setup, &web).await.unwrap();
+    let object = ObjectSettings {
+        web: web.clone(),
+        ..ObjectSettings::page(Input::Stdin)
+    };
+    let pdf = page.print_to_pdf(&page_setup, &object).await.unwrap();
     browser.close().await.unwrap();
     Some(pdf)
 }
