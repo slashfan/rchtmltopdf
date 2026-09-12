@@ -12,6 +12,11 @@
 //! millimetres. A general-purpose argument parser fights all of this, so the
 //! grammar is tokenised by hand here.
 
+/// The name the program answers to, and the prefix on every line it writes to
+/// stderr. Shared so a diagnostic cannot come out looking like it belongs to a
+/// different program depending on which module wrote it.
+pub const PROGRAM: &str = "rchtmltopdf";
+
 pub mod apply;
 pub mod convert;
 pub mod input;

@@ -24,10 +24,16 @@
 //! plan stops describing the conversion and the guard above it becomes a second
 //! opinion rather than a check.
 //!
+//! The one thing a plan cannot finish deciding is the local file policy, because
+//! what it permits depends on the document it is bound to and the document is
+//! resolved after the settings are read. The policy itself is here; binding it
+//! is [`crate::file_access::Policy::about`].
+//!
 //! [`Page::prepare`]: crate::launch::Page::prepare
 //! [`Page::print_to_pdf`]: crate::launch::Page::print_to_pdf
 //! [`Page::load`]: crate::launch::Page::load
 
+use crate::file_access::Policy;
 use crate::launch::LaunchOptions;
 use rchtmltopdf_core::settings::{
     GlobalSettings, LoadSettings, MediaType, ObjectSettings, PageSetup, WebSettings,
@@ -93,6 +99,15 @@ pub struct Plan {
     pub print: Command,
     /// The bound over the whole of the above (D16). `None` is `--timeout 0`.
     pub deadline: Option<Duration>,
+    /// Which local files the document may read (D10).
+    ///
+    /// The only half of a conversion the settings do not finish deciding. What a
+    /// policy does depends on the document it is bound to — whether that
+    /// document is itself local, and where it sits — and the document is
+    /// resolved after the settings are read, because standard input becomes a
+    /// file whose name nothing could predict. `Policy::about` is where the two
+    /// meet.
+    pub file_access: Policy,
 }
 
 impl Plan {
@@ -103,7 +118,16 @@ impl Plan {
             load: LoadPlan::new(&object.load),
             print: print(&global.page, &object.web),
             deadline: global.timeout,
+            file_access: file_access(&object.web),
         }
+    }
+}
+
+/// Which local files the document may read.
+pub fn file_access(web: &WebSettings) -> Policy {
+    Policy {
+        enabled: web.local_file_access,
+        allowed: web.allowed_paths.clone(),
     }
 }
 
@@ -285,6 +309,20 @@ mod tests {
             LoadPlan::new(&load).settle,
             Settle::WindowStatus("ready".into())
         );
+    }
+
+    #[test]
+    fn the_file_policy_carries_what_the_command_line_asked_for() {
+        let open = file_access(&WebSettings {
+            local_file_access: true,
+            allowed_paths: vec!["/srv/assets".into()],
+            ..WebSettings::default()
+        });
+        assert!(open.enabled);
+        assert_eq!(open.allowed, [std::path::PathBuf::from("/srv/assets")]);
+
+        // Off is the default, and D10 is the reason.
+        assert!(!file_access(&WebSettings::default()).enabled);
     }
 
     /// `--no-stop-slow-scripts` is an object option that is honoured by a launch

@@ -21,6 +21,8 @@ compile_error!(
 pub mod cdp;
 pub mod deadline;
 pub mod error;
+pub mod file_access;
+pub mod intercept;
 pub mod launch;
 pub mod locate;
 pub mod plan;
@@ -29,6 +31,8 @@ pub mod render;
 
 pub use cdp::{Client, Event, Session, SessionId};
 pub use error::{Error, ProtocolError, Result};
+pub use file_access::{FileAccess, Policy, Verdict};
+pub use intercept::{Interception, Refusal};
 pub use launch::{Browser, LaunchOptions, Page};
 pub use locate::{Executable, Flavour, Origin, Platform, locate};
 pub use plan::{Command, LoadPlan, Plan, Settle};
