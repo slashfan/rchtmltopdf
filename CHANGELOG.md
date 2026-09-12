@@ -29,6 +29,19 @@ protect a number nobody had asked for and moving the number (D30).
 
 ### Added
 
+**The defaults are proved in a real conversion, not only in the model.** A command line with
+no options at all produces A4 portrait at 595.28 by 841.89 points with ten-millimetre margins,
+screen stylesheets, backgrounds on, scripts running, and a 200ms settling delay — every one of
+them the opposite of Chromium's own (D03). The settings model asserted the same numbers and
+could not have caught a default that never reached the print call.
+
+One of those assertions needed a new instrument. `--no-background` does not stop Chromium
+emitting a block's rectangle: it emits the same rectangle in the same place and fills it
+**white**, so the conformance harness now reads fill colour as well as geometry. The first
+version of that test passed whether the option worked or not.
+
+### Added
+
 **The finished file says what it is.** `--title` sets the document's title, the producer names
 this program and its version, and the document carries a valid PDF creation date. The print
 call takes the title from the document's own `<title>` and offers no override, so the only way

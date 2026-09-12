@@ -77,6 +77,46 @@ impl Rect {
     }
 }
 
+/// A filled rectangle, and what it was filled with.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Painted {
+    pub rect: Rect,
+    /// Red, green and blue, each 0 to 1, as the content stream last set them.
+    pub fill: [f64; 3],
+}
+
+impl Painted {
+    /// Whether this was filled with something close to the given colour.
+    ///
+    /// Generous on purpose: the question these tests ask is "black or white",
+    /// and a thousandth either way is the encoder rounding rather than a
+    /// different colour.
+    pub fn is_about(self, red: f64, green: f64, blue: f64) -> bool {
+        let close = |a: f64, b: f64| (a - b).abs() < 0.01;
+        close(self.fill[0], red) && close(self.fill[1], green) && close(self.fill[2], blue)
+    }
+}
+
+/// The graphics state this walk cares about.
+///
+/// Both halves are saved and restored by `q` and `Q`. Tracking the matrix and
+/// forgetting the colour would attribute one rectangle's fill to another.
+#[derive(Debug, Clone, Copy)]
+struct State {
+    ctm: Matrix,
+    fill: [f64; 3],
+}
+
+impl Default for State {
+    /// A content stream starts in black, per the specification.
+    fn default() -> Self {
+        Self {
+            ctm: Matrix::IDENTITY,
+            fill: [0.0, 0.0, 0.0],
+        }
+    }
+}
+
 /// A PDF, opened for inspection.
 pub struct Pdf {
     document: Document,
@@ -179,34 +219,75 @@ impl Pdf {
     /// operands raw gives numbers that look plausible and are wrong, so the
     /// matrix stack is tracked and every corner is mapped through it.
     pub fn painted_boxes(&self, page: usize) -> Vec<Rect> {
+        self.painted(page)
+            .into_iter()
+            .map(|fill| fill.rect)
+            .collect()
+    }
+
+    /// Every filled rectangle, **and the colour it was filled with**.
+    ///
+    /// The colour is not decoration. `--no-background` does not stop Chromium
+    /// emitting a `<div>`'s background rectangle: it emits the same rectangle in
+    /// the same place and fills it **white**. A test that measures geometry
+    /// cannot tell the two apart, and would pass whether the option worked or
+    /// not.
+    ///
+    /// Only the device colour operators are followed — `g`, `rg` and `k`.
+    /// `sc`/`scn` depend on a colour space set elsewhere in the resources, and
+    /// nothing Chromium writes for a fixture here uses them; a rectangle filled
+    /// through one keeps the last colour seen rather than guessing.
+    pub fn painted(&self, page: usize) -> Vec<Painted> {
         let content = self
             .document
             .get_and_decode_page_content(self.page_id(page))
             .expect("page content should decode");
 
-        let mut boxes = Vec::new();
-        let mut ctm = Matrix::IDENTITY;
-        let mut saved = Vec::new();
+        let mut painted = Vec::new();
+        let mut state = State::default();
+        let mut saved: Vec<State> = Vec::new();
 
         for operation in &content.operations {
+            let operands = numbers(&operation.operands);
             match operation.operator.as_str() {
-                "q" => saved.push(ctm),
-                "Q" => ctm = saved.pop().unwrap_or(Matrix::IDENTITY),
+                // `q` and `Q` save and restore the colour with the matrix: a
+                // rectangle filled inside a saved block does not change what is
+                // filled after it.
+                "q" => saved.push(state),
+                "Q" => state = saved.pop().unwrap_or_default(),
                 "cm" => {
                     if let Some(matrix) = Matrix::from_operands(&operation.operands) {
-                        ctm = matrix.then(ctm);
+                        state.ctm = matrix.then(state.ctm);
+                    }
+                }
+                "g" => {
+                    if let [grey] = operands[..] {
+                        state.fill = [grey, grey, grey];
+                    }
+                }
+                "rg" => {
+                    if let [red, green, blue] = operands[..] {
+                        state.fill = [red, green, blue];
+                    }
+                }
+                "k" => {
+                    if let [cyan, magenta, yellow, black] = operands[..] {
+                        let channel = |ink: f64| (1.0 - ink) * (1.0 - black);
+                        state.fill = [channel(cyan), channel(magenta), channel(yellow)];
                     }
                 }
                 "re" => {
-                    let numbers = numbers(&operation.operands);
-                    if let [x, y, width, height] = numbers[..] {
-                        boxes.push(ctm.map_rect(x, y, width, height));
+                    if let [x, y, width, height] = operands[..] {
+                        painted.push(Painted {
+                            rect: state.ctm.map_rect(x, y, width, height),
+                            fill: state.fill,
+                        });
                     }
                 }
                 _ => {}
             }
         }
-        boxes
+        painted
     }
 
     /// The largest painted rectangle on a page, which is the one a fixture uses

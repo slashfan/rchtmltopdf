@@ -106,11 +106,20 @@ a missing one.
 count and a `String`. `crates/pdf` stays empty until the product needs it (#29), so its first
 public API is shaped by merging and metadata rather than by what a test wanted to measure.
 
-**Two things a PDF will not tell you.** A margin has no entry of its own — it is an offset
+**Three things a PDF will not tell you.** A margin has no entry of its own — it is an offset
 applied to content — so a fixture paints a block filling its content area and where that
-block lands *is* the margin. And `re` operands are in the current transformation matrix, not
-in page space, so `inspect` tracks the matrix stack; reading the operands raw gives numbers
-that look plausible and are wrong.
+block lands *is* the margin. `re` operands are in the current transformation matrix, not in
+page space, so `inspect` tracks the matrix stack; reading the operands raw gives numbers that
+look plausible and are wrong. And **geometry cannot see a background**: `--no-background` does
+not stop Chromium emitting a block's rectangle, it emits the same rectangle in the same place
+and fills it white, so that assertion reads `inspect::painted`'s fill colour rather than its
+box. A test that measured the box passed whether the option worked or not.
+
+**The largest painted box is usually not the fixture's.** The page paints its own background
+across the whole content area, and the band templates add one across the whole sheet, so
+`largest_painted_box` is only the right instrument for a fixture that deliberately fills its
+content area. Everything else looks for a box of a known size, or one narrower than the
+paper.
 
 **Chromium does not print the paper size it was asked for.** Every media box it writes is a
 multiple of 0.24 pt (1/300 inch), and the requested size is moved onto that grid — by up to
