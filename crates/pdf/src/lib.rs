@@ -60,25 +60,51 @@ pub struct Metadata {
 pub fn set_metadata(pdf: &[u8], metadata: &Metadata) -> Result<Vec<u8>, Error> {
     let mut document = Document::load_mem(pdf).map_err(fail)?;
 
-    let mut info = lopdf::Dictionary::new();
+    // The dictionary that is already there, edited in place. Adding a second one
+    // and pointing the trailer at it leaves the first in the file: readers
+    // follow the trailer and see the right thing, but the bytes still carry
+    // Chromium's producer, and **the document's own title goes with it**. The
+    // print call derives that title from the `<title>` element and it is the
+    // only one most documents will ever have.
+    let id = existing_info(&mut document);
+    let info = document
+        .get_object_mut(id)
+        .and_then(lopdf::Object::as_dict_mut)
+        .map_err(fail)?;
+
+    // Only when asked. An absent `--title` means "leave the document's own
+    // alone", not "clear it".
     if let Some(title) = &metadata.title {
         info.set("Title", text_string(title));
     }
+    // These four are ours whatever was there before: Chromium produced the pages
+    // and this produced the file, and a dictionary naming two programs is worse
+    // than either.
     info.set("Producer", text_string(&metadata.producer));
     info.set("Creator", text_string(&metadata.creator));
     let date = pdf_date(&metadata.created);
     info.set("CreationDate", text_string(&date));
     info.set("ModDate", text_string(&date));
 
-    // Replace whatever Chromium wrote rather than merging into it: its producer
-    // is not the producer any more, and a half-updated dictionary naming two
-    // programs is worse than either.
-    let id = document.add_object(Object::Dictionary(info));
-    document.trailer.set("Info", Object::Reference(id));
-
     let mut out = Vec::with_capacity(pdf.len());
     document.save_to(&mut out).map_err(fail)?;
     Ok(out)
+}
+
+/// The document's Info dictionary, created empty if it has none.
+fn existing_info(document: &mut Document) -> lopdf::ObjectId {
+    if let Ok(Object::Reference(id)) = document.trailer.get(b"Info") {
+        let id = *id;
+        // A dangling reference is not a dictionary to edit. Rare, and cheaper to
+        // check than to debug.
+        if document.get_dictionary(id).is_ok() {
+            return id;
+        }
+    }
+
+    let id = document.add_object(Object::Dictionary(lopdf::Dictionary::new()));
+    document.trailer.set("Info", Object::Reference(id));
+    id
 }
 
 fn fail(error: impl fmt::Display) -> Error {
@@ -126,6 +152,7 @@ fn pdf_date(clock: &Clock) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lopdf::dictionary;
 
     fn clock() -> Clock {
         Clock {
@@ -142,8 +169,6 @@ mod tests {
     /// A two page document built by hand, so the read-modify-write path can be
     /// exercised without a browser anywhere near it.
     fn two_pages() -> Vec<u8> {
-        use lopdf::dictionary;
-
         let mut document = Document::with_version("1.7");
         let pages_id = document.new_object_id();
         let page_ids: Vec<Object> = (0..2)
@@ -252,11 +277,73 @@ mod tests {
         );
     }
 
-    /// Left alone rather than emptied: the print call has already taken the
-    /// document's own `<title>`.
+    /// Left alone rather than emptied. The print call has already taken the
+    /// document's own `<title>`, and for most documents that is the only title
+    /// there will ever be.
     #[test]
-    fn no_title_writes_no_title() {
-        let out = set_metadata(&two_pages(), &Metadata::default()).expect("should rewrite");
+    fn no_title_leaves_the_one_that_was_there() {
+        let mut document = Document::load_mem(&two_pages()).expect("should parse");
+        let id = document.add_object(Object::Dictionary(dictionary! {
+            "Title" => Object::string_literal("From the document"),
+            "Producer" => Object::string_literal("Skia/PDF m153"),
+        }));
+        document.trailer.set("Info", Object::Reference(id));
+        let mut titled = Vec::new();
+        document.save_to(&mut titled).expect("should save");
+
+        let out = set_metadata(
+            &titled,
+            &Metadata {
+                producer: "rchtmltopdf 0.0.1".into(),
+                ..Metadata::default()
+            },
+        )
+        .expect("should rewrite");
+
+        assert_eq!(info(&out, "Title").as_deref(), Some("From the document"));
+        // And the producer is ours, because that one we do own.
+        assert_eq!(info(&out, "Producer").as_deref(), Some("rchtmltopdf 0.0.1"));
+    }
+
+    /// The old dictionary is edited rather than orphaned, so nothing in the file
+    /// still claims the browser made it.
+    #[test]
+    fn the_previous_producer_does_not_survive_in_the_bytes() {
+        let mut document = Document::load_mem(&two_pages()).expect("should parse");
+        let id = document.add_object(Object::Dictionary(dictionary! {
+            "Producer" => Object::string_literal("Skia/PDF m153"),
+        }));
+        document.trailer.set("Info", Object::Reference(id));
+        let mut before = Vec::new();
+        document.save_to(&mut before).expect("should save");
+
+        let out = set_metadata(
+            &before,
+            &Metadata {
+                producer: "rchtmltopdf 0.0.1".into(),
+                ..Metadata::default()
+            },
+        )
+        .expect("should rewrite");
+
+        assert!(
+            !String::from_utf8_lossy(&out).contains("Skia/PDF"),
+            "the old dictionary was left in the file"
+        );
+    }
+
+    /// A document with no Info dictionary at all still gets one.
+    #[test]
+    fn a_document_without_metadata_gains_some() {
+        let out = set_metadata(
+            &two_pages(),
+            &Metadata {
+                producer: "rchtmltopdf 0.0.1".into(),
+                ..Metadata::default()
+            },
+        )
+        .expect("should rewrite");
+        assert_eq!(info(&out, "Producer").as_deref(), Some("rchtmltopdf 0.0.1"));
         assert_eq!(info(&out, "Title"), None);
     }
 

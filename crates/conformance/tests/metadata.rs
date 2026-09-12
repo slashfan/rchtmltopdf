@@ -42,6 +42,42 @@ fn title_sets_the_documents_title() {
     assert_eq!(pdf.info("Title").as_deref(), Some("Invoice 42"));
 }
 
+/// **Without `--title`, the document keeps its own.** The print call derives it
+/// from the `<title>` element, and for most documents that is the only title
+/// there will ever be — throwing it away to write a producer would be a worse
+/// trade than not writing one.
+///
+/// Every fixture here carries `<title>conformance</title>`.
+#[test]
+fn a_document_without_the_option_keeps_the_title_it_had() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("metadata-own-title");
+
+    let pdf = convert(&scratch, &[]);
+    assert_eq!(pdf.info("Title").as_deref(), Some("conformance"));
+}
+
+/// The old dictionary is edited rather than orphaned, so nothing left in the
+/// file still claims the browser made it. A reader follows the trailer and would
+/// never notice; anybody looking at the bytes would.
+#[test]
+fn nothing_in_the_file_still_names_the_browser_as_the_producer() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("metadata-no-orphan");
+    let page = fixture::write(scratch.path(), "p.html", THREE_PAGES);
+
+    let outcome = Run::new().arg(page.display().to_string()).arg("-").output();
+    outcome.succeeded();
+    assert!(
+        !String::from_utf8_lossy(&outcome.stdout).contains("Skia/PDF"),
+        "Chromium's own Info dictionary was left in the file"
+    );
+}
+
 /// Written as UTF-16 with a byte order mark, because a PDF string without one is
 /// Latin-1 and `Facture n°42` is not. Invoices in French are the ordinary case.
 #[test]
