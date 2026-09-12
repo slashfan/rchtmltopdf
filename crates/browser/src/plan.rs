@@ -24,10 +24,13 @@
 //! plan stops describing the conversion and the guard above it becomes a second
 //! opinion rather than a check.
 //!
-//! The one thing a plan cannot finish deciding is the local file policy, because
+//! Two things a plan cannot finish deciding. The local file policy, because
 //! what it permits depends on the document it is bound to and the document is
-//! resolved after the settings are read. The policy itself is here; binding it
-//! is [`crate::file_access::Policy::about`].
+//! resolved after the settings are read: the policy itself is here, binding it
+//! is [`crate::file_access::Policy::about`]. And the height of a band that is
+//! a document, which sizes a margin (D39) and is not known until the document
+//! is loaded: [`print`] decides everything else about the margins, and
+//! [`reserve`] adds the measurement and nothing more.
 //!
 //! [`Page::prepare`]: crate::launch::Page::prepare
 //! [`Page::print_to_pdf`]: crate::launch::Page::print_to_pdf
@@ -215,13 +218,21 @@ impl Bands {
     }
 
     /// Whether a band names a heading, and so needs the outline generated even
-    /// when nobody asked to keep it.
+    /// when nobody asked to keep it. A band that is a document is handed every
+    /// placeholder, the sections included, so it always does.
     pub fn names_a_section(&self) -> bool {
         [&self.header, &self.footer].iter().any(|band| {
-            [&band.left, &band.center, &band.right]
-                .iter()
-                .any(|cell| cell.as_deref().is_some_and(placeholder::names_a_section))
+            band.html.is_some()
+                || [&band.left, &band.center, &band.right]
+                    .iter()
+                    .any(|cell| cell.as_deref().is_some_and(placeholder::names_a_section))
         })
+    }
+
+    /// Whether either band is a document, which has to be measured before
+    /// the pages are printed (D39).
+    pub fn any_document(&self) -> bool {
+        self.header.html.is_some() || self.footer.html.is_some()
     }
 }
 
@@ -463,13 +474,24 @@ pub fn print(page: &PageSetup, object: &ObjectSettings, outline: &OutlineSetting
         false => Length::mm(band.spacing.unwrap_or(0.0)).to_inches(),
     };
 
+    // A band that is a document follows wkhtmltopdf's other rule (D39): its
+    // own height is the margin unless the margin was written. The height is
+    // not known here -- the document has to be loaded to measure it -- so
+    // what is decided is the rest, and `reserve` adds the measurement.
+    let margin = |band: &Band, named: bool, written: Length| match band.html.is_some() && !named {
+        true => 0.0,
+        false => written.to_inches(),
+    };
+
     Command::new(
         "Page.printToPDF",
         json!({
             "paperWidth": page.width_inches(),
             "paperHeight": page.height_inches(),
-            "marginTop": page.margins.top.to_inches() + gap(&object.header),
-            "marginBottom": page.margins.bottom.to_inches() + gap(&object.footer),
+            "marginTop": margin(&object.header, page.named.top, page.margins.top)
+                + gap(&object.header),
+            "marginBottom": margin(&object.footer, page.named.bottom, page.margins.bottom)
+                + gap(&object.footer),
             "marginLeft": page.margins.left.to_inches(),
             "marginRight": page.margins.right.to_inches(),
             "printBackground": web.background,
@@ -496,24 +518,125 @@ pub fn print(page: &PageSetup, object: &ObjectSettings, outline: &OutlineSetting
     )
 }
 
-/// What to put in place before the document of band sheets is opened.
+/// Whether a band's document decides the margin on its side.
 ///
-/// Only the two domains the wait needs. The sheets are ours: no cookies, no
-/// headers, no media to emulate — the document has no queries — and the
-/// window is irrelevant to absolutely positioned boxes.
-pub fn band_prepare() -> Vec<Command> {
+/// wkhtmltopdf's rule: an HTML band replaces a margin that was defaulted and
+/// is fitted into one that was written. Only the first kind is added to the
+/// print margin by [`reserve`]; both kinds are measured, because the sheet
+/// needs the frame's height either way.
+pub fn sized_by_its_document(band: &Band, named: bool) -> bool {
+    band.html.is_some() && !named
+}
+
+/// The print call with the measured band documents added to the margins.
+///
+/// The one thing [`print`] cannot decide on its own: how tall a document is.
+/// Everything else about the margins is already in the command, and this adds
+/// the two measurements and nothing more, so the plan still describes the
+/// conversion (D27). An amount is only added for a band whose document sizes
+/// its margin; pass zero for the rest.
+pub fn reserve(print: &Command, header_inches: f64, footer_inches: f64) -> Command {
+    let mut params = print.params.clone();
+    for (key, add) in [
+        ("marginTop", header_inches),
+        ("marginBottom", footer_inches),
+    ] {
+        let current = params.get(key).and_then(Value::as_f64).unwrap_or(0.0);
+        params[key] = json!(current + add);
+    }
+    Command::new(print.method, params)
+}
+
+/// What to put in place before a band document is opened to be measured.
+///
+/// Laid out at the content width, in CSS pixels, which is the width the
+/// frame on the sheet will give it, with the stylesheets the pages get. The
+/// height is the paper's: tall enough that nothing scrolls, so the body is
+/// measured as it will be framed.
+pub fn measure_prepare(page: &PageSetup, web: &WebSettings) -> Vec<Command> {
     vec![
         Command::new("Page.enable", Value::Null),
         Command::new("Network.enable", Value::Null),
+        emulate_media(web),
+        Command::new(
+            "Emulation.setDeviceMetricsOverride",
+            json!({
+                "width": (page.content_width_inches() * CSS_PIXELS_PER_INCH).round() as u64,
+                "height": (page.height_inches() * CSS_PIXELS_PER_INCH).round() as u64,
+                "deviceScaleFactor": 1,
+                "mobile": false,
+            }),
+        ),
     ]
 }
 
-/// How to wait for the document of band sheets: the load event and the
-/// fonts, and nothing more. There is no script to give time to.
-pub fn band_load() -> LoadSettings {
+/// Chromium lays a printed page out at this many CSS pixels to the inch, so a
+/// document measured at this density measures as it will print.
+pub const CSS_PIXELS_PER_INCH: f64 = 96.0;
+
+/// What to put in place before the document of band sheets is opened.
+///
+/// Only the two domains the wait needs. The sheets are ours: no cookies, no
+/// headers, and the window is irrelevant to absolutely positioned boxes. When
+/// a sheet frames a band document, the stylesheets that document gets are the
+/// ones the pages got — `web` is the settings of the object it was written on.
+pub fn band_prepare(web: Option<&WebSettings>) -> Vec<Command> {
+    let mut commands = vec![
+        Command::new("Page.enable", Value::Null),
+        Command::new("Network.enable", Value::Null),
+    ];
+    commands.extend(web.map(emulate_media));
+    commands
+}
+
+/// How to wait for the document of band sheets: the load event, the network
+/// and the fonts, then `delay`.
+///
+/// Zero for sheets of text, which have no script to give time to. A band
+/// document is loaded with its object's `--javascript-delay`, as wkhtmltopdf
+/// loaded it; with several objects the longest is used, because the sheets
+/// are one document.
+pub fn band_load(delay: Duration) -> LoadSettings {
     LoadSettings {
-        javascript_delay: Duration::ZERO,
+        javascript_delay: delay,
         ..LoadSettings::default()
+    }
+}
+
+/// The local file rule for the sheets and the band documents they frame.
+///
+/// One page carries every object's bands, so it gets the union of their
+/// policies: on if any object turned it on, and every directory any of them
+/// allowed. The documents named on the command line are readable regardless
+/// (`also`), as the input is.
+pub fn band_policy<'a>(objects: impl IntoIterator<Item = &'a ObjectSettings>) -> Policy {
+    let mut policy = Policy::default();
+    for object in objects {
+        policy.enabled |= object.web.local_file_access;
+        policy
+            .allowed
+            .extend(object.web.allowed_paths.iter().cloned());
+    }
+    policy
+}
+
+/// What the interception handler does on a page that loads band documents:
+/// the file rule and nothing else. No charset, no document headers, no
+/// credentials — those are the input's options, and `document` here is the
+/// sheet or the document being measured.
+pub fn band_rules<'a>(
+    policy: &Policy,
+    document: &str,
+    also: impl IntoIterator<Item = &'a str>,
+) -> Rules {
+    let mut files = policy.about(document);
+    for url in also {
+        files = files.also(url);
+    }
+    Rules {
+        files,
+        document: document.to_string(),
+        ..Rules::default()
     }
 }
 
@@ -656,6 +779,99 @@ mod tests {
                 json!({ "value": true })
             )
         );
+    }
+
+    fn with_header_document() -> ObjectSettings {
+        let mut object = page_object();
+        object.header.html = Some("header.html".into());
+        object.header.spacing = Some(5.0);
+        object
+    }
+
+    fn margin_top(command: &Command) -> f64 {
+        command.params["marginTop"].as_f64().unwrap() * 25.4
+    }
+
+    /// wkhtmltopdf's rule for a band that is a document (D39): with no
+    /// `--margin-top`, the document's height is the margin. That height is
+    /// not known until the document is loaded, so the print call carries the
+    /// spacing alone and `reserve` adds the measurement.
+    #[test]
+    fn a_band_document_replaces_a_margin_that_was_not_written() {
+        let command = print(
+            &PageSetup::default(),
+            &with_header_document(),
+            &OutlineSettings::default(),
+        );
+        assert!((margin_top(&command) - 5.0).abs() < 1e-9, "{command:?}");
+        // Untouched on the side that has no document.
+        let bottom = command.params["marginBottom"].as_f64().unwrap() * 25.4;
+        assert!((bottom - 10.0).abs() < 1e-9, "{command:?}");
+
+        let reserved = reserve(&command, 20.0 / 25.4, 0.0);
+        assert!((margin_top(&reserved) - 25.0).abs() < 1e-9, "{reserved:?}");
+        assert_eq!(reserved.method, "Page.printToPDF");
+        // Only the two margins move.
+        assert_eq!(reserved.params["paperWidth"], command.params["paperWidth"]);
+    }
+
+    /// `--margin-top 15mm` written: the document is fitted into it, and the
+    /// content is pushed in by the spacing alone, as with a text band.
+    #[test]
+    fn a_band_document_is_fitted_into_a_margin_that_was_written() {
+        let named = PageSetup {
+            margins: rchtmltopdf_core::settings::Margins {
+                top: Length::mm(15.0),
+                ..Default::default()
+            },
+            named: rchtmltopdf_core::settings::NamedMargins {
+                top: true,
+                bottom: false,
+            },
+            ..PageSetup::default()
+        };
+        let command = print(&named, &with_header_document(), &OutlineSettings::default());
+        assert!((margin_top(&command) - 20.0).abs() < 1e-9, "{command:?}");
+        assert!(!sized_by_its_document(&with_header_document().header, true));
+        assert!(sized_by_its_document(&with_header_document().header, false));
+    }
+
+    /// A band document is handed every placeholder, so it needs the outline
+    /// the sections are read from, whatever its text says.
+    #[test]
+    fn a_band_document_asks_for_the_outline() {
+        let none = OutlineSettings {
+            enabled: false,
+            ..OutlineSettings::default()
+        };
+        assert!(!outline_wanted(&none, &page_object()));
+        assert!(outline_wanted(&none, &with_header_document()));
+    }
+
+    /// The document is laid out at the width the frame will give it.
+    #[test]
+    fn a_band_document_is_measured_at_the_content_width() {
+        let commands = measure_prepare(&PageSetup::default(), &WebSettings::default());
+        let metrics = commands
+            .iter()
+            .find(|command| command.method == "Emulation.setDeviceMetricsOverride")
+            .expect("a viewport");
+        // A4 less two 10mm margins is 190mm, which is 718 CSS pixels.
+        assert_eq!(metrics.params["width"], json!(718));
+        assert!(methods(&commands).contains(&"Emulation.setEmulatedMedia"));
+    }
+
+    /// One page carries every object's bands, so the rule is the union.
+    #[test]
+    fn the_sheets_get_the_union_of_the_objects_file_rules() {
+        let mut opened = page_object();
+        opened.web.local_file_access = true;
+        let mut allowed = page_object();
+        allowed.web.allowed_paths.push(PathBuf::from("/srv/assets"));
+        let policy = band_policy([&opened, &allowed]);
+        assert!(policy.enabled);
+        assert_eq!(policy.allowed, vec![PathBuf::from("/srv/assets")]);
+        assert!(!band_policy([&page_object()]).enabled);
     }
 
     /// The swap belongs in the paper dimensions, once. Asking the protocol for

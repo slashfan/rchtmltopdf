@@ -171,9 +171,17 @@ pub fn apply_global(
         }
         "page-width" => page.width = Some(length(occurrence)?),
         "page-height" => page.height = Some(length(occurrence)?),
-        "margin-top" => global.page.margins.top = length(occurrence)?,
+        // Written, and remembered as written: an HTML band replaces a margin
+        // that was defaulted and fits into one that was named.
+        "margin-top" => {
+            global.page.margins.top = length(occurrence)?;
+            global.page.named.top = true;
+        }
         "margin-right" => global.page.margins.right = length(occurrence)?,
-        "margin-bottom" => global.page.margins.bottom = length(occurrence)?,
+        "margin-bottom" => {
+            global.page.margins.bottom = length(occurrence)?;
+            global.page.named.bottom = true;
+        }
         "margin-left" => global.page.margins.left = length(occurrence)?,
         "orientation" => {
             let name = value(occurrence);
@@ -293,6 +301,7 @@ pub fn apply_object(
         "header-spacing" => object.header.spacing = Some(number(occurrence)?),
         "header-line" => object.header.line = true,
         "no-header-line" => object.header.line = false,
+        "header-html" => object.header.html = Some(value(occurrence).to_string()),
         "footer-left" => object.footer.left = Some(value(occurrence).to_string()),
         "footer-center" => object.footer.center = Some(value(occurrence).to_string()),
         "footer-right" => object.footer.right = Some(value(occurrence).to_string()),
@@ -301,6 +310,7 @@ pub fn apply_object(
         "footer-spacing" => object.footer.spacing = Some(number(occurrence)?),
         "footer-line" => object.footer.line = true,
         "no-footer-line" => object.footer.line = false,
+        "footer-html" => object.footer.html = Some(value(occurrence).to_string()),
         "replace" => object.replacements.push(pair(occurrence)),
         "default-header" => object.header = default_header(),
 

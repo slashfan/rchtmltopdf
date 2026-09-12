@@ -41,6 +41,14 @@ margin down from the paper edge, where Chromium's template put it about a point 
 
 ### Added
 
+**`--header-html` and `--footer-html`** (#38, D39). The document is framed on every page
+with the placeholders passed as a query string, the way wkhtmltopdf passed them, so the
+`subst()` script from its manual works unchanged, and `[page]` counts across documents.
+The geometry follows wkhtmltopdf's rule for these bands: with no `--margin-top` written, the
+document's height becomes the margin, plus `--header-spacing`; with one written, the document
+is fitted into it. The document reads the disk under the same rule as the input.
+`--run-script`, `--user-style-sheet`, custom headers and credentials do not reach it.
+
 **Page numbers across documents** (#39). `[page]` and `[topage]` count across the whole
 output, `[sitepage]` and `[sitepages]` within the document the page came from, and
 `[frompage]` is where that document began. A cover counts in neither frame: the page after

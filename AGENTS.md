@@ -55,7 +55,9 @@ option on its own command line and requires the plan to change — and requires 
 option never to change it (D27). **So nothing above `plan` may decide anything on its own**:
 `Page::prepare` sends what `plan::prepare` decided, `print_to_pdf` what `plan::print`
 decided, `load` consults `LoadPlan`. Read a settings field directly in one of them and the
-plan stops describing the conversion, with no test to notice.
+plan stops describing the conversion, with no test to notice. The one number the plan cannot
+know is the height of a band that is a document (D39): `plan::reserve` adds that measurement
+to the print call and nothing else.
 
 Promoting an option to `Implemented` therefore means making the plan change, not editing the
 table. A `Planned` option that fills the settings model and is ignored by the conversion is

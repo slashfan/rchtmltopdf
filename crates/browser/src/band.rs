@@ -52,6 +52,28 @@
 //!
 //! `[page]`, `[date]` and the rest are expanded by [`crate::placeholder`], which
 //! also does the escaping: a band's text is somebody's document title.
+//!
+//! # A band that is a document
+//!
+//! `--header-html` names a document rather than three cells, and the sheet
+//! carries it in a frame: the document is loaded once per page, with the
+//! placeholders appended as a query string the way wkhtmltopdf passed them,
+//! so its own script can read `document.location.search` (D39). Where the
+//! frame lands follows wkhtmltopdf's rule for it, which is not the text
+//! band's:
+//!
+//! - **The margin was not written.** The document's height *is* the margin:
+//!   the frame starts at the paper edge, and the content starts its measured
+//!   height plus `--header-spacing` further in. `plan::print` reserves that,
+//!   from a measurement taken before the pages are printed.
+//! - **The margin was written.** The document is fitted into the margin asked
+//!   for, its edge nearest the content on the margin line, and the content is
+//!   pushed in by the spacing alone. A document taller than the margin runs
+//!   off the paper, which is wkhtmltopdf's arrangement too.
+//!
+//! The frame is as tall as the document's body reaches, so nothing a band
+//! draws is clipped at its own edge; what is reserved is the body's height,
+//! which is what wkhtmltopdf measured.
 
 use crate::placeholder::{self, Context, Numbers};
 use rchtmltopdf_core::settings::{Band, PageSetup};
@@ -140,6 +162,56 @@ pub fn row(
     )
 }
 
+/// What a band document measures, from a page that loaded it at the
+/// content width.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Measured {
+    /// The body's height, in millimetres: what wkhtmltopdf reserved for it.
+    pub height_mm: f64,
+    /// How far down the body reaches, in millimetres: the frame's height, so
+    /// a body with a margin above it is not cut off below.
+    pub extent_mm: f64,
+}
+
+/// One band that is a document, framed for one page.
+///
+/// `url` already carries the page's query string. The frame spans the content
+/// width, inset by the side margins like a text band, and sits where
+/// wkhtmltopdf drew it: from the paper edge when the margin was not written,
+/// fitted into the margin when it was (see the module documentation).
+pub fn frame(url: &str, edge: Edge, paper: &PageSetup, measured: &Measured) -> String {
+    let (left, right) = (paper.margins.left.to_mm(), paper.margins.right.to_mm());
+    let width = (paper.effective_size().width.to_mm() - left - right).max(0.0);
+
+    let (named, margin) = match edge {
+        Edge::Header => (paper.named.top, paper.margins.top.to_mm()),
+        Edge::Footer => (paper.named.bottom, paper.margins.bottom.to_mm()),
+    };
+    // The box the band gets: the margin if one was asked for, its own height
+    // if not.
+    let box_mm = if named { margin } else { measured.height_mm };
+
+    // The box is anchored to the paper edge whatever the container does with
+    // its free space, and the frame within the box is aligned to the content
+    // side: a header's bottom on the margin line, a footer's top on it. For a
+    // header that is an offset from the box's top, negative when the document
+    // is taller than the margin it was fitted into.
+    let (anchor, offset) = match edge {
+        Edge::Header => ("margin-bottom:auto;", box_mm - measured.height_mm),
+        Edge::Footer => ("margin-top:auto;", 0.0),
+    };
+
+    format!(
+        "<div style=\"box-sizing:border-box;width:100%;height:{box_mm}mm;\
+         padding-left:{left}mm;padding-right:{right}mm;{anchor}\">\
+         <iframe src=\"{}\" style=\"display:block;border:0;margin:{offset}mm 0 0 0;\
+         padding:0;width:{width}mm;height:{}mm\"></iframe>\
+         </div>",
+        placeholder::escape(url),
+        measured.extent_mm,
+    )
+}
+
 /// The document of sheets, one per page, ready to print with no margins.
 pub fn document(paper: &PageSetup, sheets: &[Sheet]) -> String {
     let size = paper.effective_size();
@@ -180,7 +252,7 @@ pub fn document(paper: &PageSetup, sheets: &[Sheet]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rchtmltopdf_core::settings::Margins;
+    use rchtmltopdf_core::settings::{Margins, NamedMargins};
     use rchtmltopdf_core::units::Length;
 
     /// A row's markup, expanded against an empty context: these tests are about
@@ -315,6 +387,78 @@ mod tests {
     fn the_three_cells_divide_the_width_evenly() {
         let html = markup(&band("x"), Edge::Header, 10.0, 10.0);
         assert_eq!(html.matches("flex:1 1 0").count(), 3, "{html}");
+    }
+
+    // --- a band that is a document ------------------------------------------------
+
+    fn measured() -> Measured {
+        Measured {
+            height_mm: 20.0,
+            extent_mm: 22.0,
+        }
+    }
+
+    /// The URL is somebody's path, and it lands in an attribute.
+    #[test]
+    fn the_frame_names_the_document_escaped() {
+        let html = frame(
+            "file:///h.html?title=a%20%26%20b",
+            Edge::Header,
+            &paper(),
+            &measured(),
+        );
+        assert!(
+            html.contains("<iframe src=\"file:///h.html?title=a%20%26%20b\""),
+            "{html}"
+        );
+        let nasty = frame("x\" onload=\"y", Edge::Header, &paper(), &measured());
+        assert!(!nasty.contains("onload=\""), "{nasty}");
+    }
+
+    /// Like a text band, the frame spans the content and not the paper.
+    #[test]
+    fn the_frame_is_inset_to_the_content_width() {
+        let html = frame("file:///h.html", Edge::Footer, &paper(), &measured());
+        assert!(
+            html.contains("padding-left:10mm;padding-right:10mm"),
+            "{html}"
+        );
+        assert!(html.contains("width:190mm"), "{html}");
+    }
+
+    /// Nothing written: the document's own height is the box, the frame
+    /// starts at the paper edge, and is as tall as the body reaches.
+    #[test]
+    fn an_unnamed_margin_is_replaced_by_the_documents_height() {
+        let html = frame("file:///h.html", Edge::Header, &paper(), &measured());
+        assert!(html.contains("height:20mm;"), "{html}");
+        assert!(html.contains("margin:0mm 0 0 0"), "{html}");
+        assert!(html.contains("height:22mm\""), "{html}");
+        assert!(html.contains("margin-bottom:auto"), "{html}");
+    }
+
+    /// `--margin-top 15mm` written: the box is the margin, and the document's
+    /// bottom sits on the margin line, so a 20mm document starts 5mm above
+    /// the paper.
+    #[test]
+    fn a_named_margin_fits_the_document_against_the_content() {
+        let named = PageSetup {
+            named: NamedMargins {
+                top: true,
+                bottom: true,
+            },
+            ..paper()
+        };
+        let header = frame("file:///h.html", Edge::Header, &named, &measured());
+        assert!(header.contains("height:15mm;"), "{header}");
+        assert!(header.contains("margin:-5mm 0 0 0"), "{header}");
+
+        // A footer's top is on the margin line either way, so it needs no
+        // offset: the box, 20mm, is anchored to the paper's bottom.
+        let footer = frame("file:///h.html", Edge::Footer, &named, &measured());
+        assert!(footer.contains("height:20mm;"), "{footer}");
+        assert!(footer.contains("margin:0mm 0 0 0"), "{footer}");
+        assert!(footer.contains("margin-top:auto"), "{footer}");
     }
 
     // --- the document of sheets --------------------------------------------------
