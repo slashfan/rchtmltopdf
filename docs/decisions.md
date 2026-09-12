@@ -308,6 +308,22 @@ Le nombre d'approbations requises est **0**. Un mainteneur seul ne peut pas appr
 
 ---
 
+## D33 — L'image Docker ne désactive pas le bac à sable
+
+**Choix.** L'image ne met pas `--no-sandbox` dans son point d'entrée. Un `docker run` nu échoue, avec le message qui nomme la cause et les trois façons d'y remédier. Le README documente la commande recommandée — `--cap-add=SYS_ADMIN`, qui laisse au navigateur son bac à sable — et présente `--no-sandbox` comme le renoncement explicite, pour du HTML que l'on a soi-même produit.
+
+**Pourquoi.** Le modèle de menace est du HTML non fiable (D10), et l'image est l'artefact que la plupart des déploiements utiliseront : y désactiver le bac à sable par défaut serait exactement la posture que ce projet existe pour améliorer. Le coût est une première exécution qui échoue, et il est supportable parce que **l'échec s'explique** : le message dit ce qui s'est passé, pourquoi c'est habituel dans un conteneur, et quoi faire — l'inverse d'un plantage muet.
+
+L'asymétrie compte aussi. Ne pas l'intégrer laisse les deux options ouvertes à l'opérateur ; l'intégrer oblige qui veut le bac à sable à écraser le point d'entrée pour le récupérer.
+
+**Mesuré.** Dans un démon Docker par défaut, trois commandes fonctionnent et chacune concède quelque chose : `--cap-add=SYS_ADMIN` (bac à sable conservé, capacité large accordée), `--security-opt seccomp=unconfined` (bac à sable conservé, seccomp désactivé), `--no-sandbox` (seccomp et capacités de Docker intacts, bac à sable du navigateur désactivé). Aucune n'est gratuite, ce qui est précisément pourquoi le choix revient à l'opérateur et pas à l'image.
+
+**Vérifié en CI.** Que la commande recommandée convertit, et que la commande nue **refuse** — la deuxième moitié compte autant : sans elle, un changement de configuration du démon ou du point d'entrée pourrait rendre l'image silencieusement permissive sans que rien ne le remarque.
+
+**Écarté.** Intégrer `--no-sandbox` avec un avertissement en gras dans la documentation. Un point d'entrée qui teste si le bac à sable fonctionne et l'abandonne sinon : l'opérateur n'apprendrait jamais dans quel mode il tourne, et c'est ce que D10 existe pour empêcher. Embarquer le profil seccomp de Chromium, à revoir si les projets de référence (#32) montrent que `SYS_ADMIN` pose problème.
+
+---
+
 ## Conséquences transverses
 
 - **Le brief doit gagner une section « smart shrinking »** dans les contraintes, et un guide de migration (options à retirer, différences de taille attendues).

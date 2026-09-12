@@ -1,0 +1,16 @@
+# Everything the build does not need, which is most of it. `target/` alone is
+# gigabytes and would be sent to the daemon on every build.
+target/
+.git/
+.github/
+dist/
+check/
+
+# Documentation and tooling. The image copies the licences it ships from the
+# build context, so those stay.
+docs/
+*.md
+!README.md
+!CHANGELOG.md
+.claude/
+deny.toml

@@ -142,7 +142,7 @@ Read these before changing behaviour they describe. Both are in French; the code
 and everything on GitHub are in English.
 
 - `docs/brief.md` — scope, V0 through V3, and what compatibility does and does not mean
-- `docs/decisions.md` — D01 to D32, binding, with the alternatives that were rejected
+- `docs/decisions.md` — D01 to D33, binding, with the alternatives that were rejected
 - `docs/migration.md` — why a migrated document changes size, for anything touching layout
 - `CONTRIBUTING.md` — the branch, pull request and Conventional Commit workflow
 
