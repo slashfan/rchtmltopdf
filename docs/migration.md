@@ -53,6 +53,25 @@ Le viewport par défaut est celui de wkhtmltopdf, **1024 × 768**, appliqué à 
 conversion : celui de Chromium n'est pas le même, et une maquette migrée a été écrite
 contre le premier (D03).
 
+## En-têtes et pieds de page : la marge doit les contenir
+
+Un bandeau est ancré au **bord du papier** et grandit vers le contenu ; sa hauteur est celle
+de son contenu, et `--margin-top` ne décide pas où il commence. Trois conséquences, toutes
+mesurées :
+
+* **Ajouter un bandeau ne déplace jamais le contenu.** Le document imprimé avec un en-tête
+  occupe exactement la même zone que sans. Ajouter `--header-center` à une ligne de commande
+  migrée ne peut pas la repaginer en silence.
+* **C'est à la marge de faire la place.** Un bandeau de 12 pt mesure environ 28,5 pt de haut
+  et une marge de 10 mm en fait 28,3 : le défaut tient tout juste. À `--header-font-size 40`,
+  le bandeau mord sur le contenu, et la réponse est un `--margin-top` plus grand.
+* **`--header-spacing` agit sur la marge, pas sur le bandeau.** C'est la seule chose qui
+  puisse ouvrir un espace entre les deux : `--header-spacing 5` descend le contenu de 5 mm et
+  laisse le bandeau où il est.
+
+Les placeholders (`[page]`, `[date]`, …) ne sont pas encore substitués : le texte est utilisé
+tel quel, et l'option est signalée comme telle.
+
 ## `--encoding` et les documents distants
 
 `--encoding` dit dans quel jeu de caractères lire un document qui ne le déclare pas. Il
