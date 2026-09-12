@@ -288,6 +288,28 @@ fn default_header_fills_the_band_without_moving_the_content() {
     approx(settings.global.page.margins.top.to_mm(), 10.0);
 }
 
+/// "The page does not appear in the table of contents, and does not have
+/// headers and footers." The bands given as defaults reach every page and not
+/// the cover; a band written after `cover` is the cover's own and stays.
+#[test]
+fn a_cover_does_not_inherit_the_bands_but_takes_its_own() {
+    let inherited =
+        settings("--footer-center Everywhere --header-line --zoom 2 cover c.html a.html out.pdf");
+    let (cover, page) = (&inherited.objects[0], &inherited.objects[1]);
+    assert_eq!(cover.kind, ObjectKind::Cover);
+    assert!(cover.header.is_empty(), "{:?}", cover.header);
+    assert!(cover.footer.is_empty(), "{:?}", cover.footer);
+    // Only the bands: everything else a page inherits, a cover inherits too.
+    approx(cover.web.zoom, 2.0);
+    assert_eq!(page.footer.center.as_deref(), Some("Everywhere"));
+    assert!(page.header.line);
+
+    let own = settings("--footer-center Everywhere cover c.html --footer-left Mine a.html out.pdf");
+    let cover = &own.objects[0];
+    assert_eq!(cover.footer.left.as_deref(), Some("Mine"));
+    assert_eq!(cover.footer.center, None);
+}
+
 #[test]
 fn objects_keep_their_kind_and_a_toc_has_no_input() {
     let settings = settings("cover c.html toc page b.html out.pdf");
