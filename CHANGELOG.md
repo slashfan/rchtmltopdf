@@ -21,6 +21,12 @@ Several documents, covers and a table of contents are not built. Neither is most
 option surface beyond what V0 needed: the outline and everything a table of contents needs
 are understood on the command line and not yet acted on.
 
+### Changed
+
+**The minimum supported Rust version is 1.88**, up from 1.85. `lopdf` requires it and D12
+chose lopdf for the PDF layer, so the choice was between carrying an old PDF library to
+protect a number nobody had asked for and moving the number (D30).
+
 ### Added
 
 **The finished file says what it is.** `--title` sets the document's title, the producer names

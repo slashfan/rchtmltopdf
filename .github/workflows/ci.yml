@@ -110,18 +110,19 @@ jobs:
         with: { persist-credentials: false }
       # Must match `rust-version` in the workspace Cargo.toml.
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-        with: { toolchain: "1.85.0" }
+        with: { toolchain: "1.88.0" }
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # `check`, not `test`: dev-dependencies routinely need a newer compiler
       # than the library itself, and pinning the test tooling to the MSRV is not
-      # the promise being made.
+      # the promise being made. Conformance is excluded for the same reason —
+      # nobody compiles the harness.
       #
-      # Conformance is excluded for that same reason, and it is not hypothetical:
-      # lopdf declares `rust-version = "1.85"` and then uses let-chains, which
-      # need 1.88. The MSRV promise is about what a user compiles, and nobody
-      # compiles the harness.
+      # The floor itself is lopdf's, not ours (D30). It requires 1.88, and D12
+      # chose it for the PDF layer, so the choice was between carrying an old
+      # PDF library to protect a number nobody had asked for and moving the
+      # number. This job is what stopped that happening quietly.
       - run: cargo check --workspace --all-targets --locked --exclude rchtmltopdf-conformance
 
   docs:

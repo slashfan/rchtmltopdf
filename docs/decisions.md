@@ -266,6 +266,20 @@ Le nombre d'approbations requises est **0**. Un mainteneur seul ne peut pas appr
 
 ---
 
+## D30 — MSRV portée à 1.88, parce que lopdf l'exige
+
+**Choix.** `rust-version` passe de 1.85 à 1.88 dans le manifeste de l'espace de travail, et le job `msrv` de la CI suit.
+
+**Pourquoi.** `lopdf@0.45` déclare `rust-version = "1.88"` : cargo refuse de le compiler plus bas, et D12 a choisi lopdf pour la couche PDF. Le choix réel était donc entre épingler une vieille version de lopdf pour protéger un nombre que personne n'avait demandé, et déplacer le nombre. 1.88 date de juin 2025 ; la distribution prévue est faite de binaires statiques et d'une image Docker (D19), pas de paquets de distribution dont la chaîne d'outils serait figée. Personne ne compile ce projet avec un rustc de plus d'un an sans le vouloir.
+
+**Ce qui l'a attrapé.** Le job `msrv`, sur la pull request qui introduisait la dépendance. Sans lui, la première personne à compiler sur une chaîne plus ancienne aurait découvert le problème à notre place, et le message de cargo ne dit pas quelle décision l'a causé.
+
+**Ce que ce n'est pas.** Une autorisation à utiliser la syntaxe la plus récente. La règle de `CONTRIBUTING.md` tient : relever la MSRV reste une décision délibérée, jamais un effet de bord.
+
+**Écarté.** Épingler lopdf à une version antérieure à ses let-chains, ce qui aurait signifié porter une bibliothèque PDF vieillissante pour une promesse que personne ne réclame. Exclure `crates/pdf` du job `msrv`, ce qui aurait rendu la promesse fausse sans la retirer — le crate est compilé par quiconque installe le binaire depuis les sources.
+
+---
+
 ## Conséquences transverses
 
 - **Le brief doit gagner une section « smart shrinking »** dans les contraintes, et un guide de migration (options à retirer, différences de taille attendues).
