@@ -66,6 +66,19 @@ jobs:
       # it is what lets the binary drop into a distroless image or a VM whose
       # glibc is older than the runner's. A dynamically linked one would work on
       # CI and fail in the place it was built for.
+      #
+      # **The two targets do not produce the same thing**, which the first
+      # version of this check did not know and failed on:
+      #
+      #   x86_64   ELF 64-bit LSB pie executable, …, static-pie linked
+      #   aarch64  ELF 64-bit LSB executable,     …, statically linked
+      #
+      # Both are static. The x86_64 one is also position independent, so it gets
+      # address space layout randomisation and the other does not — a difference
+      # in Rust's defaults per target rather than anything asked for here.
+      #
+      # So the test is what must *not* be true: no dynamic linking, and no
+      # interpreter to go looking for one.
       - name: Check that it is genuinely static
         run: |
           set -euo pipefail
@@ -73,11 +86,12 @@ jobs:
           described=$(file "$binary")
           echo "$described"
           case "$described" in
-            *"statically linked"*) ;;
-            *) echo "::error::not statically linked"; exit 1 ;;
+            *"dynamically linked"*) echo "::error::dynamically linked"; exit 1 ;;
+            *interpreter*) echo "::error::needs a dynamic loader"; exit 1 ;;
           esac
           case "$described" in
-            *"dynamically linked"*) echo "::error::dynamically linked"; exit 1 ;;
+            *"statically linked"*|*"static-pie linked"*) ;;
+            *) echo "::error::not recognisably static: $described"; exit 1 ;;
           esac
 
       - name: Check that it runs
