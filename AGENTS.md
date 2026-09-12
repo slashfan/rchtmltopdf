@@ -14,7 +14,7 @@ nowhere, and it depends on whatever it needs to drive the binary.
 | `core` | The document and settings model, units, page sizes, exit codes |
 | `cli` | The wkhtmltopdf grammar, the option table, the binary |
 | `browser` | Finding and launching Chromium, the protocol, waiting, printing |
-| `pdf` | Merge, metadata, outlines. Empty until V1 |
+| `pdf` | Merge, metadata, outlines. Bytes in, bytes out |
 | `conformance` | The browser-backed suite: the real binary, a pinned Chromium, fixtures |
 
 **`core` has zero dependencies and keeps them.** That is what lets the model be tested with
@@ -103,8 +103,9 @@ against `.chromium-version` and fails if they differ. A wrong browser used to be
 a missing one.
 
 **`inspect` is the only module that knows lopdf exists (D25).** Test bodies see `Rect`, a page
-count and a `String`. `crates/pdf` stays empty until the product needs it (#29), so its first
-public API is shaped by merging and metadata rather than by what a test wanted to measure.
+count and a `String`. `crates/pdf` grows only when the product needs it — metadata (#29), then
+the merge (#36) — so its API is shaped by conversions rather than by what a test wanted to
+measure.
 
 **Three things a PDF will not tell you.** A margin has no entry of its own — it is an offset
 applied to content — so a fixture paints a block filling its content area and where that
@@ -142,7 +143,7 @@ Read these before changing behaviour they describe. Both are in French; the code
 and everything on GitHub are in English.
 
 - `docs/brief.md` — scope, V0 through V3, and what compatibility does and does not mean
-- `docs/decisions.md` — D01 to D33, binding, with the alternatives that were rejected
+- `docs/decisions.md` — D01 to D35, binding, with the alternatives that were rejected
 - `docs/migration.md` — why a migrated document changes size, for anything touching layout
 - `CONTRIBUTING.md` — the branch, pull request and Conventional Commit workflow
 

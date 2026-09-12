@@ -341,19 +341,10 @@ fn a_missing_document_fails_by_name_before_anything_starts() {
 }
 
 /// Also browser-free: what is supported is settled before one is started.
-/// Converting the first of several and saying nothing would produce a document
-/// that looks right and is missing most of itself.
+/// Converting the pages around a cover and saying nothing would produce a
+/// document that looks right and is missing part of itself.
 #[test]
 fn what_is_not_supported_yet_is_refused_by_name() {
-    let several = run(&["a.html", "b.html", "out.pdf"]);
-    assert_outcome(&several, 1, false);
-    assert!(
-        stderr(&several).contains("only one is supported"),
-        "{}",
-        stderr(&several)
-    );
-    assert!(stderr(&several).contains("V2"), "{}", stderr(&several));
-
     let cover = run(&["cover", "a.html", "out.pdf"]);
     assert_outcome(&cover, 1, false);
     assert!(stderr(&cover).contains("cover"), "{}", stderr(&cover));
@@ -364,5 +355,42 @@ fn what_is_not_supported_yet_is_refused_by_name() {
         stderr(&toc).contains("table of contents"),
         "{}",
         stderr(&toc)
+    );
+}
+
+/// Every document is resolved before a browser starts, so the last of several
+/// missing fails as fast as the first, and the failure names it.
+#[test]
+fn a_missing_document_anywhere_on_the_line_is_refused_before_any_browser() {
+    // The first input exists, so the failure can only be the second's.
+    let output = run(&[
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/wkhtmltopdf-0.12.6.1-extended-help.txt"
+        ),
+        "definitely-not-here.html",
+        "out.pdf",
+    ]);
+    assert_outcome(&output, 1, false);
+    assert!(
+        stderr(&output).contains("definitely-not-here.html"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !std::path::Path::new("out.pdf").exists(),
+        "a failure must leave no document behind"
+    );
+}
+
+/// Standard input is a stream, and the second read of it gets nothing.
+#[test]
+fn standard_input_twice_is_refused_by_name() {
+    let output = run(&["-", "-", "out.pdf"]);
+    assert_outcome(&output, 1, false);
+    assert!(
+        stderr(&output).contains("standard input"),
+        "{}",
+        stderr(&output)
     );
 }

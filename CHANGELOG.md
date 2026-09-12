@@ -12,14 +12,41 @@ behaves. If you are migrating, that is the section to read.
 
 Nothing released yet.
 
-The binary converts one document: a URL, a local file or standard input, to a file or
-standard output, with paper size, margins, orientation, zoom, backgrounds, screen or print
-stylesheets, whether scripts run, and how long to wait before printing. Options it does not
-act on are accepted and warned about rather than breaking a command line that uses them.
+The binary converts one document or several: each a URL, a local file or standard input,
+to one file or standard output, with paper size, margins, orientation, zoom, backgrounds,
+screen or print stylesheets, whether scripts run, and how long to wait before printing.
+Options it does not act on are accepted and warned about rather than breaking a command
+line that uses them.
 
-Several documents, covers and a table of contents are not built. Neither is most of the
-option surface beyond what V0 needed: the outline and everything a table of contents needs
-are understood on the command line and not yet acted on.
+Covers and a table of contents are not built. Neither is most of the option surface beyond
+what V0 needed: the outline and everything a table of contents needs are understood on the
+command line and not yet acted on.
+
+### Added
+
+**Several documents on one command line**, combined into one PDF in the order given (#36).
+Each is loaded and printed on its own page of one browser, with its own options — a footer
+written after the second input belongs to the second document alone — and the printed
+documents are merged afterwards: every object renumbered, one page tree, whatever a page
+inherited from its old tree copied onto it, and the first document's title kept, which is
+the title wkhtmltopdf's output carried.
+
+`--load-error-handling skip` now means what it says. The document that failed is dropped
+with `failed loading page <url> (skipped)` on stderr, the others are converted, and the exit
+code is 0 (D14). When every document was skipped the conversion fails and says so, rather
+than writing an empty file. `abort`, the default, still means exit 1 and no PDF.
+
+One browser serves the whole conversion (D35). It is restarted only for a document whose
+options are decided on the browser's own command line rather than over the protocol —
+`--proxy`, `--minimum-font-size`, `--no-images` — and the result is the same either way.
+
+**Fonts are not deduplicated across documents (D34).** Chromium subsets a font per
+document, so ten documents in one face embed ten subsets of it. Deliberate, and measured in
+the decision.
+
+Standard input can be given as one document only. `- -` is refused by name rather than
+read as one document and one blank page, and every input is checked before a browser starts,
+so a missing file at the end of a long command line fails as fast as one at the front.
 
 ### Added
 

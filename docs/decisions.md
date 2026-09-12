@@ -322,6 +322,24 @@ L'asymétrie compte aussi. Ne pas l'intégrer laisse les deux options ouvertes �
 
 **Écarté.** Intégrer `--no-sandbox` avec un avertissement en gras dans la documentation. Un point d'entrée qui teste si le bac à sable fonctionne et l'abandonne sinon : l'opérateur n'apprendrait jamais dans quel mode il tourne, et c'est ce que D10 existe pour empêcher. Embarquer le profil seccomp de Chromium, à revoir si les projets de référence (#32) montrent que `SYS_ADMIN` pose problème.
 
+## D34 — Fusion : les fontes ne sont pas dédoublonnées entre documents
+
+**Choix.** La fusion (#36) renumérote chaque objet, reconstruit un arbre de pages unique, recopie sur chaque page ce qu'elle héritait de son ancien arbre, garde le dictionnaire Info du premier document, et laisse chaque document avec ses propres fontes. Un PDF de dix documents dans la même police embarque dix sous-ensembles de cette police.
+
+**Pourquoi.** Chromium sous-ensemble une fonte par document : deux documents dans la même police portent deux sous-ensembles différents, sous deux noms différents, avec deux tables de glyphes qui ne se recouvrent qu'en partie. Les réunir est une opération sur le programme de fonte — fusionner les glyphes, refaire `cmap`, `hmtx` et `loca`, réécrire les flux de contenu qui les référencent — et non une opération PDF. C'est le prix d'une fusion après impression, et il est connu : wkhtmltopdf imprimait ses documents dans une seule session Qt, qui partageait ses fontes, et un document migré qui en assemble plusieurs sera plus lourd. Le guide de migration le dit.
+
+**Mesuré.** Trois documents d'un paragraphe, dans la même police embarquée : 5,5 Ko seul, 9,0 Ko à deux, 12,9 Ko à trois, avec autant de `FontFile` que de documents. Chaque document ajoute son sous-ensemble, environ 3 Ko ici, et rien d'autre ne grossit.
+
+**Écarté.** Le dédoublonnage par sous-ensemble, à reconsidérer si les projets de référence (#32) montrent des documents où la taille compte. Concaténer les documents dans un même DOM pour n'imprimer qu'une fois : une seule fonte, mais les options, marges et en-têtes propres à chaque objet disparaissent, et c'est précisément ce que la grammaire wkhtmltopdf promet.
+
+## D35 — Plusieurs documents : un navigateur, une page par document, relancé si le lancement diffère
+
+**Choix.** Une conversion à plusieurs documents lance un Chromium (D11), ouvre une page par document, charge et imprime chacun dans l'ordre de la ligne de commande, puis fusionne (D34). Le navigateur n'est relancé que pour un document dont les options se décident sur la ligne de commande du navigateur et non par le protocole : `--proxy`, `--minimum-font-size`, `--no-images`, `--no-stop-slow-scripts`. Deux documents qui partagent ces options partagent un navigateur ; deux qui diffèrent en ont chacun un, et le résultat est le même.
+
+**Pourquoi.** Un lancement coûte une demi-seconde et un profil temporaire, et le cas courant — dix factures avec les mêmes options — n'en a besoin que d'un. Relancer plutôt que d'imprimer avec les mauvaises options, parce qu'une option d'objet honorée pour le premier document et ignorée pour le second est exactement le genre d'écart silencieux que D27 existe pour interdire.
+
+**Écarté.** Un navigateur par document : simple, correct, et dix fois plus lent pour le cas courant. Charger toutes les pages avant d'en imprimer une : un `--javascript-delay` par page se recouvre, mais la mémoire est celle de tous les documents à la fois, et l'ordre d'impression doit être reconstitué. Un pool ou un démon : toujours différé (D11).
+
 ---
 
 ## Conséquences transverses

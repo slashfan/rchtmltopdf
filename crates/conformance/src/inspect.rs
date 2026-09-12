@@ -207,6 +207,24 @@ impl Pdf {
             .expect("text should be extractable")
     }
 
+    /// The characters on one 1-based page, with the same caveats as [`text`].
+    ///
+    /// What a merge is asserted with: that a sentinel is on the page its
+    /// document was given at, and on no other.
+    ///
+    /// [`text`]: Pdf::text
+    pub fn page_text(&self, page: usize) -> String {
+        let number = u32::try_from(page).expect("a page number");
+        assert!(
+            self.document.get_pages().contains_key(&number),
+            "no page {page} in a {} page document",
+            self.page_count()
+        );
+        self.document
+            .extract_text(&[number])
+            .expect("text should be extractable")
+    }
+
     /// Every rectangle painted on a 1-based page, in page coordinates.
     ///
     /// This is how a margin gets measured. **A margin has no dictionary entry of
