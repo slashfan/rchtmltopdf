@@ -10,12 +10,16 @@ on:
   pull_request:
     paths:
       - ".github/workflows/release.yml"
+      - "Dockerfile"
+      - ".dockerignore"
+      - ".chromium-version"
       - "Cargo.lock"
       - "**/Cargo.toml"
   workflow_dispatch:
 
 permissions:
   contents: read
+  packages: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -143,12 +147,119 @@ jobs:
           path: dist/*.tar.gz*
           if-no-files-found: error
 
+  # **Built on a runner of its own architecture and merged into one manifest**,
+  # for the same reason as the binaries: a browser image nobody has run on the
+  # architecture it claims to support proves nothing, and qemu is an order of
+  # magnitude slower at proving it (D32).
+  image:
+    name: image ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runs-on: ubuntu-latest
+            chromium: linux64
+          - arch: arm64
+            runs-on: ubuntu-24.04-arm
+            chromium: linux-arm64
+    runs-on: ${{ matrix.runs-on }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          docker build \
+            --build-arg "CHROMIUM_VERSION=$(cat .chromium-version)" \
+            --build-arg "CHROMIUM_PLATFORM=${{ matrix.chromium }}" \
+            --tag "rchtmltopdf:${{ matrix.arch }}" \
+            .
+
+      # **The recommended command, not a convenient one.** The README tells
+      # people to run it with `--cap-add=SYS_ADMIN` so the browser keeps its
+      # sandbox (D33); if that stopped working, the documentation would be wrong
+      # and nothing else here would notice.
+      - name: Convert something with it
+        run: |
+          set -euo pipefail
+          printf '<!doctype html><meta charset=utf-8><title>t</title><h1>SMOKE</h1>' > page.html
+          docker run --rm -i --cap-add=SYS_ADMIN "rchtmltopdf:${{ matrix.arch }}" - - \
+            < page.html > out.pdf
+          head -c 5 out.pdf | grep -q '%PDF-' || { echo "::error::not a PDF"; exit 1; }
+
+          # D13: the symlink is the point of a drop-in replacement.
+          docker run --rm -i --cap-add=SYS_ADMIN --entrypoint wkhtmltopdf \
+            "rchtmltopdf:${{ matrix.arch }}" - - < page.html > as-wkhtmltopdf.pdf
+          head -c 5 as-wkhtmltopdf.pdf | grep -q '%PDF-' \
+            || { echo "::error::the wkhtmltopdf symlink does not convert"; exit 1; }
+
+          # And that the browser resolves with no flags at all (D09).
+          docker run --rm "rchtmltopdf:${{ matrix.arch }}" --dump-chromium
+
+      # **And that it refuses to convert unsandboxed without being asked**,
+      # which is the decision this image is built on rather than an accident of
+      # how Docker is configured (D33).
+      - name: Check that a plain run refuses rather than converting unsafely
+        run: |
+          set -euo pipefail
+          printf '<!doctype html><meta charset=utf-8><title>t</title><h1>x</h1>' > page.html
+          if docker run --rm -i "rchtmltopdf:${{ matrix.arch }}" - - < page.html > /dev/null 2>said.txt
+          then
+            echo "::error::converted with no sandbox and nobody asked for that"
+            exit 1
+          fi
+          grep -q "sandbox" said.txt || { echo "::error::did not say why"; cat said.txt; exit 1; }
+          cat said.txt
+
+      - name: Push
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          version="${GITHUB_REF_NAME#v}"
+          docker tag "rchtmltopdf:${{ matrix.arch }}" "$image:$version-${{ matrix.arch }}"
+          docker push "$image:$version-${{ matrix.arch }}"
+
+  # One tag pointing at both architectures, assembled from what was pushed
+  # rather than rebuilt.
+  manifest:
+    name: manifest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          version="${GITHUB_REF_NAME#v}"
+          docker buildx imagetools create \
+            --tag "$image:$version" \
+            --tag "$image:latest" \
+            "$image:$version-amd64" \
+            "$image:$version-arm64"
+          docker buildx imagetools inspect "$image:$version"
+
   publish:
     name: publish
     # Tags only. Every other trigger above exists to prove the build, not to
     # release anything.
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, manifest]
     runs-on: ubuntu-latest
     permissions:
       contents: write

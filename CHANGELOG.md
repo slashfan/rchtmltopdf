@@ -23,6 +23,21 @@ are understood on the command line and not yet acted on.
 
 ### Added
 
+**A Docker image**, multi-architecture, carrying a pinned `chrome-headless-shell`, fonts and
+the `wkhtmltopdf` symlink. Both architectures use the same pinned browser — Chrome for Testing
+publishes `linux-arm64` for it — so a page count does not depend on which one you are on.
+
+**It does not disable Chromium's sandbox for you** (D33). A plain `docker run` fails, saying
+what happened and naming every way to fix it; the README recommends `--cap-add=SYS_ADMIN`,
+which keeps the sandbox, and documents `--no-sandbox` as the explicit opt-out for HTML you
+generated yourself. CI checks both halves — that the recommended command converts, **and that
+the plain one refuses** rather than quietly rendering untrusted HTML unsandboxed.
+
+`fonts-liberation` is in the image because it is load-bearing rather than decoration: header
+and footer bands default to Arial, and Liberation Sans is what is metric-compatible with it.
+
+### Added
+
 **Static musl binaries for x86_64 and aarch64**, built by a tag. Each is statically linked, so
 it runs wherever the kernel does — a distroless image, or a machine whose glibc predates the
 one it was built on — and each archive carries a `wkhtmltopdf` symlink, which is why they are

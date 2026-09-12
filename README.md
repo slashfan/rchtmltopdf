@@ -39,6 +39,40 @@ rchtmltopdf --page-size A4 --margin-top 15mm \
 
 A URL, a local file or standard input goes in; a file or standard output comes out.
 
+## Docker
+
+The image carries the program, a pinned `chrome-headless-shell` and fonts, so nothing needs
+installing:
+
+```bash
+docker run --rm -i --cap-add=SYS_ADMIN ghcr.io/slashfan/rchtmltopdf - - < page.html > out.pdf
+```
+
+It answers to `wkhtmltopdf` too, which is the point of the symlink:
+
+```bash
+docker run --rm -i --cap-add=SYS_ADMIN --entrypoint wkhtmltopdf \
+    ghcr.io/slashfan/rchtmltopdf - - < page.html > out.pdf
+```
+
+### Why `--cap-add=SYS_ADMIN`
+
+**Chromium's sandbox does not work in a default container**, and this image does not turn it
+off for you (D33). A plain `docker run` fails, saying so and naming every way to fix it —
+because the threat model is untrusted HTML (D10) and an image that quietly rendered it
+unsandboxed would be the thing this project exists to improve on.
+
+Three commands work, and each concedes something:
+
+| | the browser's sandbox | Docker's own confinement |
+| --- | --- | --- |
+| `--cap-add=SYS_ADMIN` | kept | a broad capability granted |
+| `--security-opt seccomp=unconfined` | kept | seccomp off |
+| `rchtmltopdf --no-sandbox` | **off** | intact |
+
+For HTML you generated yourself, the last one is reasonable and explicit. For HTML somebody
+uploaded, it is not.
+
 ## You bring the browser
 
 **This program never downloads anything.** Not at conversion time, and not on demand either:
