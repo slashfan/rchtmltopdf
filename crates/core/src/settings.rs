@@ -47,6 +47,14 @@ impl LogLevel {
     pub fn shows_warnings(self) -> bool {
         matches!(self, LogLevel::Warn | LogLevel::Info)
     }
+
+    /// Whether the progress lines should be shown.
+    ///
+    /// Only at `info`, which is the default. They are chatter rather than
+    /// diagnosis, and a run that has been asked to say less says less (D14).
+    pub fn shows_progress(self) -> bool {
+        matches!(self, LogLevel::Info)
+    }
 }
 
 /// The four margins.
@@ -536,6 +544,11 @@ mod tests {
         assert!(!LogLevel::Error.shows_warnings());
         assert!(LogLevel::Warn.shows_warnings());
         assert!(LogLevel::Info.shows_warnings());
+
+        // Progress is chatter, so it stops one level earlier than warnings do.
+        assert!(LogLevel::Info.shows_progress());
+        assert!(!LogLevel::Warn.shows_progress());
+        assert!(!LogLevel::None.shows_progress());
     }
 
     #[test]

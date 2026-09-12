@@ -18,8 +18,36 @@ stylesheets, whether scripts run, and how long to wait before printing. Options 
 act on are accepted and warned about rather than breaking a command line that uses them.
 
 Several documents, covers and a table of contents are not built. Neither is most of the
-option surface beyond what V0 needed: PDF metadata, the load error handling options and the
-outline are all understood on the command line and not yet acted on.
+option surface beyond what V0 needed: PDF metadata, the outline and everything a table of
+contents needs are understood on the command line and not yet acted on.
+
+### Added
+
+**A failure says what wkhtmltopdf would have said.** Chromium's `net::ERR_*` codes and HTTP
+statuses are mapped to the Qt names wkhtmltopdf printed — `ContentNotFoundError`,
+`HostNotFoundError`, `ConnectionRefusedError`, `TimeoutError`, `ContentAccessDenied`,
+`RemoteHostClosedError`, `ProtocolUnknownError`, `UnknownContentError` — because applications
+grep for those strings and will go on doing it after the program underneath has changed. An
+unmapped code becomes `UnknownContentError` rather than being dropped.
+
+**`--load-error-handling` and `--load-media-error-handling` decide what a failure costs.**
+A main document that fails is exit 1 and no PDF; `ignore` prints whatever did load. A failed
+subresource under `abort` writes the PDF **and** exits 1, with wkhtmltopdf's exact line —
+`Exit with code 1 due to network error: <Name>` — unprefixed, because that line is a
+contract. `skip` reports and exits 0; `ignore`, the default for media, says nothing.
+
+A 404 is now a failure. It never was to Chromium, because the bytes came back and an error
+page is a page; it was to Qt, which is where `ContentNotFoundError` comes from. A missing
+**favicon** is not: Chromium asks for one on every navigation and wkhtmltopdf never did, so
+counting it would fail a conversion for a file the document never mentioned.
+
+**Progress lines**, in wkhtmltopdf's shape and on stderr: `Loading page (1/2)`,
+`Printing pages (2/2)`, `Done`. Shown at `info`, which is the default, and silenced by `-q` —
+which now means a successful run says nothing at all.
+
+`--version` names this program and never wkhtmltopdf (D29). A distinct name exists partly so
+version checks are not muddied, and passing one by lying about the renderer would be worse
+than failing it.
 
 ### Added
 

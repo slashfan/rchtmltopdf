@@ -95,7 +95,7 @@ async fn run(args: &[String]) -> ExitCode {
     };
 
     match convert(&settings).await {
-        Ok(()) => ExitCode::Success,
+        Ok(code) => code,
         Err(error) => {
             eprintln!("{PROGRAM}: {error}");
             ExitCode::Failure

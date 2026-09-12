@@ -163,7 +163,6 @@ const V3: &str = "planned for V3";
 // conversion. Each says what is missing rather than which milestone it waits
 // for, because a milestone is not something a user can check and "the band is
 // not drawn" is.
-const NO_ERROR_POLICY: &str = "a failure to load is not classified yet";
 
 /// `General Options` in wkhtmltopdf's extended help. Global scope.
 pub const GENERAL_OPTIONS: &[OptionSpec] = &[
@@ -619,7 +618,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "load-error-handling",
         None,
         Object,
-        Planned(NO_ERROR_POLICY),
+        Implemented,
         &["handler"],
         "Specify how to handle pages that fail to load: abort, ignore or skip (default abort)",
     ),
@@ -627,7 +626,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "load-media-error-handling",
         None,
         Object,
-        Planned(NO_ERROR_POLICY),
+        Implemented,
         &["handler"],
         "Specify how to handle media files that fail to load: abort, ignore or skip (default ignore)",
     ),

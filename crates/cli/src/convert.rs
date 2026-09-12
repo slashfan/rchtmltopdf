@@ -13,6 +13,7 @@ use rchtmltopdf_browser::placeholder::Clock;
 use rchtmltopdf_browser::plan::{self, Plan};
 use rchtmltopdf_browser::render::Progress;
 use rchtmltopdf_core::settings::{ObjectKind, Settings};
+use rchtmltopdf_core::{ExitCode, LoadErrorHandling};
 use std::fmt;
 
 #[derive(Debug)]
@@ -56,7 +57,13 @@ impl From<rchtmltopdf_browser::Error> for ConvertError {
 }
 
 /// Convert, or say why not.
-pub async fn convert(settings: &Settings) -> Result<(), ConvertError> {
+///
+/// Returns an exit code rather than nothing, because "wrote the document and
+/// still failed" is a real outcome and D14 turns on it: a subresource that fails
+/// under `--load-media-error-handling abort` produces the PDF *and* exits 1.
+/// Collapsing that into `Err` would throw the document away, and collapsing it
+/// into `Ok` would lose the exit code KnpSnappy reads.
+pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
     let object = only_page(settings)?;
     let source = object
         .input
@@ -110,7 +117,7 @@ pub async fn convert(settings: &Settings) -> Result<(), ConvertError> {
     // The browser is created inside the deadline, so expiry drops it and its Drop
     // stops the process group and removes the profile. Cleanup is not a step that
     // could be skipped.
-    let (pdf, refused) = deadline::within(plan.deadline, &progress, async {
+    let (pdf, refused, report) = deadline::within(plan.deadline, &progress, async {
         let browser = Browser::launch(&executable, &plan.launch).await?;
         let page = browser.new_page().await?;
 
@@ -119,7 +126,8 @@ pub async fn convert(settings: &Settings) -> Result<(), ConvertError> {
         let policing = intercept::install(page.session(), plan.requests.clone()).await?;
 
         page.prepare(&plan.prepare).await?;
-        page.load(document.url(), &object.load, &progress).await?;
+        say(settings, "Loading page (1/2)");
+        let report = page.load(document.url(), &object.load, &progress).await?;
 
         // Before printing, not after. A rejected password leaves the server's
         // own 401 body as the response, which renders perfectly well and is not
@@ -132,6 +140,36 @@ pub async fn convert(settings: &Settings) -> Result<(), ConvertError> {
                 url: document.url().to_string(),
             });
         }
+
+        // The document itself. `--load-error-handling` decides, and only
+        // `ignore` prints anything at all: D14 is explicit that a main document
+        // which failed means exit 1 and no PDF.
+        if let Some(failed) = &report.document {
+            match object.load.on_document_error {
+                LoadErrorHandling::Ignore => {}
+                LoadErrorHandling::Abort => {
+                    return Err(rchtmltopdf_browser::Error::Navigation {
+                        url: failed.url.clone(),
+                        reason: failed.error.name().to_string(),
+                    });
+                }
+                // `skip` drops the failing object and carries on, and with one
+                // object there is nothing to carry on to. Saying so is better
+                // than writing an empty document; V2 is where it starts to mean
+                // something.
+                LoadErrorHandling::Skip => {
+                    return Err(rchtmltopdf_browser::Error::Navigation {
+                        url: failed.url.clone(),
+                        reason: format!(
+                            "{} (--load-error-handling skip leaves nothing to convert while \
+                             there is one document)",
+                            failed.error.name()
+                        ),
+                    });
+                }
+            }
+        }
+        say(settings, "Printing pages (2/2)");
         let pdf = page.print_to_pdf(&plan.print).await?;
 
         // Read before the guard is dropped, which is what stops interception.
@@ -142,7 +180,7 @@ pub async fn convert(settings: &Settings) -> Result<(), ConvertError> {
 
         // Asked to leave rather than killed, so it can finish writing.
         browser.close().await?;
-        Ok((pdf, refused))
+        Ok((pdf, refused, report))
     })
     .await?;
 
@@ -155,8 +193,54 @@ pub async fn convert(settings: &Settings) -> Result<(), ConvertError> {
         }
     }
 
+    // Written before the media errors are judged, because D14 says a subresource
+    // that failed under `abort` produces the document *and* exits 1. A wrapper
+    // that raises on the exit code still has the PDF to look at.
     output::write(&settings.global.output, &pdf)?;
-    Ok(())
+
+    let outcome = match (object.load.on_media_error, report.media.as_slice()) {
+        (_, []) | (LoadErrorHandling::Ignore, _) => ExitCode::Success,
+        (LoadErrorHandling::Skip, failures) => {
+            for failed in failures {
+                report_media(settings, failed);
+            }
+            ExitCode::Success
+        }
+        (LoadErrorHandling::Abort, failures) => {
+            for failed in failures {
+                report_media(settings, failed);
+            }
+            // wkhtmltopdf's exact wording, and not prefixed with the program
+            // name: applications grep for this line.
+            println_stderr(&format!(
+                "Exit with code 1 due to network error: {}",
+                failures[0].error.name()
+            ));
+            ExitCode::Failure
+        }
+    };
+
+    say(settings, "Done");
+    Ok(outcome)
+}
+
+/// A progress line, in wkhtmltopdf's shape and on its stream.
+fn say(settings: &Settings, line: &str) {
+    if settings.global.log_level.shows_progress() {
+        eprintln!("{line}");
+    }
+}
+
+/// One failed subresource, named the way wkhtmltopdf names it.
+fn report_media(settings: &Settings, failed: &rchtmltopdf_browser::render::Failed) {
+    if settings.global.log_level.shows_warnings() {
+        eprintln!("{PROGRAM}: warning: {failed} was not loaded");
+    }
+}
+
+/// Straight to stderr whatever the level, because this line is a contract.
+fn println_stderr(line: &str) {
+    eprintln!("{line}");
 }
 
 /// V0 converts one page.

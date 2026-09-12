@@ -38,9 +38,10 @@ use crate::error::Error;
 use crate::error::Result;
 use crate::launch::Page;
 use crate::plan::{Command, Injection, LoadPlan, Settle};
+use rchtmltopdf_core::NetworkError;
 use rchtmltopdf_core::settings::LoadSettings;
 use serde_json::{Value, json};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -60,6 +61,9 @@ const TRAFFIC_EVENTS: &[&str] = &[
     "Network.requestWillBeSent",
     "Network.loadingFinished",
     "Network.loadingFailed",
+    // Not about whether the network is busy, but about whether what came back
+    // was what was asked for: a 404 finishes loading like anything else.
+    "Network.responseReceived",
 ];
 
 /// Where a page has got to.
@@ -147,7 +151,12 @@ impl Page {
     /// Not bounded from the inside. A page that long-polls never settles by
     /// design, so the bound belongs to the conversion deadline above this
     /// (D16), which can then say which rung it interrupted.
-    pub async fn load(&self, url: &str, load: &LoadSettings, progress: &Progress) -> Result<()> {
+    pub async fn load(
+        &self,
+        url: &str,
+        load: &LoadSettings,
+        progress: &Progress,
+    ) -> Result<LoadReport> {
         let session = self.session();
         let ladder = LoadPlan::new(load);
 
@@ -166,7 +175,10 @@ impl Page {
         if let Some(reason) = outcome.get("errorText").and_then(Value::as_str) {
             return Err(crate::error::Error::Navigation {
                 url: url.to_string(),
-                reason: reason.to_string(),
+                // Named the way wkhtmltopdf named it, not the way Chromium does.
+                // An application branching on `HostNotFoundError` is reading the
+                // stderr of a program it did not write (D14).
+                reason: NetworkError::from_chromium(reason).name().to_string(),
             });
         }
 
@@ -184,13 +196,7 @@ impl Page {
         }
 
         progress.enter(Stage::AwaitingNetworkIdle);
-        let document = wait_for_quiet_network(&mut traffic).await;
-        if let Some(reason) = document.failure {
-            return Err(crate::error::Error::Navigation {
-                url: url.to_string(),
-                reason,
-            });
-        }
+        let report = wait_for_quiet_network(&mut traffic).await;
 
         progress.enter(Stage::AwaitingFonts);
         wait_for_fonts(session).await;
@@ -219,7 +225,7 @@ impl Page {
         }
 
         progress.enter(Stage::Settled);
-        Ok(())
+        Ok(report)
     }
 }
 
@@ -322,20 +328,74 @@ fn js_string(raw: &str) -> String {
     serde_json::to_string(raw).unwrap_or_else(|_| "\"\"".to_string())
 }
 
-/// The main document's request, and whether it failed.
+/// What went wrong on the way, beyond the page being ready.
 ///
 /// **`Page.navigate` does not report every failure.** It carries an `errorText`
 /// for a host that does not resolve, and nothing at all for a proxy that refuses
 /// the connection or for credentials the server would not accept — the call
-/// succeeds and Chromium renders its own error page, which is then printed. D14
-/// says that is exit 1 and no PDF, so the network events are watched instead.
+/// succeeds and Chromium renders its own error page, which would then be
+/// printed. And a 404 is not a failure to Chromium at all: the bytes came back
+/// and an error page is a page. It was a failure to Qt, which is where
+/// `ContentNotFoundError` comes from.
 ///
-/// Only the document. A subresource that fails still produces a PDF, which is
-/// what `--load-media-error-handling` defaults to (#28 makes it a choice).
+/// So the network events are watched, and what is found is **reported rather
+/// than decided on**. Whether a failed subresource is worth an exit code is
+/// `--load-media-error-handling`'s business and the command line layer's, not
+/// this module's (D14).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LoadReport {
+    /// The document's own request, if it failed.
+    pub document: Option<Failed>,
+    /// Everything else that failed, once per URL and in the order it was asked
+    /// for.
+    pub media: Vec<Failed>,
+}
+
+/// One request that did not produce what was wanted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Failed {
+    pub url: String,
+    pub error: NetworkError,
+}
+
+impl std::fmt::Display for Failed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({})", self.url, self.error)
+    }
+}
+
+/// What the traffic watcher is keeping track of while the page loads.
 #[derive(Debug, Default)]
-struct MainDocument {
-    id: Option<String>,
-    failure: Option<String>,
+struct Watch {
+    /// The document's own request id: the first one Chromium calls a document.
+    document: Option<String>,
+    /// Every request id seen, so a failure can name the URL it was for.
+    urls: HashMap<String, String>,
+    report: LoadReport,
+}
+
+impl Watch {
+    fn record(&mut self, id: &str, error: NetworkError) {
+        let url = self.urls.get(id).cloned().unwrap_or_default();
+
+        if self.document.as_deref() == Some(id) {
+            // The first failure is the one worth reporting: a redirect chain
+            // that ends badly should name what went wrong, not what came after.
+            self.report.document.get_or_insert(Failed { url, error });
+            return;
+        }
+
+        // Chromium asks for this on every navigation and wkhtmltopdf never did,
+        // so a site without one would fail a conversion for a file the document
+        // never mentioned.
+        if url.ends_with("/favicon.ico") {
+            return;
+        }
+        if self.report.media.iter().any(|failed| failed.url == url) {
+            return;
+        }
+        self.report.media.push(Failed { url, error });
+    }
 }
 
 /// Wait until nothing has been in flight for a while.
@@ -343,16 +403,16 @@ struct MainDocument {
 /// Counts by request id rather than by a running total, so a reply that arrives
 /// for a request we never counted cannot drive the total negative and declare
 /// the page idle early.
-async fn wait_for_quiet_network(events: &mut crate::cdp::Events) -> MainDocument {
+async fn wait_for_quiet_network(events: &mut crate::cdp::Events) -> LoadReport {
     let mut in_flight: HashSet<String> = HashSet::new();
-    let mut document = MainDocument::default();
+    let mut watch = Watch::default();
 
     loop {
         let next = if in_flight.is_empty() {
             // Nothing outstanding: give the page a moment to start something
             // else before calling it quiet.
             match tokio::time::timeout(QUIET_PERIOD, events.next()).await {
-                Err(_) => return document,
+                Err(_) => return watch.report,
                 Ok(event) => event,
             }
         } else {
@@ -362,13 +422,13 @@ async fn wait_for_quiet_network(events: &mut crate::cdp::Events) -> MainDocument
         let Some(event) = next else {
             // The connection went away. Whatever happens next will report it
             // better than this loop can.
-            return document;
+            return watch.report;
         };
-        apply_traffic(&event, &mut in_flight, &mut document);
+        apply_traffic(&event, &mut in_flight, &mut watch);
     }
 }
 
-fn apply_traffic(event: &Event, in_flight: &mut HashSet<String>, document: &mut MainDocument) {
+fn apply_traffic(event: &Event, in_flight: &mut HashSet<String>, watch: &mut Watch) {
     let Some(id) = event.params.get("requestId").and_then(Value::as_str) else {
         return;
     };
@@ -378,10 +438,10 @@ fn apply_traffic(event: &Event, in_flight: &mut HashSet<String>, document: &mut 
             // The first document-type request is the one being converted. A
             // redirect reuses the id, so following one keeps this pointing at
             // the navigation rather than at whatever it landed on.
-            if document.id.is_none()
+            if watch.document.is_none()
                 && event.params.get("type").and_then(Value::as_str) == Some("Document")
             {
-                document.id = Some(id.to_string());
+                watch.document = Some(id.to_string());
             }
 
             // Inline data never touches the network, and counting it means
@@ -395,23 +455,31 @@ fn apply_traffic(event: &Event, in_flight: &mut HashSet<String>, document: &mut 
             if url.starts_with("data:") || url.starts_with("blob:") {
                 return;
             }
+            watch.urls.insert(id.to_string(), url.to_string());
             in_flight.insert(id.to_string());
+        }
+        "Network.responseReceived" => {
+            let status = event
+                .params
+                .get("response")
+                .and_then(|response| response.get("status"))
+                .and_then(Value::as_u64)
+                .unwrap_or(200);
+            if let Some(error) = NetworkError::from_status(status as u16) {
+                watch.record(id, error);
+            }
         }
         "Network.loadingFinished" => {
             in_flight.remove(id);
         }
         "Network.loadingFailed" => {
             in_flight.remove(id);
-            if document.id.as_deref() == Some(id) {
-                document.failure = Some(
-                    event
-                        .params
-                        .get("errorText")
-                        .and_then(Value::as_str)
-                        .unwrap_or("the request failed")
-                        .to_string(),
-                );
-            }
+            let text = event
+                .params
+                .get("errorText")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            watch.record(id, NetworkError::from_chromium(text));
         }
         _ => {}
     }
@@ -489,14 +557,14 @@ mod tests {
                 json!({ "requestId": "R1", "request": { "url": "https://example.com/a.css" } }),
             ),
             &mut in_flight,
-            &mut MainDocument::default(),
+            &mut Watch::default(),
         );
         assert_eq!(in_flight.len(), 1);
 
         apply_traffic(
             &event("Network.loadingFinished", json!({ "requestId": "R1" })),
             &mut in_flight,
-            &mut MainDocument::default(),
+            &mut Watch::default(),
         );
         assert!(in_flight.is_empty());
     }
@@ -510,12 +578,12 @@ mod tests {
                 json!({ "requestId": "R1", "request": { "url": "https://example.com/gone.png" } }),
             ),
             &mut in_flight,
-            &mut MainDocument::default(),
+            &mut Watch::default(),
         );
         apply_traffic(
             &event("Network.loadingFailed", json!({ "requestId": "R1" })),
             &mut in_flight,
-            &mut MainDocument::default(),
+            &mut Watch::default(),
         );
         assert!(
             in_flight.is_empty(),
@@ -535,7 +603,7 @@ mod tests {
                     json!({ "requestId": "R1", "request": { "url": url } }),
                 ),
                 &mut in_flight,
-                &mut MainDocument::default(),
+                &mut Watch::default(),
             );
         }
         assert!(in_flight.is_empty());
@@ -549,7 +617,7 @@ mod tests {
         apply_traffic(
             &event("Network.loadingFinished", json!({ "requestId": "ghost" })),
             &mut in_flight,
-            &mut MainDocument::default(),
+            &mut Watch::default(),
         );
         apply_traffic(
             &event(
@@ -557,7 +625,7 @@ mod tests {
                 json!({ "requestId": "R1", "request": { "url": "https://example.com/a" } }),
             ),
             &mut in_flight,
-            &mut MainDocument::default(),
+            &mut Watch::default(),
         );
         assert_eq!(in_flight.len(), 1, "the real request is still outstanding");
     }
@@ -568,12 +636,12 @@ mod tests {
         apply_traffic(
             &event("Page.loadEventFired", json!({})),
             &mut in_flight,
-            &mut MainDocument::default(),
+            &mut Watch::default(),
         );
         apply_traffic(
             &event("Runtime.consoleAPICalled", json!({ "requestId": "R1" })),
             &mut in_flight,
-            &mut MainDocument::default(),
+            &mut Watch::default(),
         );
         assert!(in_flight.is_empty());
     }
@@ -583,7 +651,7 @@ mod tests {
     #[test]
     fn only_the_documents_own_failure_is_a_navigation_failure() {
         let mut in_flight = HashSet::new();
-        let mut document = MainDocument::default();
+        let mut watch = Watch::default();
 
         apply_traffic(
             &event(
@@ -595,7 +663,7 @@ mod tests {
                 }),
             ),
             &mut in_flight,
-            &mut document,
+            &mut watch,
         );
         apply_traffic(
             &event(
@@ -607,7 +675,7 @@ mod tests {
                 }),
             ),
             &mut in_flight,
-            &mut document,
+            &mut watch,
         );
 
         // An image that 404s is not a failed conversion.
@@ -617,9 +685,9 @@ mod tests {
                 json!({ "requestId": "IMG", "errorText": "net::ERR_FAILED" }),
             ),
             &mut in_flight,
-            &mut document,
+            &mut watch,
         );
-        assert!(document.failure.is_none());
+        assert!(watch.report.document.is_none());
 
         // The document is.
         apply_traffic(
@@ -628,12 +696,16 @@ mod tests {
                 json!({ "requestId": "DOC", "errorText": "net::ERR_PROXY_CONNECTION_FAILED" }),
             ),
             &mut in_flight,
-            &mut document,
+            &mut watch,
         );
         assert_eq!(
-            document.failure.as_deref(),
-            Some("net::ERR_PROXY_CONNECTION_FAILED")
+            watch.report.document.as_ref().map(|failed| failed.error),
+            Some(NetworkError::ConnectionRefused)
         );
+        // And the image is reported separately, because a subresource is
+        // somebody else's decision (D14).
+        assert_eq!(watch.report.media.len(), 1);
+        assert_eq!(watch.report.media[0].error, NetworkError::UnknownContent);
     }
 
     /// A redirect reuses the request id, so the first document-type request
@@ -641,7 +713,7 @@ mod tests {
     #[test]
     fn a_later_document_request_does_not_steal_the_first() {
         let mut in_flight = HashSet::new();
-        let mut document = MainDocument::default();
+        let mut watch = Watch::default();
         for id in ["FIRST", "IFRAME"] {
             apply_traffic(
                 &event(
@@ -653,10 +725,10 @@ mod tests {
                     }),
                 ),
                 &mut in_flight,
-                &mut document,
+                &mut watch,
             );
         }
-        assert_eq!(document.id.as_deref(), Some("FIRST"));
+        assert_eq!(watch.document.as_deref(), Some("FIRST"));
     }
 
     #[test]
