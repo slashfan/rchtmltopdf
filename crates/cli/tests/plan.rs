@@ -39,19 +39,30 @@ use rchtmltopdf_browser::plan::Plan;
 use rchtmltopdf_core::settings::Settings;
 use support::{line_shaped, section_of};
 
-/// Options honoured before a browser is started, so no plan can see them.
+/// Options no plan can see, because they are not about what the browser is asked
+/// to do.
 ///
-/// Both decide whether warnings are printed, which happens while the command
-/// line is still being read. Each names the test that holds it instead.
+/// Two decide how much is said while the command line is still being read. Two
+/// decide what to make of what came back: whether a failed subresource is worth
+/// an exit code is a judgement on the result, and the browser was asked exactly
+/// the same thing either way.
 ///
-/// **This list is meant to stay this short.** An entry is a claim that something
-/// else checks the option, so it has to say what. Adding one without naming a
-/// test is how the table started lying in the first place.
-const HONOURED_BEFORE_THE_BROWSER: &[(&str, &str)] = &[
+/// **Each entry names the test that holds it instead.** An entry without one is
+/// how the table started lying in the first place, and there is a test below
+/// that checks every entry names a real option that is still advertised.
+const HONOURED_OUTSIDE_THE_PLAN: &[(&str, &str)] = &[
     ("quiet", "binary.rs: quiet_is_shorthand_for_log_level_none"),
     (
         "log-level",
         "binary.rs: log_level_decides_whether_warnings_are_shown",
+    ),
+    (
+        "load-media-error-handling",
+        "conformance/failures.rs: a_failed_subresource_is_judged_by_the_media_handler",
+    ),
+    (
+        "load-error-handling",
+        "conformance/failures.rs: ignore_prints_the_document_that_did_load",
     ),
 ];
 
@@ -74,11 +85,6 @@ const FROZEN: Clock = Clock {
     second: 0,
     utc_offset_seconds: 0,
 };
-
-fn settings_for(options: &[&'static OptionSpec]) -> Settings {
-    let needs_toc = options.iter().any(|spec| spec.scope == Scope::Toc);
-    settings_shaped(options, needs_toc)
-}
 
 fn settings_shaped(options: &[&'static OptionSpec], toc_object: bool) -> Settings {
     let args = line_shaped(options, toc_object);
@@ -164,7 +170,7 @@ fn every_option_marked_implemented_changes_the_conversion() {
     let idle: Vec<&str> = table::all()
         .filter(|spec| spec.support == Support::Implemented)
         .filter(|spec| {
-            !HONOURED_BEFORE_THE_BROWSER
+            !HONOURED_OUTSIDE_THE_PLAN
                 .iter()
                 .any(|(name, _)| *name == spec.long)
         })
@@ -207,15 +213,12 @@ fn nothing_the_table_calls_unbuilt_changes_the_conversion() {
 /// field, which is what the test above holds.
 #[test]
 fn an_option_that_is_not_built_may_still_be_understood() {
-    let handling = table::lookup_long("load-error-handling").expect("in the table");
-    assert!(matches!(handling.support, Support::Planned(_)));
-
-    let settings = settings_for(&[handling]);
-    let object = settings.single_object().expect("one object");
-    assert_eq!(
-        object.load.on_document_error,
-        rchtmltopdf_core::LoadErrorHandling::Abort
-    );
+    let outline = table::lookup_long("outline-depth").expect("in the table");
+    assert!(matches!(outline.support, Support::Planned(_)));
+    // Understood as far as the grammar: it parses, takes its value, and the
+    // conversion never asks.
+    assert_eq!(outline.arity(), 1);
+    assert!(!changes_the_conversion(outline));
 }
 
 /// The exemption list is a promise about tests elsewhere. An entry naming an
@@ -223,7 +226,7 @@ fn an_option_that_is_not_built_may_still_be_understood() {
 /// promise about nothing.
 #[test]
 fn every_exemption_names_a_real_option_and_a_test() {
-    for (name, held_by) in HONOURED_BEFORE_THE_BROWSER {
+    for (name, held_by) in HONOURED_OUTSIDE_THE_PLAN {
         let spec = table::lookup_long(name).unwrap_or_else(|| panic!("--{name} is not an option"));
         assert_eq!(
             spec.support,
@@ -244,7 +247,7 @@ fn the_advertised_surface_is_the_audited_one() {
         .filter(|spec| spec.support == Support::Implemented)
         .count();
     assert_eq!(
-        implemented, 56,
+        implemented, 58,
         "the number of options honoured end to end changed; \
          if that is deliberate, the audit and this number move together"
     );

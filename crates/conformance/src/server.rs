@@ -44,6 +44,9 @@ pub const PROPAGATION_STYLE: &str = "/propagation.css";
 /// `127.0.0.1` proves only that the option was accepted.
 pub const PROXIED: &str = "CONFORMANCE-PROXIED-3K9";
 
+/// A document whose image is not there, for the media error handling.
+pub const MISSING_MEDIA: &str = "/missing-media";
+
 /// Answers 401 until the request carries the right Basic credentials.
 pub const PROTECTED: &str = "/protected";
 
@@ -159,6 +162,10 @@ impl Server {
                         fixture::document(&format!(
                             "<link rel=\"stylesheet\" href=\"{PROPAGATION_STYLE}\">\
                              <div id=\"pad\"></div><p>{SENTINEL}</p>"
+                        ))
+                    } else if path.starts_with(MISSING_MEDIA) {
+                        fixture::document(&format!(
+                            "<p>{SENTINEL}</p><img src=\"/definitely-not-here.png\">"
                         ))
                     } else if path.starts_with(PAGE) {
                         fixture::document(&format!("<p>{SENTINEL}</p>"))

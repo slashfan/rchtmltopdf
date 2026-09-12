@@ -254,6 +254,18 @@ Le nombre d'approbations requises est **0**. Un mainteneur seul ne peut pas appr
 
 ---
 
+## D29 — `--version` ne se fait pas passer pour wkhtmltopdf
+
+**Choix.** `--version` imprime le nom et la version de *ce* programme, et jamais ceux de wkhtmltopdf. Deux lignes : `rchtmltopdf <version>`, puis une phrase qui dit ce que c'est.
+
+**Pourquoi.** D13 donne au projet un nom propre en partie pour que les vérifications de version ne soient pas brouillées. Se déclarer `wkhtmltopdf 0.12.6 (with patched qt)` ferait passer un test de version et mentirait sur tout le reste : le moteur de rendu, les options réellement honorées, la pagination. Une application qui refuse de démarrer sans une version de wkhtmltopdf a un problème que ce programme ne peut pas résoudre en mentant sur ce qu'il est.
+
+**Si un projet de référence verrouille la version.** Ce sera une nouvelle entrée numérotée, discutée, pas un changement discret dans `main.rs`. #31 et #32 diront si le cas se présente vraiment.
+
+**Écarté.** Imprimer la version de wkhtmltopdf. Un drapeau `--fake-version` qui la produirait sur demande : il existerait pour tromper un test, et le premier rapport de bug arriverait de quelqu'un qui ne saurait pas lequel des deux programmes il exécute.
+
+---
+
 ## Conséquences transverses
 
 - **Le brief doit gagner une section « smart shrinking »** dans les contraintes, et un guide de migration (options à retirer, différences de taille attendues).
