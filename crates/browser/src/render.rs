@@ -170,16 +170,23 @@ impl Page {
         let outcome = session.send("Page.navigate", json!({ "url": url })).await?;
 
         // A navigation that fails still answers, and the failure is a field in
-        // the reply rather than a protocol error. Ignoring it means a dead
-        // address loads the browser's own error page and reports success, which
-        // would then be printed. D14 says that is exit 1 and no PDF.
+        // the reply rather than a protocol error. **Reported, not raised**
+        // (D44): the caller's `--load-error-handling` decides whether the
+        // conversion ends here, carries on without this document, or leaves a
+        // blank page where it would have been, and a failure raised from inside
+        // this function never reached that choice. Nothing is waited for after
+        // this: there was no navigation, so no load event is coming.
         if let Some(reason) = outcome.get("errorText").and_then(Value::as_str) {
-            return Err(crate::error::Error::Navigation {
-                url: url.to_string(),
-                // Named the way wkhtmltopdf named it, not the way Chromium does.
-                // An application branching on `HostNotFoundError` is reading the
-                // stderr of a program it did not write (D14).
-                reason: NetworkError::from_chromium(reason).name().to_string(),
+            return Ok(LoadReport {
+                navigation_failed: true,
+                document: Some(Failed {
+                    url: url.to_string(),
+                    // Named the way wkhtmltopdf named it, not the way Chromium
+                    // does. An application branching on `HostNotFoundError` is
+                    // reading the stderr of a program it did not write (D14).
+                    error: NetworkError::from_chromium(reason),
+                }),
+                media: Vec::new(),
             });
         }
 
@@ -231,6 +238,27 @@ impl Page {
 }
 
 impl Page {
+    /// Load nothing, so that there is a page to print (D44).
+    ///
+    /// Where a document did not arrive at all and `--load-error-handling
+    /// ignore` says to carry on regardless: wkhtmltopdf left a blank page
+    /// where that document would have been and went on counting, so the page
+    /// behind it keeps its number. `about:blank` printed with the print
+    /// command the document would have been printed with is that page, at the
+    /// same paper size and margins, and it is the only way to avoid printing
+    /// whatever the browser left on screen instead.
+    pub async fn blank(&self) -> Result<()> {
+        let session = self.session();
+        let mut loaded = session.subscribe("Page.loadEventFired");
+        session
+            .send("Page.navigate", json!({ "url": "about:blank" }))
+            .await?;
+        if loaded.next().await.is_none() {
+            return Err(crate::error::Error::ConnectionClosed);
+        }
+        Ok(())
+    }
+
     /// Measure the band document this page has loaded (D39).
     ///
     /// The body's height is what wkhtmltopdf reserved for a band document,
@@ -384,8 +412,12 @@ fn js_string(raw: &str) -> String {
 /// this module's (D14).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LoadReport {
-    /// The document's own request, if it failed.
+    /// The document's own request, if it failed. A 404 is one of these: the
+    /// bytes came back and there is a page to print.
     pub document: Option<Failed>,
+    /// The navigation itself failed, so nothing arrived and there is no page
+    /// to print — not even an error page (D44). `document` names the failure.
+    pub navigation_failed: bool,
     /// Everything else that failed, once per URL and in the order it was asked
     /// for.
     pub media: Vec<Failed>,

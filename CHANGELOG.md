@@ -23,6 +23,16 @@ surface beyond that is understood on the command line and not yet acted on.
 
 ### Compatibility
 
+**`--load-error-handling skip` and `ignore` survive a document that never loaded**
+(#113, D44). A host that does not resolve ended the conversion whatever the option said —
+exit 1 and no file — because the failure was raised before the handler saw it. Now the
+handler decides, as wkhtmltopdf's does: `skip` writes the file from the documents that did
+load, `ignore` leaves a blank page where the missing one would have been so the page behind
+it keeps its number, and `abort`, the default, still writes nothing. All three exit 1, with
+`Exit with code 1 due to network error: HostNotFoundError` — D14 said `skip` and `ignore`
+exit 0, which holds for a failing subresource and not for a document. Found by running a
+Symfony application through knp-snappy against both binaries (#32).
+
 **`--replace` no longer shadows a built-in placeholder** (#111). A pair named after one
 of wkhtmltopdf's own placeholders defined nothing in a text band and hid the real answer:
 `--footer-center 'Page [page]' --replace page draft` printed "Page draft" on every page.
