@@ -424,7 +424,7 @@ impl Band {
 /// These are CSS rather than paper measurements. wkhtmltopdf substituted them
 /// into the stylesheet it transformed the outline with, where the indentation
 /// is a `padding-left` and its default is `1em` — which is why it is kept as
-/// the string it was written as. [`Length`](crate::units::Length) normalises
+/// the string it was written as. [`Length`] normalises
 /// to inches and has no `em`, so it could not carry the default, let alone
 /// echo back what the user typed.
 #[derive(Debug, Clone, PartialEq)]
