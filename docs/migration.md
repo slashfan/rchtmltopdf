@@ -97,6 +97,9 @@ et `[time]` sont substitués, ainsi que ceux définis par `--replace`. `[page]` 
 comptent sur l'ensemble du document produit, couverture comprise (D45) ; `[sitepage]` et
 `[sitepages]` dans le document d'origine ; `--page-offset` décale les premiers. Les trois
 `[section]` nomment le dernier titre `h1`, `h2` ou `h3` sur la page ou avant elle.
+`[title]` est le `<title>` du document sur lequel le bandeau est dessiné — avec plusieurs
+documents, chaque page nomme le sien — et `[doctitle]` le titre du fichier produit :
+`--title`, ou à défaut celui du premier document (D46).
 
 **`[date]` n'est pas identique à celui de wkhtmltopdf.** Qt le rend via la locale du système,
 donc le même binaire écrit une chaîne différente sur deux machines et il n'y a pas de format

@@ -106,7 +106,7 @@ fn the_command_line_answers_the_rest() {
             "--title",
             "Invoice 42",
             "--header-left",
-            "[title]",
+            "[doctitle]",
             "--header-right",
             "[webpage]",
         ],
@@ -257,7 +257,7 @@ fn the_section_placeholders_name_the_heading_in_force() {
 }
 
 /// A band's text is somebody's document title, and the template's styles are
-/// attributes around it.
+/// attributes around it. `[doctitle]` is the one `--title` answers for (#110).
 #[test]
 fn a_title_full_of_markup_does_not_break_the_band() {
     let Some(_browser) = require_chromium() else {
@@ -272,11 +272,104 @@ fn a_title_full_of_markup_does_not_break_the_band() {
             "--title",
             "Tom & Jerry <b>bold</b>",
             "--footer-center",
-            "[title]",
+            "[doctitle]",
         ],
     );
     let text = flat(&pdf);
     assert!(text.contains("Tom & Jerry"), "{text:?}");
     // Drawn as text rather than interpreted as markup.
     assert!(text.contains("<b>bold</b>"), "{text:?}");
+}
+
+/// **`[title]` is the document's own `<title>`, `[doctitle]` the file's**
+/// (#110). The command line is the harness's, with `--title` given so the two
+/// cannot be confused: wkhtmltopdf 0.12.6.1 prints the element in one and the
+/// option in the other, and we printed the option in both.
+#[test]
+fn title_is_the_documents_element_and_doctitle_the_command_lines() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("placeholders-title");
+    let document = fixture::write(scratch.path(), "t.html", "<p>one</p>");
+    std::fs::write(
+        &document,
+        std::fs::read_to_string(&document)
+            .expect("readable")
+            .replace(
+                "<title>conformance</title>",
+                "<title>The title element of the document</title>",
+            ),
+    )
+    .expect("writable");
+
+    let (pdf, _) = run(
+        &document,
+        &[
+            "--title",
+            "The title given on the command line",
+            "--footer-center",
+            "TITLE=[title]",
+            "--footer-right",
+            "DOCTITLE=[doctitle]",
+        ],
+    );
+    let text = flat(&pdf);
+    assert!(
+        text.contains("TITLE=The title element of the document"),
+        "{text:?}"
+    );
+    assert!(
+        text.contains("DOCTITLE=The title given on the command line"),
+        "{text:?}"
+    );
+}
+
+/// With several documents each page says its own, and the file's is the first
+/// document's when `--title` was not given — the same title the merge puts in
+/// the Info dictionary (#107).
+#[test]
+fn each_document_prints_its_own_title_and_the_file_takes_the_firsts() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("placeholders-two-titles");
+    let named = |name: &str, body: &str| {
+        let path = scratch.join(name);
+        std::fs::write(
+            &path,
+            fixture::document(body).replace(
+                "<title>conformance</title>",
+                &format!("<title>{}</title>", name.trim_end_matches(".html")),
+            ),
+        )
+        .expect("writable");
+        path.display().to_string()
+    };
+    let first = named("First.html", "<p>one</p>");
+    let second = named("Second.html", "<p>two</p>");
+
+    let outcome = Run::new()
+        .args(["--footer-center", "T=[title] D=[doctitle]"])
+        .arg(&first)
+        .arg(&second)
+        .arg("-")
+        .output();
+    outcome.succeeded();
+    let pdf = Pdf::from_bytes(&outcome.stdout);
+    assert_eq!(pdf.page_count(), 2, "{}", pdf.describe());
+    assert!(
+        pdf.page_text(1)
+            .replace('\n', "")
+            .contains("T=First D=First"),
+        "{:?}",
+        pdf.page_text(1)
+    );
+    assert!(
+        pdf.page_text(2)
+            .replace('\n', "")
+            .contains("T=Second D=First"),
+        "{:?}",
+        pdf.page_text(2)
+    );
 }

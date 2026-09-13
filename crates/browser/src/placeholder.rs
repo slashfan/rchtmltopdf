@@ -29,8 +29,18 @@ use rchtmltopdf_core::settings::Pair;
 pub struct Context {
     /// The document as it was written on the command line, for `[webpage]`.
     pub webpage: String,
-    /// `--title`, for `[title]` and `[doctitle]`.
+    /// What `[doctitle]` prints: `--title`, or the first document's own title
+    /// when it was not given — the title the finished file carries either way.
+    /// The plan fills it from the command line; the fallback is not known
+    /// until the documents have been printed, so the conversion fills that in
+    /// (#110).
     pub title: String,
+    /// What `[title]` prints: **this** document's own `<title>`, which is not
+    /// the file's as soon as a conversion has two documents. Chromium writes
+    /// it into each printed part, so like a band document's height (D39) it is
+    /// a measurement the plan cannot make: empty here until the part has been
+    /// printed.
+    pub document_title: String,
     /// `--replace`, which defines placeholders of the user's own. A pair named
     /// after a built-in never shadows it, in a text band or in a query string
     /// alike (#111).
@@ -128,9 +138,13 @@ fn built_in(name: &str, context: &Context, numbers: &Numbers) -> Option<String> 
         "subsection" => numbers.subsection.clone(),
         "subsubsection" => numbers.subsubsection.clone(),
 
-        // --- from the command line ------------------------------------------
+        // --- from the command line and the documents --------------------------
         "webpage" => context.webpage.clone(),
-        "title" | "doctitle" => context.title.clone(),
+        // Two different questions, and wkhtmltopdf answers them differently
+        // (`pdfconverter.cc` lines 590-591): `[title]` is the page object's own
+        // title, `[doctitle]` the title of the document being produced.
+        "title" => context.document_title.clone(),
+        "doctitle" => context.title.clone(),
 
         // --- rendered here, not by the browser ---------------------------------
         "date" => context.clock.date(),
@@ -254,6 +268,7 @@ mod tests {
         Context {
             webpage: "https://example.com/invoice".into(),
             title: "Invoice 42".into(),
+            document_title: "The document's own title".into(),
             replacements: replacements.to_vec(),
             clock: clock(),
         }
@@ -307,7 +322,7 @@ mod tests {
     #[test]
     fn the_command_line_answers_the_rest() {
         assert_eq!(html("[webpage]"), "https://example.com/invoice");
-        assert_eq!(html("[title]"), "Invoice 42");
+        assert_eq!(html("[title]"), "The document&#39;s own title");
         assert_eq!(html("[doctitle]"), "Invoice 42");
         assert_eq!(html("[date]"), "2026-09-12");
         assert_eq!(html("[time]"), "14:05:09");
@@ -359,7 +374,7 @@ mod tests {
     #[test]
     fn substituted_values_are_escaped() {
         let context = Context {
-            title: "Tom & Jerry <b>".into(),
+            document_title: "Tom & Jerry <b>".into(),
             ..context(&[])
         };
         assert_eq!(
@@ -420,7 +435,7 @@ mod tests {
             "subsection=Section%202.1",
             "subsubsection=",
             "webpage=https%3A%2F%2Fexample.com%2Finvoice",
-            "title=Invoice%2042",
+            "title=The%20document%27s%20own%20title",
             "doctitle=Invoice%2042",
             "date=",
             "isodate=2026-09-12",
@@ -490,14 +505,32 @@ mod tests {
         );
     }
 
-    /// A title given to `--title` is not there by default, and an empty
+    /// A title nobody gave and no document carried is not there, and an empty
     /// expansion is better than the word "title" printed on every page.
     #[test]
     fn an_unset_title_expands_to_nothing() {
         let context = Context {
             title: String::new(),
+            document_title: String::new(),
             ..context(&[])
         };
         assert_eq!(expand("[title]", &context, &numbers()), "");
+        assert_eq!(expand("[doctitle]", &context, &numbers()), "");
+    }
+
+    /// **`[title]` is the document's own and `[doctitle]` the file's** (#110).
+    /// They part company as soon as a conversion has more than one document,
+    /// or a `--title` that is not any document's.
+    #[test]
+    fn title_is_the_documents_own_and_doctitle_the_files() {
+        let context = Context {
+            title: "What the file is called".into(),
+            document_title: "What this document is called".into(),
+            ..context(&[])
+        };
+        assert_eq!(
+            expand("[title] / [doctitle]", &context, &numbers()),
+            "What this document is called / What the file is called"
+        );
     }
 }

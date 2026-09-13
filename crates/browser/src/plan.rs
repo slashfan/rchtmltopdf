@@ -287,12 +287,15 @@ pub fn finish(global: &GlobalSettings, object: &ObjectSettings, document_url: &s
     }
 }
 
-/// What the bands are expanded against.
+/// What the bands are expanded against, as far as the command line goes.
 ///
-/// Everything here comes from the command line rather than from the document.
-/// `[title]` is `--title` and not the page's own `<title>`, which needs the
-/// document to have been loaded and is #29's business; `[webpage]` is the input
-/// as it was written, which is what wkhtmltopdf prints too.
+/// `[webpage]` is the input as it was written, which is what wkhtmltopdf prints
+/// too, and `[doctitle]` is `--title`. The two titles a document has to answer
+/// for itself are left empty here and filled in once it has been printed
+/// (#110): `[title]` is the document's own `<title>`, and `[doctitle]` falls
+/// back to the first document's when `--title` was not given. Neither can be
+/// known before the browser has loaded anything, which is why they are not
+/// decided here — the same rule a band document's height follows (D39).
 pub fn context(global: &GlobalSettings, object: &ObjectSettings, clock: Clock) -> Context {
     Context {
         webpage: object
@@ -301,6 +304,7 @@ pub fn context(global: &GlobalSettings, object: &ObjectSettings, clock: Clock) -
             .map(|input| input.as_written())
             .unwrap_or_default(),
         title: global.title.clone().unwrap_or_default(),
+        document_title: String::new(),
         replacements: object.replacements.clone(),
         clock,
     }

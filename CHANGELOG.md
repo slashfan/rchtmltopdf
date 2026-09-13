@@ -23,6 +23,13 @@ surface beyond that is understood on the command line and not yet acted on.
 
 ### Compatibility
 
+**`[title]` is the document's own `<title>` again** (#110, D46). It printed `--title`, which
+is `[doctitle]`'s answer, so the two were the same string on every page. Each document's
+band now names that document — with several documents, each page says its own — and
+`[doctitle]` names the file: `--title`, or the first document's title when it was not
+given, which is the title the file itself carries (#107). Found by running a Symfony
+application through knp-snappy against both binaries (#32).
+
 **A cover counts in `[page]` and `[topage]`** (#108, D45). Behind a one-page cover the
 first page of the document now prints 2, not 1, and the total counts the cover — which is
 what wkhtmltopdf prints, and what `--dump-outline` and the table of contents already said.

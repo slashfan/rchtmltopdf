@@ -767,6 +767,36 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             .any(|(index, _)| !plans[*index].finish.bands.is_empty())
         {
             let numbered = numbering::number(&shares, &items);
+
+            // `[title]` is the document's own `<title>` and `[doctitle]` the
+            // finished file's, and neither was known when the plan was made
+            // (#110). Chromium wrote each document's title into the part it
+            // printed, so they are read back off the parts: the file's is
+            // `--title`, or the first part that is not a table of contents —
+            // the same part the merge took its Info dictionary from.
+            let titles: Vec<String> = ordered
+                .iter()
+                .map(|(_, pdf)| Ok(rchtmltopdf_pdf::title(pdf)?.unwrap_or_default()))
+                .collect::<Result<_, ConvertError>>()?;
+            let file_title = match &settings.global.title {
+                Some(given) => given.clone(),
+                None => ordered
+                    .iter()
+                    .zip(&titles)
+                    .find(|((index, _), _)| !tables.contains(index))
+                    .map(|(_, title)| title.clone())
+                    .unwrap_or_default(),
+            };
+            let contexts: Vec<placeholder::Context> = ordered
+                .iter()
+                .zip(&titles)
+                .map(|((index, _), document_title)| placeholder::Context {
+                    title: file_title.clone(),
+                    document_title: document_title.clone(),
+                    ..plans[*index].context.clone()
+                })
+                .collect();
+
             let (left, right) = (
                 settings.global.page.margins.left.to_mm(),
                 settings.global.page.margins.right.to_mm(),
@@ -776,6 +806,7 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
                 .map(|(part, numbers)| {
                     let index = ordered[*part].0;
                     let plan = &plans[index];
+                    let context = &contexts[*part];
                     let bands = &plan.finish.bands;
                     // A band that is a document is framed with the page's
                     // numbers as its query string; a band of text is a row.
@@ -786,13 +817,13 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
                         Some(document) => band::frame(
                             &placeholder::with_query(
                                 document.url(),
-                                &placeholder::query(&plan.context, numbers),
+                                &placeholder::query(context, numbers),
                             ),
                             edge,
                             &settings.global.page,
                             measured,
                         ),
-                        None => band::row(band, edge, left, right, &plan.context, numbers),
+                        None => band::row(band, edge, left, right, context, numbers),
                     };
                     Sheet {
                         header: markup(
