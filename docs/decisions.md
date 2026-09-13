@@ -435,6 +435,18 @@ Ce que le dump numérote est la page du fichier, décalée. C'est aussi ce qu'un
 
 **Écarté.** Écrire l'annotation nous-mêmes sur la page de la table : il faudrait savoir où chaque ligne a été posée, ce que seul le navigateur sait. Viser le haut de la page plutôt que le titre : deux titres sur la même page deviennent le même lien. Planter des ancres `__WKANCHOR` comme wkhtmltopdf : elles ne servaient qu'à nommer une destination que nous savons désigner directement, et elles touchent au document.
 
+## D43 — API C `libwkhtmltox` : un « peut-être », pas une dette
+
+**Choix.** L'API C n'est pas construite, et ne l'est pas à une date. Elle reste possible — D18 a choisi une licence permissive en partie pour cela — mais elle n'appartient à aucun jalon : elle attend que quelqu'un en ait besoin. #45 sort du jalon V3 et porte l'étiquette `maybe`.
+
+**Pourquoi.** Le critère de réussite du projet est écrit dans le brief : des projets Symfony qui utilisent Snappy produisent leurs PDF habituels avec le nouveau binaire, sans modification. Snappy lance le binaire ; il ne lie rien. L'écosystème PHP entier passe par la ligne de commande, et c'est la ligne de commande que ce projet promet. Les consommateurs de `libwkhtmltox` que #45 nommait — les enrobages C# et Java — ne sont pas ceux que le projet cherche à servir.
+
+**Ce que ça coûterait de le faire quand même.** L'API C est *avec état* et pilotée par rappels, là où ce pipeline est asynchrone et en une passe ; et ses noms de réglages forment un **troisième** vocabulaire, après celui de la ligne de commande et le nôtre. Deux surfaces à tenir en accord pour un public que personne n'a encore réclamé, dans un projet qui tient déjà une table d'options à un binaire réel.
+
+**Ce que « peut-être » veut dire ici.** Pas un refus : rien dans l'architecture ne l'empêche, la séparation `core` / `browser` / `pdf` (D12, D20) reste ce qu'il faudrait pour l'exposer. La décision est de ne pas porter la dette d'une promesse tant que personne n'a dit en avoir besoin — c'est la même règle que #46 vient d'appliquer aux options : une échéance qu'on n'a pas l'intention de tenir est pire que pas d'échéance du tout.
+
+**Écarté.** La garder dans V3 : le jalon se serait fermé sur un point que personne n'avait décidé de faire. La marquer `wontfix` : c'est plus fort que ce qui est su, et la licence a été choisie pour laisser la porte ouverte.
+
 ---
 
 ## Conséquences transverses
