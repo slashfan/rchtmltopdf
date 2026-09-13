@@ -21,6 +21,14 @@ line that uses them.
 A table of contents is built, from the same headings as the outline. Most of the option
 surface beyond that is understood on the command line and not yet acted on.
 
+### Compatibility
+
+**A `toc` no longer names the file after itself** (#107). The merged file is named after
+the first document, as wkhtmltopdf named it, and the contents page this program writes is
+passed over the way wkhtmltopdf passed over its own: `toc doc.html` carries `doc.html`'s
+`<title>`, not "Table of Contents". Found by running a Symfony application through
+knp-snappy against both binaries (#32).
+
 ### Added
 
 **The table of contents** (#42, D41). `toc` on the command line generates one from the

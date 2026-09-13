@@ -407,6 +407,43 @@ fn a_table_of_contents_alone_still_converts() {
     assert_eq!(pdf.page_count(), 1, "{}", pdf.describe());
 }
 
+/// The file is named after the document, not after the contents page this
+/// program wrote. wkhtmltopdf passed over its table-of-contents objects when
+/// it picked the title, and a Snappy application that writes `toc` before the
+/// document expects the document's name in the reader's title bar, not
+/// "Table of Contents". Measured against wkhtmltopdf 0.12.6.1 (#107).
+#[test]
+fn the_table_does_not_name_the_document() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("contents-title");
+    let named =
+        fixture::document(CHAPTERS).replace("<title>conformance</title>", "<title>Named</title>");
+    assert!(
+        named.contains("<title>Named</title>"),
+        "the fixture's title moved"
+    );
+    let path = scratch.join("named.html");
+    std::fs::write(&path, named).expect("writable");
+    let path = path.display().to_string();
+
+    let pdf = convert(&["toc", &path]);
+    assert_eq!(
+        pdf.info("Title").as_deref(),
+        Some("Named"),
+        "{}",
+        pdf.describe()
+    );
+    // The contents page is still there, its heading and its own entry intact.
+    assert_eq!(
+        listed(&pdf, 1, "Table of Contents"),
+        2,
+        "{}",
+        pdf.page_text(1)
+    );
+}
+
 /// `--xsl-style-sheet` is accepted, warned about and ignored: the table is
 /// generated rather than transformed (D41), and the command line still
 /// converts rather than failing on it.
