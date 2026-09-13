@@ -201,8 +201,13 @@ fn a_replacement_does_not_shadow_a_built_in() {
     assert!(!text.contains("SHADOWED"), "{text:?}");
 }
 
-/// The three that name a heading, read from the outline (D36): the last
-/// `h1`, `h2` or `h3` at or before the page.
+/// The three that name a heading, read from the outline (D36): for each level
+/// the **first** heading that begins on the page, and a page that begins none
+/// keeps what the page before it had (D47).
+///
+/// `Alpha Two` is on page one and is never named: it is the second `h2` there.
+/// Page two names `Alpha One` for the same reason — it inherits page one's
+/// answer, not the last heading written before it.
 #[test]
 fn the_section_placeholders_name_the_heading_in_force() {
     let Some(_browser) = require_chromium() else {
@@ -213,6 +218,8 @@ fn the_section_placeholders_name_the_heading_in_force() {
         scratch.path(),
         "s.html",
         "<h1>Alpha</h1><h2>Alpha One</h2>\
+         <p>under one</p>\
+         <h2>Alpha Two</h2>\
          <div style=\"page-break-after:always\"></div>\
          <p>still alpha</p>\
          <div style=\"page-break-after:always\"></div>\
@@ -235,7 +242,7 @@ fn the_section_placeholders_name_the_heading_in_force() {
         flatten(1)
     );
     // A page with no heading of its own is still in the section that began
-    // before it.
+    // before it, and names what that page named.
     assert!(
         flatten(2).contains("in Alpha / Alpha One here"),
         "{}",
@@ -246,6 +253,16 @@ fn the_section_placeholders_name_the_heading_in_force() {
         "{}",
         flatten(3)
     );
+    // The second `h2` of page one is named on no page at all. `/ Alpha Two
+    // here` is a shape only the band produces; the heading in the body is
+    // three separate words.
+    for page in 1..=3 {
+        assert!(
+            !flatten(page).contains("/ Alpha Two here"),
+            "page {page}: {}",
+            flatten(page)
+        );
+    }
     // `--no-outline` kept the outline out of the file, and the band still had
     // its headings: the outline was generated for the band's sake.
     assert!(pdf.outline().is_empty());

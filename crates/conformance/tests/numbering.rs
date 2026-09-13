@@ -172,3 +172,44 @@ fn the_band_and_the_page_are_both_there() {
         "{text}"
     );
 }
+
+/// **A heading stays in force into the next document** (D47). wkhtmltopdf
+/// keeps one cache of headings for the whole output and never resets it at a
+/// document boundary, so a second document that brings an `h1` and nothing
+/// under it names its own `h1` and the first document's `h2`.
+///
+/// Read from `outline.cc` 0.12.6 rather than measured: the harness corpus has
+/// no multi-document case with headings (#32). It holds our own behaviour to
+/// the rule until one does.
+#[test]
+fn a_heading_stays_in_force_into_the_next_document() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("numbering-sections-across");
+    let first = fixture::write(
+        scratch.path(),
+        "first.html",
+        "<h1>Alpha</h1><h2>Alpha One</h2><p>body</p>",
+    );
+    let second = fixture::write(scratch.path(), "second.html", "<h1>Beta</h1><p>body</p>");
+
+    let pdf = convert(&[
+        "--footer-center",
+        "in [section] / [subsection] here",
+        &first.display().to_string(),
+        &second.display().to_string(),
+    ]);
+    assert_eq!(pdf.page_count(), 2, "{}", pdf.describe());
+    let flatten = |page: usize| pdf.page_text(page).replace('\n', "");
+    assert!(
+        flatten(1).contains("in Alpha / Alpha One here"),
+        "{}",
+        flatten(1)
+    );
+    assert!(
+        flatten(2).contains("in Beta / Alpha One here"),
+        "{}",
+        flatten(2)
+    );
+}

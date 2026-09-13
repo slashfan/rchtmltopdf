@@ -23,6 +23,14 @@ surface beyond that is understood on the command line and not yet acted on.
 
 ### Compatibility
 
+**`[section]`, `[subsection]` and `[subsubsection]` name the first heading on the page**
+(#109, D47). Where two headings of one level fall on the same page, the band now names the
+first, as wkhtmltopdf does; it named the last. A page that begins no heading of a level
+keeps what the page before it named, which is that same first heading — and keeps it across
+a document boundary, so a second document without an `h2` of its own still carries the
+previous one's. Found by running a Symfony application through knp-snappy against both
+binaries (#32).
+
 **`[title]` is the document's own `<title>` again** (#110, D46). It printed `--title`, which
 is `[doctitle]`'s answer, so the two were the same string on every page. Each document's
 band now names that document — with several documents, each page says its own — and
