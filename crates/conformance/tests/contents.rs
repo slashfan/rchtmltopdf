@@ -19,7 +19,7 @@
 
 use rchtmltopdf_conformance::binary::Run;
 use rchtmltopdf_conformance::fixture::{self, Scratch};
-use rchtmltopdf_conformance::inspect::{Pdf, Subpath};
+use rchtmltopdf_conformance::inspect::{Link, Pdf, Subpath};
 use rchtmltopdf_conformance::require_chromium;
 
 /// Two chapters over two pages, the first with a section under it.
@@ -326,6 +326,74 @@ fn edges(pdf: &Pdf) -> (f64, f64) {
         lefts.iter().copied().fold(f64::MAX, f64::min),
         lefts.iter().copied().fold(f64::MIN, f64::max),
     )
+}
+
+/// **An entry links to the heading it names** (#43, D42). The pages the links
+/// land on are the pages the entries print, and the table's own entry points
+/// at the table.
+#[test]
+fn the_entries_link_to_the_headings_they_name() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("contents-links");
+    let (chapters, _) = fixtures(&scratch);
+
+    let pdf = convert(&["toc", &chapters]);
+    assert_eq!(
+        pdf.links(1),
+        [
+            Link::Internal { page: 1 },
+            Link::Internal { page: 2 },
+            Link::Internal { page: 2 },
+            Link::Internal { page: 3 },
+        ],
+        "the table itself, then the chapter, its section and the next chapter"
+    );
+    // The same pages the entries print, so a reader following one arrives
+    // where the number said it would.
+    assert_eq!(numbers(&pdf, 1..=1), [1, 2, 2, 3]);
+    // And the links are on the table's page only.
+    assert!(pdf.links(2).is_empty() && pdf.links(3).is_empty());
+}
+
+/// `--disable-toc-links` writes the entries without a link, so there is no
+/// annotation at all rather than one that goes nowhere.
+#[test]
+fn disable_toc_links_leaves_the_entries_unlinked() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("contents-nolinks");
+    let (chapters, _) = fixtures(&scratch);
+
+    let pdf = convert(&["toc", "--disable-toc-links", &chapters]);
+    assert!(pdf.links(1).is_empty(), "{:?}", pdf.links(1));
+    // The list is untouched: it is the links that went.
+    assert_eq!(numbers(&pdf, 1..=1), [1, 2, 2, 3]);
+}
+
+/// **A table's links are not the document's links.** `--disable-internal-links`
+/// and `--disable-external-links` are about the links in the pages being
+/// converted; measured on wkhtmltopdf 0.12.6.1, neither touches the table of
+/// contents, which keeps its four either way (D42).
+#[test]
+fn the_link_options_of_a_document_do_not_reach_the_table() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("contents-policy");
+    let (chapters, _) = fixtures(&scratch);
+
+    for option in ["--disable-internal-links", "--disable-external-links"] {
+        let pdf = convert(&[option, "toc", &chapters]);
+        assert_eq!(
+            pdf.links(1).len(),
+            4,
+            "{option} should leave the table alone: {:?}",
+            pdf.links(1)
+        );
+    }
 }
 
 /// A table of contents on its own converts: there is nothing to list, and

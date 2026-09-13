@@ -230,6 +230,10 @@ pub fn merge(parts: &[Part<'_>]) -> Result<Merged, Error> {
         merged.trailer.set("Info", Object::Reference(info));
     }
 
+    // Now that every page of the finished file has a number, the table of
+    // contents can be pointed at the headings it lists (D42).
+    point_contents_at_headings(&mut merged)?;
+
     // The old catalogs, page trees, outlines and object streams are no longer
     // reachable from the trailer, and this is what removes them.
     merged.prune_objects();
@@ -250,7 +254,10 @@ fn alone(part: &Part<'_>) -> Result<Merged, Error> {
     if pages.is_empty() {
         return Err(fail("it has no pages"));
     }
-    if part.links.leaves_everything() {
+    // Before the shortcut below: a table of contents converted on its own is
+    // one document, and it still carries a link to its own heading (D42).
+    let pointed = point_contents_at_headings(&mut document)?;
+    if part.links.leaves_everything() && !pointed {
         return Ok(Merged {
             pdf: part.pdf.to_vec(),
             pages: vec![pages.len()],
@@ -462,6 +469,98 @@ fn named_destinations(document: &Document) -> BTreeMap<Vec<u8>, Object> {
     names
 }
 
+/// The scheme a generated table of contents points at a heading with.
+///
+/// **Why a URL and not a destination outright.** The entries are laid out by
+/// the browser, and only the browser knows where each line ended up on the
+/// page; a link annotation has to be the one it wrote for an `<a href>`. So
+/// the table names its target in the href — `rchtmltopdf-contents:PAGE,LEFT,TOP`,
+/// the page of the finished file and the place on it — Chromium writes that
+/// through verbatim as a `URI` action, and the merge turns each one into the
+/// destination it was always naming. Chromium
+/// preserves an unknown scheme rather than resolving it against the document,
+/// which a relative-looking marker would have been.
+pub const CONTENTS_SCHEME: &str = "rchtmltopdf-contents:";
+
+/// Turn every table-of-contents marker into the destination it names.
+///
+/// Runs once the whole file exists, because the page a marker names is a page
+/// of the *finished* file and nothing before the merge has one. A marker
+/// naming a page the file does not have loses its annotation rather than
+/// keeping a link that goes nowhere.
+fn point_contents_at_headings(document: &mut Document) -> Result<bool, Error> {
+    let pages: Vec<ObjectId> = document.page_iter().collect();
+    let mut any = false;
+    for page in &pages {
+        let annotations = page_annotations(document, *page);
+        if annotations.is_empty() {
+            continue;
+        }
+        let mut kept: Vec<Object> = Vec::with_capacity(annotations.len());
+        let mut changed = false;
+        for annotation in annotations {
+            let Some(target) = contents_target(document, annotation) else {
+                kept.push(Object::Reference(annotation));
+                continue;
+            };
+            changed = true;
+            let Some(id) = pages.get(target.page.saturating_sub(1)) else {
+                // The table names a page that is not there: drop the link
+                // rather than leave one that goes nowhere.
+                continue;
+            };
+            let destination = Object::Array(vec![
+                Object::Reference(*id),
+                Object::Name(b"XYZ".to_vec()),
+                Object::Real(target.left as f32),
+                Object::Real(target.top as f32),
+                Object::Integer(0),
+            ]);
+            let entry = document.get_dictionary_mut(annotation).map_err(fail)?;
+            entry.remove(b"A");
+            entry.set("Dest", destination);
+            kept.push(Object::Reference(annotation));
+        }
+        if changed {
+            any = true;
+            document
+                .get_dictionary_mut(*page)
+                .map_err(fail)?
+                .set("Annots", Object::Array(kept));
+        }
+    }
+    Ok(any)
+}
+
+/// Where a table-of-contents marker points, if this annotation is one.
+fn contents_target(document: &Document, annotation: ObjectId) -> Option<ContentsTarget> {
+    let uri = document
+        .get_dictionary(annotation)
+        .ok()?
+        .get(b"A")
+        .ok()
+        .and_then(|action| document.dereference(action).ok())
+        .and_then(|(_, action)| action.as_dict().ok().cloned())?
+        .get(b"URI")
+        .ok()
+        .and_then(|uri| uri.as_str().ok())
+        .map(|uri| String::from_utf8_lossy(uri).into_owned())?;
+    let written = uri.strip_prefix(CONTENTS_SCHEME)?;
+    let mut parts = written.split(',');
+    Some(ContentsTarget {
+        page: parts.next()?.parse().ok()?,
+        left: parts.next()?.parse().ok()?,
+        top: parts.next()?.parse().ok()?,
+    })
+}
+
+/// A page of the finished file, and the place on it a heading sits.
+struct ContentsTarget {
+    page: usize,
+    left: f64,
+    top: f64,
+}
+
 /// Judge every link on these pages: resolve what names an anchor, point a
 /// link to another document of the conversion into it, make a relative link
 /// relative again when asked, and drop the kinds that were switched off.
@@ -575,6 +674,16 @@ fn link_kind(
             else {
                 return Ok(Some(LinkKind::External));
             };
+
+            // A table of contents pointing at a heading. Neither of the user's
+            // two kinds: it is this program's own link, written by this
+            // program into a document it generated, so `--disable-external-
+            // links` is not about it and must not take it away (D42). It is
+            // turned into a destination once every page has a number, in
+            // [`point_contents_at_headings`].
+            if uri.starts_with(CONTENTS_SCHEME) {
+                return Ok(None);
+            }
 
             // A link to another document of this conversion is a link into the
             // file being written: wkhtmltopdf made it local, and so does this.
@@ -835,12 +944,20 @@ fn own_dictionary(
 // The outline, after printing.
 
 /// One entry of the outline, with what hangs under it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OutlineItem {
     pub title: String,
     /// The 1-based page in the file the entry points at. Nought when it points
     /// at nothing that could be resolved, which nothing Chromium writes does.
     pub page: usize,
+    /// Where on that page the heading sits, in points from the bottom-left.
+    ///
+    /// Chromium writes `Dest [page /XYZ left top 0]`, so this is the heading's
+    /// own position rather than the corner of the page — which is what lets a
+    /// table of contents point *at the heading* and not merely at the page it
+    /// is on (D42). Nought when the destination did not say.
+    pub left: f64,
+    pub top: f64,
     pub children: Vec<OutlineItem>,
 }
 
@@ -913,7 +1030,7 @@ fn read_and_cut(
 ) -> Result<Vec<OutlineItem>, Error> {
     let mut items = Vec::new();
     for id in siblings(document, first) {
-        let (title, page, child) = {
+        let (title, (page, left, top), child) = {
             let dictionary = document.get_dictionary(id).map_err(fail)?;
             (
                 dictionary
@@ -922,7 +1039,7 @@ fn read_and_cut(
                     .and_then(|title| title.as_str().ok())
                     .map(decode_text)
                     .unwrap_or_default(),
-                page_of(document, dictionary, page_numbers),
+                destination_of(document, dictionary, page_numbers),
                 dictionary.get(b"First").and_then(Object::as_reference).ok(),
             )
         };
@@ -938,30 +1055,46 @@ fn read_and_cut(
         items.push(OutlineItem {
             title,
             page,
+            left,
+            top,
             children,
         });
     }
     Ok(items)
 }
 
-/// The page an entry's destination names, as a 1-based number.
+/// Where an entry's destination points: the 1-based page, and the place on it.
 ///
-/// Chromium writes `Dest [page /XYZ x y 0]`, page as a reference. The array
-/// may itself be indirect, so it is dereferenced first.
-fn page_of(
+/// Chromium writes `Dest [page /XYZ left top 0]`, page as a reference. The
+/// array may itself be indirect, so it is dereferenced first. A destination
+/// that says nothing readable is nought throughout, which no destination
+/// Chromium writes does.
+fn destination_of(
     document: &Document,
     entry: &lopdf::Dictionary,
     page_numbers: &BTreeMap<ObjectId, usize>,
-) -> usize {
-    entry
+) -> (usize, f64, f64) {
+    let Some(array) = entry
         .get(b"Dest")
         .ok()
         .and_then(|dest| document.dereference(dest).ok())
-        .and_then(|(_, dest)| dest.as_array().ok())
-        .and_then(|array| array.first())
+        .and_then(|(_, dest)| dest.as_array().ok().cloned())
+    else {
+        return (0, 0.0, 0.0);
+    };
+    let page = array
+        .first()
         .and_then(|page| page.as_reference().ok())
         .and_then(|id| page_numbers.get(&id).copied())
-        .unwrap_or(0)
+        .unwrap_or(0);
+    // `[page /XYZ left top zoom]`: the two numbers after the name.
+    let number = |at: usize| {
+        array
+            .get(at)
+            .and_then(|value| value.as_float().ok())
+            .unwrap_or(0.0) as f64
+    };
+    (page, number(2), number(3))
 }
 
 /// A PDF text string as a reader shows it: Latin-1, or UTF-16 big endian when
@@ -1662,6 +1795,8 @@ mod tests {
         OutlineItem {
             title: title.into(),
             page,
+            left: 0.0,
+            top: 0.0,
             children,
         }
     }
