@@ -263,10 +263,14 @@ async fn scripting_can_be_disabled_and_the_ladder_still_completes() {
 ///
 /// Before this was checked, the ladder returned success in under a second for a
 /// URL that could not be reached, and printing would have produced a PDF of
-/// Chromium's own "site can't be reached" screen. D14 says a main document that
-/// fails to load is exit 1 with no PDF.
+/// Chromium's own "site can't be reached" screen.
+///
+/// The failure is **reported rather than raised** (D44): the load returns a
+/// report naming the document's own request, and what happens next is
+/// `--load-error-handling`'s to decide. What must not happen is a report that
+/// says nothing, which is what would have the error page printed.
 #[tokio::test]
-async fn an_unreachable_url_fails_rather_than_printing_an_error_page() {
+async fn an_unreachable_url_is_reported_as_the_documents_own_failure() {
     let _turn = one_at_a_time().await;
     let Some(browser) = launch().await else {
         return;
@@ -285,13 +289,15 @@ async fn an_unreachable_url_fails_rather_than_printing_an_error_page() {
         )
         .await;
 
-    match outcome {
-        Err(rchtmltopdf_browser::Error::Navigation { url, reason }) => {
-            assert!(url.contains("127.0.0.1:1"), "{url}");
-            assert!(!reason.is_empty(), "the reason should name the failure");
-        }
-        other => panic!("expected a navigation failure, got {other:?}"),
-    }
+    let report = outcome.expect("a navigation failure is a report, not an error");
+    let failed = report
+        .document
+        .expect("the document's own request should be named as failed");
+    assert!(failed.url.contains("127.0.0.1:1"), "{}", failed.url);
+    assert!(
+        !failed.error.name().is_empty(),
+        "the error should carry the name applications grep for"
+    );
 
     browser.close().await.unwrap();
 }

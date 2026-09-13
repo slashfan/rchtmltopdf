@@ -53,11 +53,14 @@ pub enum Error {
         after: Duration,
         stage: &'static str,
     },
-    /// The document could not be loaded.
+    /// The document could not be loaded, and that ends the conversion.
     ///
     /// Kept apart from every other failure because D14 turns on it: a main
-    /// document that fails to load is exit 1 with no PDF, not a PDF of the
-    /// browser's own error page.
+    /// document that fails to load under `abort` is exit 1 with no PDF, not a
+    /// PDF of the browser's own error page. Raised by whoever decided the
+    /// conversion is over — the `--load-error-handling` handler, or a band
+    /// document, which has no handler of its own — and never by the load
+    /// itself, which reports a failure and leaves the choice open (D44).
     Navigation {
         url: String,
         reason: String,

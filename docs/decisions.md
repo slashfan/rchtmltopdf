@@ -476,3 +476,15 @@ Le verdict dément la moitié de la crainte. Les 122 options étaient toutes pr�
 * les règles de *placement* sont au nombre de trois et pas d'une (D26), ce qui était le vrai risque et n'était pas celui qui avait été écrit ici.
 
 La table n'est plus une hypothèse. Elle ne peut plus dériver sans qu'un test échoue.
+
+## D44 — Un document qui n'est jamais arrivé : exit 1 sous les trois gestionnaires, et le fichier écrit sauf sous `abort`
+
+**Choix.** Une navigation qui échoue — hôte introuvable, connexion refusée — est désormais *rapportée* par `Page::load` dans `LoadReport.document`, avec `navigation_failed`, au lieu d'être levée. C'est `--load-error-handling` qui tranche ensuite : `abort` arrête la conversion et n'écrit rien, comme le veut D14 ; `skip` retire le document et écrit le fichier avec les autres ; `ignore` laisse une **page blanche** à sa place, de sorte que la page suivante garde son numéro. Dans les trois cas le code de sortie est 1, avec `Exit with code 1 due to network error: <Nom>`.
+
+**Pourquoi.** Mesuré sur wkhtmltopdf 0.12.6.1 par le harnais Symfony/Snappy du 2026-09-13 (#32, cas `exit/missing-document-*`), trois documents dont le deuxième pointe sur un hôte qui ne résout pas : sous `skip`, `doc.pdf` fait deux pages et sort en 1 ; sous `ignore`, il en fait **trois**, celle du milieu vide, et sort en 1 ; sous `abort`, rien n'est écrit et il sort en 1. Chez lui `multipageloader.cc` ligne 397 positionne `httpErrorCode` quel que soit le gestionnaire, et seul `abort` interrompt. Ici l'échec était levé depuis `render.rs` avant que le `match` de `convert.rs` ne soit atteint, donc `skip` et `ignore` se comportaient comme `abort` : exit 1 et aucun fichier. Les deux tests de conformité qui couvraient `skip` et `ignore` utilisaient un 404, qui produit un document, et ne voyaient pas le trou.
+
+**Ce que D14 disait, et ce qui en reste.** D14 — « échec du document principal : exit 1, pas de PDF » — reste vrai quand il ne reste rien à imprimer, et « `skip` et `ignore` sortent en 0 » reste vrai pour une **sous-ressource**. Pour un document, non : la phrase est amendée ici. Le PDF n'est plus refusé au seul motif qu'un document sur plusieurs a échoué.
+
+**Non mesuré, donc non touché.** Un document qui arrive *mal* — un 404 avec un corps — garde le comportement actuel : `ignore` imprime le corps du serveur et sort en 0. Le corpus du harnais n'a pas ce cas pour un document ; l'ajouter relève de #32, et le code de sortie suivra la mesure.
+
+**Écarté.** Imprimer la page telle que le navigateur l'a laissée sous `ignore` : Chromium y affiche son propre écran d'erreur, là où wkhtmltopdf laissait du vide. Retirer le document sous `ignore` comme sous `skip` : les deux options ne se distingueraient plus, et la page suivante changerait de numéro. Fabriquer la page blanche dans le crate `pdf` : elle doit avoir le format, les marges et les bandeaux de l'objet qu'elle remplace, que seule l'impression connaît — `about:blank` imprimé avec la même commande les a tous.

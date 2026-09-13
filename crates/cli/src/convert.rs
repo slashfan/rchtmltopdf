@@ -131,6 +131,11 @@ struct Printed {
     media: Vec<(usize, Vec<Failed>)>,
     /// Documents `--load-error-handling skip` dropped, as `could not load` lines.
     skipped: Vec<String>,
+    /// Documents that never arrived and were not aborted on: skipped, or
+    /// ignored and left as a blank page. The file is written and the exit code
+    /// is still 1 (D44), and the first of these names the error on the line
+    /// applications grep for.
+    failed: Vec<Failed>,
 }
 
 /// One object's band documents, resolved the way its input is.
@@ -474,6 +479,7 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             refused: Vec::new(),
             media: Vec::new(),
             skipped: Vec::new(),
+            failed: Vec::new(),
         };
         let mut browser: Option<Browser> = None;
         let mut running_with: Option<LaunchOptions> = None;
@@ -568,12 +574,12 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
                 .into());
             }
 
-            // The document itself. `--load-error-handling` decides, and only
-            // `ignore` prints anything at all: D14 is explicit that a main
-            // document which failed means exit 1 and no PDF.
+            // The document itself. `--load-error-handling` decides (D14, D44).
+            // Only `abort` ends the conversion; the other two write the file
+            // from what did load, and all three exit 1 when the document never
+            // arrived at all.
             if let Some(failed) = &report.document {
                 match object.load.on_document_error {
-                    LoadErrorHandling::Ignore => {}
                     LoadErrorHandling::Abort => {
                         return Err(rchtmltopdf_browser::Error::Navigation {
                             url: failed.url.clone(),
@@ -593,8 +599,28 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
                                 failed.url
                             );
                         }
+                        if report.navigation_failed {
+                            printed.failed.push(failed.clone());
+                        }
                         printed.skipped.push(line);
                         continue;
+                    }
+                    // `ignore` prints whatever did load, which for a 404 is the
+                    // server's own error page. Where nothing arrived there is
+                    // nothing to print, and wkhtmltopdf left a blank page in
+                    // the document's place rather than dropping it: the page
+                    // behind it keeps its number (D44).
+                    LoadErrorHandling::Ignore => {
+                        if report.navigation_failed {
+                            if settings.global.log_level.shows_warnings() {
+                                eprintln!(
+                                    "{PROGRAM}: warning: failed loading page {} (ignored)",
+                                    failed.url
+                                );
+                            }
+                            printed.failed.push(failed.clone());
+                            page.blank().await?;
+                        }
                     }
                 }
             }
@@ -900,6 +926,20 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
                 outcome = ExitCode::Failure;
             }
         }
+    }
+
+    // A document that never arrived is exit 1 under every handler, and only
+    // `abort` kept the file from being written (D44). Said once: a media
+    // failure under `abort` has already written the same line, and wkhtmltopdf
+    // prints it once too, naming one error.
+    if let Some(failed) = printed.failed.first()
+        && outcome == ExitCode::Success
+    {
+        println_stderr(&format!(
+            "Exit with code 1 due to network error: {}",
+            failed.error.name()
+        ));
+        outcome = ExitCode::Failure;
     }
 
     say(settings, "Done");

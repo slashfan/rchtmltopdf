@@ -6,7 +6,13 @@
 //! names are the ones an application greps for.
 
 use rchtmltopdf_conformance::binary::Run;
+use rchtmltopdf_conformance::fixture::{self, Scratch};
+use rchtmltopdf_conformance::inspect::Pdf;
 use rchtmltopdf_conformance::{require_chromium, server};
+
+/// A host nothing resolves: `.invalid` is reserved for exactly this (RFC 2606),
+/// so the failure is DNS rather than a connection nobody is listening for.
+const UNRESOLVABLE: &str = "http://conformance.invalid/missing.html";
 
 /// A page that is not there at all. A 404 is not a failure to Chromium — the
 /// bytes came back — and it was one to Qt, which is where the name comes from.
@@ -72,6 +78,104 @@ fn ignore_prints_the_document_that_did_load() {
     assert!(
         rchtmltopdf_conformance::binary::is_pdf(&outcome.stdout),
         "ignore should still produce a document"
+    );
+}
+
+/// **A document that never loaded at all is not the same as one that loaded
+/// badly** (D44). A 404 came back with a body the handlers can print; a host
+/// that does not resolve came back with nothing, and until now that ended the
+/// conversion whatever `--load-error-handling` said. Measured against
+/// wkhtmltopdf 0.12.6.1: under `skip` the file is written from the documents
+/// that did load, and the exit code is 1 all the same.
+#[test]
+fn skip_writes_the_other_documents_when_a_host_does_not_resolve() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("failures-skip-unresolvable");
+    let first = fixture::write(scratch.path(), "first.html", "<p>first</p>");
+    let third = fixture::write(scratch.path(), "third.html", "<p>third</p>");
+
+    let outcome = Run::new()
+        .arg("--load-error-handling")
+        .arg("skip")
+        .arg(first.display().to_string())
+        .arg(UNRESOLVABLE)
+        .arg(third.display().to_string())
+        .arg("-")
+        .output();
+
+    outcome.failed();
+    let pdf = Pdf::from_bytes(&outcome.stdout);
+    assert_eq!(pdf.page_count(), 2, "{}", pdf.describe());
+    assert!(pdf.text().contains("first"), "{:?}", pdf.text());
+    assert!(pdf.text().contains("third"), "{:?}", pdf.text());
+    assert!(
+        outcome.stderr.contains("(skipped)"),
+        "the skipped document should be named:\n{}",
+        outcome.stderr
+    );
+    assert!(
+        outcome
+            .stderr
+            .contains("Exit with code 1 due to network error: HostNotFoundError"),
+        "the line applications grep for:\n{}",
+        outcome.stderr
+    );
+}
+
+/// And under `ignore` it keeps its place: wkhtmltopdf prints a blank page for
+/// the document that did not load, so the one behind it is still page 3 of 3.
+#[test]
+fn ignore_leaves_a_blank_page_where_the_document_did_not_load() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("failures-ignore-unresolvable");
+    let first = fixture::write(scratch.path(), "first.html", "<p>first</p>");
+    let third = fixture::write(scratch.path(), "third.html", "<p>third</p>");
+
+    let outcome = Run::new()
+        .arg("--load-error-handling")
+        .arg("ignore")
+        .arg(first.display().to_string())
+        .arg(UNRESOLVABLE)
+        .arg(third.display().to_string())
+        .arg("-")
+        .output();
+
+    outcome.failed();
+    let pdf = Pdf::from_bytes(&outcome.stdout);
+    assert_eq!(pdf.page_count(), 3, "{}", pdf.describe());
+    assert!(pdf.page_text(1).contains("first"), "{:?}", pdf.page_text(1));
+    assert!(
+        pdf.page_text(2).trim().is_empty(),
+        "the document that did not load leaves a blank page, not an error page: {:?}",
+        pdf.page_text(2)
+    );
+    assert!(pdf.page_text(3).contains("third"), "{:?}", pdf.page_text(3));
+}
+
+/// `abort` is unchanged, and it is the default: nothing is written at all
+/// (D14), whatever else loaded.
+#[test]
+fn abort_writes_nothing_when_a_host_does_not_resolve() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("failures-abort-unresolvable");
+    let first = fixture::write(scratch.path(), "first.html", "<p>first</p>");
+
+    let outcome = Run::new()
+        .arg(first.display().to_string())
+        .arg(UNRESOLVABLE)
+        .arg("-")
+        .output();
+
+    outcome.failed();
+    assert!(
+        outcome.stdout.is_empty(),
+        "a document that failed under abort must leave no PDF (D14)"
     );
 }
 
