@@ -43,6 +43,25 @@ pub const POINTS_PER_INCH: f64 = 72.0;
 /// a size wrong by a whole millimetre, 2.83 pt, still fails.
 pub const TOLERANCE: f64 = 1.5;
 
+/// One subpath painted on a page: what it covers, and the colour it carries.
+///
+/// The bounds are the corners it was built from, mapped through the
+/// transformation matrix in force. See [`Pdf::painted_paths`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Subpath {
+    pub bounds: Rect,
+    pub fill: [f64; 3],
+}
+
+impl Subpath {
+    /// True when this was filled with the given colour, within the rounding a
+    /// colour makes on its way through a content stream.
+    pub fn is_about(self, red: f64, green: f64, blue: f64) -> bool {
+        let close = |left: f64, right: f64| (left - right).abs() <= 0.01;
+        close(self.fill[0], red) && close(self.fill[1], green) && close(self.fill[2], blue)
+    }
+}
+
 /// A rectangle in PDF user space, in points.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rect {
@@ -477,6 +496,104 @@ impl Pdf {
         painted
     }
 
+    /// Every subpath painted on a 1-based page: where it lies, and the colour
+    /// it was filled with.
+    ///
+    /// **Why this exists next to [`painted`].** That one reads `re`, the
+    /// rectangle operator, which is what a background or a block is. A great
+    /// deal of what a browser draws is not an `re` at all. A **dashed border**
+    /// is the case that forced this: Chromium emits each dash as a four-point
+    /// subpath — `m`, then three `l` — and fills the run of them with a single
+    /// `f` at the end. A test looking for rectangles found the page background
+    /// and nothing else, and a `--disable-dotted-lines` that did nothing would
+    /// have passed it.
+    ///
+    /// Only what is actually painted is reported: a path ended by `n` is a
+    /// clipping path, not ink, and every page here opens with one. Curve
+    /// operators contribute their endpoint, which is enough to bound a path
+    /// and wrong for a curve that bulges outside its endpoints — no test here
+    /// measures one.
+    ///
+    /// [`painted`]: Pdf::painted
+    pub fn painted_paths(&self, page: usize) -> Vec<Subpath> {
+        let content = self
+            .document
+            .get_and_decode_page_content(self.page_id(page))
+            .expect("page content should decode");
+
+        let mut done: Vec<Subpath> = Vec::new();
+        let mut pending: Vec<Vec<(f64, f64)>> = Vec::new();
+        let mut state = State::default();
+        let mut saved: Vec<State> = Vec::new();
+
+        for operation in &content.operations {
+            let operands = numbers(&operation.operands);
+            match operation.operator.as_str() {
+                "q" => saved.push(state),
+                "Q" => state = saved.pop().unwrap_or_default(),
+                "cm" => {
+                    if let Some(matrix) = Matrix::from_operands(&operation.operands) {
+                        state.ctm = matrix.then(state.ctm);
+                    }
+                }
+                "g" => {
+                    if let [grey] = operands[..] {
+                        state.fill = [grey, grey, grey];
+                    }
+                }
+                "rg" => {
+                    if let [red, green, blue] = operands[..] {
+                        state.fill = [red, green, blue];
+                    }
+                }
+                "k" => {
+                    if let [cyan, magenta, yellow, black] = operands[..] {
+                        let channel = |ink: f64| (1.0 - ink) * (1.0 - black);
+                        state.fill = [channel(cyan), channel(magenta), channel(yellow)];
+                    }
+                }
+                // A new subpath begins, whatever the last one was doing.
+                "m" => {
+                    if let [x, y] = operands[..] {
+                        pending.push(vec![(x, y)]);
+                    }
+                }
+                // Straight and curved segments alike extend the current one.
+                "l" | "c" | "v" | "y" => {
+                    if let (Some(current), [.., x, y]) = (pending.last_mut(), &operands[..]) {
+                        current.push((*x, *y));
+                    }
+                }
+                // A rectangle is a subpath too, and closed as it stands.
+                "re" => {
+                    if let [x, y, width, height] = operands[..] {
+                        pending.push(vec![
+                            (x, y),
+                            (x + width, y),
+                            (x + width, y + height),
+                            (x, y + height),
+                        ]);
+                    }
+                }
+                // Painted, one way or another: the path becomes ink.
+                "f" | "F" | "f*" | "B" | "B*" | "b" | "b*" | "S" | "s" => {
+                    for points in pending.drain(..) {
+                        if let Some(bounds) = state.ctm.map_points(&points) {
+                            done.push(Subpath {
+                                bounds,
+                                fill: state.fill,
+                            });
+                        }
+                    }
+                }
+                // Not painted: a clipping path, which every page opens with.
+                "n" => pending.clear(),
+                _ => {}
+            }
+        }
+        done
+    }
+
     /// The largest painted rectangle on a page, which is the one a fixture uses
     /// to mark out its content area.
     pub fn largest_painted_box(&self, page: usize) -> Rect {
@@ -595,6 +712,25 @@ impl Matrix {
             self.a * x + self.c * y + self.e,
             self.b * x + self.d * y + self.f,
         )
+    }
+
+    /// The box a run of points covers, every one of them mapped first.
+    ///
+    /// `None` for a subpath with no points, which a stream can produce with a
+    /// paint operator and nothing to paint.
+    fn map_points(self, points: &[(f64, f64)]) -> Option<Rect> {
+        if points.is_empty() {
+            return None;
+        }
+        let mapped: Vec<(f64, f64)> = points.iter().map(|(x, y)| self.point(*x, *y)).collect();
+        let xs = mapped.iter().map(|(x, _)| *x);
+        let ys = mapped.iter().map(|(_, y)| *y);
+        Some(Rect {
+            left: xs.clone().fold(f64::INFINITY, f64::min),
+            bottom: ys.clone().fold(f64::INFINITY, f64::min),
+            right: xs.fold(f64::NEG_INFINITY, f64::max),
+            top: ys.fold(f64::NEG_INFINITY, f64::max),
+        })
     }
 
     /// Map all four corners, not two. A matrix may flip or rotate, and taking

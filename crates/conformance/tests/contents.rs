@@ -11,19 +11,15 @@
 //! its lines are read as text; the heading at the top of it is read off the
 //! outline, which Chromium takes from the DOM rather than from the glyphs.
 //!
-//! **Two options are not asserted here**, and deliberately.
-//! `--toc-level-indentation` and `--disable-dotted-lines` are a `padding-left`
-//! and a `border-bottom` in the generated stylesheet, and what would be
-//! measured is whether Chromium honours CSS. The rule is a *stroked* dashed
-//! path — `inspect` reads filled rectangles and text, not strokes, so there is
-//! no instrument for it here that would not be a proxy. That the options reach
-//! the stylesheet where the default one carried them is held by the unit tests
-//! in `cli/src/toc.rs`, and that the stylesheet reaches the browser is held by
-//! every test below.
+//! **The two CSS options are measured on the rule under each entry.** It is
+//! not a rectangle: Chromium draws a dashed border as a run of four-point
+//! subpaths, filled in one go, which is why `inspect::painted_paths` exists.
+//! Where that rule starts is where its entry starts, so the indentation is
+//! read off it, and turning the dashes off leaves none of them behind.
 
 use rchtmltopdf_conformance::binary::Run;
 use rchtmltopdf_conformance::fixture::{self, Scratch};
-use rchtmltopdf_conformance::inspect::Pdf;
+use rchtmltopdf_conformance::inspect::{Pdf, Subpath};
 use rchtmltopdf_conformance::require_chromium;
 
 /// Two chapters over two pages, the first with a section under it.
@@ -243,6 +239,93 @@ fn the_header_text_names_the_heading() {
         "the default should be gone: {titles:?}"
     );
     assert_eq!(listed(&pdf, 1, "Sommaire"), 2, "{}", pdf.page_text(1));
+}
+
+/// The dashes of the rule drawn under each entry, in the grey the default
+/// stylesheet asks for — `rgb(200,200,200)`, which is 0.7843 per channel.
+///
+/// Each dash is a subpath of its own, so there are many per entry.
+fn dashes(pdf: &Pdf, page: usize) -> Vec<Subpath> {
+    pdf.painted_paths(page)
+        .into_iter()
+        .filter(|path| path.is_about(0.7843, 0.7843, 0.7843))
+        .collect()
+}
+
+/// `--disable-dotted-lines` takes the rule out from under every entry.
+#[test]
+fn the_dotted_lines_can_be_turned_off() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("contents-dotted");
+    let (chapters, _) = fixtures(&scratch);
+
+    let dotted = convert(&["toc", &chapters]);
+    assert!(
+        dashes(&dotted, 1).len() > 20,
+        "four entries of dashes: {}",
+        dashes(&dotted, 1).len()
+    );
+
+    let plain = convert(&["toc", "--disable-dotted-lines", &chapters]);
+    assert_eq!(dashes(&plain, 1).len(), 0, "none should be left");
+    // The entries are still there: it is the rule that went, not the list.
+    assert_eq!(numbers(&plain, 1..=1), [1, 2, 2, 3]);
+}
+
+/// `--toc-level-indentation` moves each level further in, and only the deeper
+/// ones: the rule under an entry is the entry's own box, so where it starts is
+/// where the entry starts.
+#[test]
+fn the_indentation_moves_the_deeper_entries() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("contents-indent");
+    let (chapters, _) = fixtures(&scratch);
+
+    let narrow = convert(&["toc", "--toc-level-indentation", "1em", &chapters]);
+    let wide = convert(&["toc", "--toc-level-indentation", "6em", &chapters]);
+    let (shallow_narrow, deep_narrow) = edges(&narrow);
+    let (shallow_wide, deep_wide) = edges(&wide);
+
+    assert!(
+        deep_narrow > shallow_narrow + 1.0,
+        "a section is already indented under its chapter: {shallow_narrow} then {deep_narrow}"
+    );
+    assert!(
+        deep_wide > deep_narrow + 10.0,
+        "and a wider setting moves it further: {deep_narrow} then {deep_wide}"
+    );
+    assert!(
+        (shallow_wide - shallow_narrow).abs() <= 1.0,
+        "while the chapter above it stays put: {shallow_narrow} then {shallow_wide}"
+    );
+}
+
+/// Where the shallowest and the deepest entry of a table of contents begin, in
+/// points from the left edge of the page.
+///
+/// A rule is a row of dashes across the page, so the entry's own left edge is
+/// the leftmost dash *of its row* — the rightmost dash of any row is near the
+/// page's other side and says nothing about indentation. The rows are found by
+/// the height the dashes sit at.
+fn edges(pdf: &Pdf) -> (f64, f64) {
+    let mut rows: Vec<(i64, f64)> = Vec::new();
+    for dash in dashes(pdf, 1) {
+        let row = (dash.bounds.bottom * 10.0).round() as i64;
+        match rows.iter_mut().find(|(at, _)| *at == row) {
+            Some((_, left)) => *left = left.min(dash.bounds.left),
+            None => rows.push((row, dash.bounds.left)),
+        }
+    }
+    assert!(rows.len() >= 2, "the table should have rules at two levels");
+    let lefts: Vec<f64> = rows.iter().map(|(_, left)| *left).collect();
+    (
+        lefts.iter().copied().fold(f64::MAX, f64::min),
+        lefts.iter().copied().fold(f64::MIN, f64::max),
+    )
 }
 
 /// A table of contents on its own converts: there is nothing to list, and
