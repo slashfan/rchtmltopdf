@@ -42,6 +42,16 @@ fn fixtures(scratch: &Scratch) -> (String, String) {
     )
 }
 
+/// Every `page` attribute of a dump, in the order it was written.
+fn pages(dump: &std::path::Path) -> Vec<i64> {
+    let xml = std::fs::read_to_string(dump).expect("the dump should be written");
+    xml.split("page=\"")
+        .skip(1)
+        .filter_map(|rest| rest.split('"').next())
+        .map(|page| page.parse().expect("a page attribute should be a number"))
+        .collect()
+}
+
 fn convert(args: &[&str]) -> Pdf {
     let outcome = Run::new().args(args.iter().copied()).arg("-").output();
     outcome.succeeded();
@@ -216,6 +226,65 @@ fn dump_outline_writes_wkhtmltopdfs_xml() {
     assert!(pdf.outline().is_empty());
     let xml = std::fs::read_to_string(&quiet).expect("the dump should be written");
     assert!(xml.contains("Chapter Two"), "{xml}");
+}
+
+/// **`--page-offset` shifts what the dump says, and a cover still counts in
+/// it** (#37, D40).
+///
+/// Measured on wkhtmltopdf 0.12.6.1: the same two documents under
+/// `--page-offset 10` turn `1 1 2 3` into `11 11 12 13`, and behind a one-page
+/// cover the first heading is page 2 in the dump while the footer on that same
+/// page prints 1. So this number is the page of the file plus the offset, and
+/// not the one a band prints.
+#[test]
+fn the_dump_carries_the_page_offset_and_counts_a_cover() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("outline-dump-offset");
+    let (chapters, appendix) = fixtures(&scratch);
+
+    let shifted = scratch.join("shifted.xml");
+    convert(&[
+        "--dump-outline",
+        &shifted.display().to_string(),
+        "--page-offset",
+        "10",
+        &chapters,
+        &appendix,
+    ]);
+    assert_eq!(
+        pages(&shifted),
+        [11, 11, 11, 12, 12, 13],
+        "the offset reaches every entry: {}",
+        std::fs::read_to_string(&shifted).unwrap_or_default()
+    );
+
+    // The offset is the one written on the document the entry came from. This
+    // is the deliberate divergence: wkhtmltopdf applies the last offset written
+    // on the command line to every entry, whichever object it belongs to (D40).
+    let apart = scratch.join("apart.xml");
+    convert(&[
+        "--dump-outline",
+        &apart.display().to_string(),
+        &chapters,
+        &appendix,
+        "--page-offset",
+        "100",
+    ]);
+    assert_eq!(pages(&apart), [1, 1, 1, 2, 2, 103]);
+
+    // A cover is not counted by `[page]` and is a page of the file all the
+    // same, so the heading after it moves up by one.
+    let behind = scratch.join("behind.xml");
+    convert(&[
+        "--dump-outline",
+        &behind.display().to_string(),
+        "cover",
+        &appendix,
+        &chapters,
+    ]);
+    assert_eq!(pages(&behind), [2, 2, 2, 3, 3]);
 }
 
 /// A heading's title comes through as text: markup gone, entities resolved,

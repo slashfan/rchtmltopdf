@@ -392,6 +392,21 @@ L'asymétrie compte aussi. Ne pas l'intégrer laisse les deux options ouvertes �
 
 **Écarté.** Imprimer le document du bandeau lui-même, une fois par page, comme wkhtmltopdf le chargeait une fois par page : N navigations et N impressions au lieu d'une. Inliner le HTML du document dans la feuille : `document.location.search` est alors celui de la feuille et le script du manuel ne trouve rien, et les ressources relatives sont perdues. Reproduire la superposition des bandeaux texte et HTML de wkhtmltopdf quand les deux sont écrits sur le même objet : le document remplace le texte.
 
+## D40 — `--dump-outline` : la page du fichier plus le décalage du document, la couverture comptée
+
+**Choix.** L'attribut `page` du XML de `--dump-outline` n'est pas `[page]`. C'est la page **du fichier** — la couverture en est une — à laquelle s'ajoute le `--page-offset` **du document dont l'entrée provient**. `numbering::number` répond pour les bandeaux, `numbering::dump_page` pour le dump : c'est la séparation que #37 annonçait, la fonction unique de V1 ne pouvant plus répondre aux deux.
+
+**Pourquoi.** D36 laissait la question ouverte — page physique ou page affichée — faute de `--page-offset`. Elle est tranchée par la mesure, sur wkhtmltopdf 0.12.6.1 dans `debian:bookworm-slim`, la même image que la capture de `--extended-help` :
+
+* `--page-offset 10` sur deux documents fait passer les `page` du dump de `0 1 1 2 2 3` à `10 11 11 12 12 13` : le décalage traverse le dump, qui n'est donc pas la page physique seule ;
+* `cover c.html a.html` écrit `page="2"` pour le premier titre de `a.html`, alors que le pied de page de cette même page imprime `1` : la couverture compte dans le dump et pas dans `[page]`. Le dump n'est donc pas non plus le numéro affiché.
+
+Ce que le dump numérote est la page du fichier, décalée. C'est aussi ce qu'un consommateur en fait : le XML sert à construire une table des matières hors du programme, et le numéro qu'elle imprime doit être celui que le lecteur voit sur la page.
+
+**Écart assumé.** Avec des décalages différents par document, wkhtmltopdf applique à **toutes** les entrées le **dernier `--page-offset` écrit sur la ligne de commande**, quel que soit l'objet auquel il se rattache : `--page-offset 100 a.html --page-offset 5 b.html` décale tout de 5 — le 5 se rattache à `a.html`, et `b.html`, qui hérite du 100, est décalé de 5 quand même — et `--page-offset 7 a.html b.html --page-offset 0` ne décale rien. Ce n'est pas une règle, c'est un décalage unique écrasé à chaque occurrence et lu après coup. Nous appliquons à chaque entrée le décalage de son document. Les deux répondent la même chose dans le cas courant — un seul `--page-offset`, écrit en tête, que tous les objets héritent — et le nôtre est celui qui s'accorde avec le pied de page dans les autres.
+
+**Écarté.** Reproduire le dernier décalage écrit, pour l'écart ci-dessus : personne n'en dépend délibérément, et il contredit le numéro imprimé. Reproduire aussi le débordement de wkhtmltopdf sur un décalage négatif — il calcule en `unsigned`, donc tout nombre qui passerait sous zéro déborde, et `--page-offset -3` lui fait écrire `4294967294` là où nous écrivons `-2` — : nous écrivons le nombre négatif. Faire du dump le numéro affiché, couverture non comptée : mesure contraire. Écrire les éléments `item` sans titre que wkhtmltopdf ajoute autour des titres de chaque document, et dont le `page` vaut le début du document moins un : c'est la forme de l'outline (#40), pas la numérotation, et rien ici ne la change.
+
 ---
 
 ## Conséquences transverses

@@ -55,7 +55,10 @@ output, `[sitepage]` and `[sitepages]` within the document the page came from, a
 it is page one and `[topage]` leaves it out.
 
 **`--page-offset`** (#37) shifts `[page]`, `[topage]` and `[frompage]` on the document it
-was written on, and on every document when written before the first input.
+was written on, and on every document when written before the first input. It shifts the
+`page` attribute of `--dump-outline` too, by the offset of the document the entry came from
+— where wkhtmltopdf applies the last offset written on the command line to every entry
+(D40).
 
 **`[section]`, `[subsection]` and `[subsubsection]`** name the heading in force on the page:
 the last `h1`, `h2` or `h3` at or before it, within the same document, read from the
@@ -94,7 +97,8 @@ and prunes them from the file rather than leaving titles in the bytes that no re
 
 `--dump-outline <file>` writes it in the XML wkhtmltopdf's scripts read: an `outline` root in
 the `http://wkhtmltopdf.org/outline` namespace, `item` elements nested as the headings were,
-each with `title`, `page`, `link` and `backLink`. `page` is the 1-based page in the file.
+each with `title`, `page`, `link` and `backLink`. `page` is the 1-based page in the file
+shifted by `--page-offset` (#37, D40) — a cover counts as a page here, unlike in `[page]`.
 `link` and `backLink` are written empty: they named anchors wkhtmltopdf planted so a table of
 contents could point at a section and back, and nothing plants those yet (#43). The dump is
 written even with `--no-outline`, and describes the outline after `--outline-depth`.
@@ -103,9 +107,8 @@ written even with `--no-outline`, and describes the outline after `--outline-dep
 wkhtmltopdf documents: it has no headers and footers — the bands given as defaults reach
 every page and not the cover, while a band written after `cover` is the cover's own — and
 it does not count, so the first page after it is page one and `[topage]` leaves it out.
-Leaving it out of the outline waits for the outline (#40); `--page-offset` waits for
-numbering across documents (#39), because a Chromium template cannot add to the number it
-is handed.
+It is left out of the outline (#40), and it is a page of the file like any other to
+`--dump-outline`, which counts it where `[page]` does not (D40).
 
 ### Added
 
