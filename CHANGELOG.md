@@ -23,6 +23,13 @@ surface beyond that is understood on the command line and not yet acted on.
 
 ### Compatibility
 
+**A cover counts in `[page]` and `[topage]`** (#108, D45). Behind a one-page cover the
+first page of the document now prints 2, not 1, and the total counts the cover — which is
+what wkhtmltopdf prints, and what `--dump-outline` and the table of contents already said.
+A cover still gets no header or footer of its own, so the number it carries is printed
+nowhere. Found by running a Symfony application through knp-snappy against both binaries
+(#32).
+
 **`--load-error-handling skip` and `ignore` survive a document that never loaded**
 (#113, D44). A host that does not resolve ended the conversion whatever the option said —
 exit 1 and no file — because the failure was raised before the handler saw it. Now the
@@ -131,8 +138,8 @@ is fitted into it. The document reads the disk under the same rule as the input.
 
 **Page numbers across documents** (#39). `[page]` and `[topage]` count across the whole
 output, `[sitepage]` and `[sitepages]` within the document the page came from, and
-`[frompage]` is where that document began. A cover counts in neither frame: the page after
-it is page one and `[topage]` leaves it out.
+`[frompage]` is where that document began. A cover's pages count like any other (D45); what
+a cover has not got is a band to print them in.
 
 **`--page-offset`** (#37) shifts `[page]`, `[topage]` and `[frompage]` on the document it
 was written on, and on every document when written before the first input. It shifts the
@@ -178,7 +185,8 @@ and prunes them from the file rather than leaving titles in the bytes that no re
 `--dump-outline <file>` writes it in the XML wkhtmltopdf's scripts read: an `outline` root in
 the `http://wkhtmltopdf.org/outline` namespace, `item` elements nested as the headings were,
 each with `title`, `page`, `link` and `backLink`. `page` is the 1-based page in the file
-shifted by `--page-offset` (#37, D40) — a cover counts as a page here, unlike in `[page]`.
+shifted by `--page-offset` (#37, D40), and a cover is one of those pages — as it is in
+`[page]` since D45.
 `link` and `backLink` are written empty: they named anchors wkhtmltopdf planted so a table of
 contents could point at a section and back, and nothing plants those yet (#43). The dump is
 written even with `--no-outline`, and describes the outline after `--outline-depth`.

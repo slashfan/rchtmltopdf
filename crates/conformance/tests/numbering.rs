@@ -89,10 +89,11 @@ fn sitepage_sitepages_and_frompage_count_within_the_document() {
     }
 }
 
-/// A cover counts in neither frame: the page after it is page one and
-/// `[topage]` leaves it out. Numbering keeps running into the next document.
+/// A cover counts like any other page (D45): the page behind it is page two,
+/// `[topage]` includes it, and the numbering keeps running into the next
+/// document. What the cover does not get is the band itself.
 #[test]
-fn a_cover_is_not_counted_and_the_count_runs_past_it() {
+fn a_cover_counts_and_the_numbering_runs_through_it() {
     let Some(_browser) = require_chromium() else {
         return;
     };
@@ -107,7 +108,7 @@ fn a_cover_is_not_counted_and_the_count_runs_past_it() {
         compact(&pdf, 1)
     );
     for page in 2..=6 {
-        let expected = format!("P{}/5", page - 1);
+        let expected = format!("P{page}/6");
         assert!(
             compact(&pdf, page).contains(&expected),
             "page {page}: {}",

@@ -24,9 +24,9 @@ fn fixtures(scratch: &Scratch) -> (String, String) {
 }
 
 /// A footer given as a default reaches the pages and not the cover, and the
-/// numbering starts after the cover rather than on it.
+/// cover's page counts all the same (D45): the page behind it is page two.
 #[test]
-fn a_cover_has_no_bands_and_is_not_counted() {
+fn a_cover_has_no_bands_and_counts_all_the_same() {
     let Some(_browser) = require_chromium() else {
         return;
     };
@@ -48,11 +48,12 @@ fn a_cover_has_no_bands_and_is_not_counted() {
     let first = pdf.page_text(1);
     assert!(first.contains("COVERTEXT"), "{first}");
     assert!(!first.contains("P1"), "the cover got the footer: {first}");
-    // Page one is the first page after the cover, and the total leaves the
-    // cover out. Whitespace is stripped because each number is its own text
-    // run in the band, and extraction puts its own spacing between runs.
-    assert!(numbers(&pdf, 2).contains("P1/2"), "{}", pdf.page_text(2));
-    assert!(numbers(&pdf, 3).contains("P2/2"), "{}", pdf.page_text(3));
+    // The cover is page one, so the first page behind it is page two, and the
+    // total counts all three. Whitespace is stripped because each number is
+    // its own text run in the band, and extraction puts its own spacing
+    // between runs.
+    assert!(numbers(&pdf, 2).contains("P2/3"), "{}", pdf.page_text(2));
+    assert!(numbers(&pdf, 3).contains("P3/3"), "{}", pdf.page_text(3));
 }
 
 /// A page's text with every space removed.

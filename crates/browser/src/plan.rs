@@ -232,9 +232,6 @@ pub struct Bands {
 /// `page_offset`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Numbering {
-    /// Whether the pages count towards `[page]` and `[topage]`: a cover's do
-    /// not.
-    pub counted: bool,
     /// `--page-offset`.
     pub page_offset: i64,
 }
@@ -283,7 +280,6 @@ pub fn finish(global: &GlobalSettings, object: &ObjectSettings, document_url: &s
             footer: object.footer.clone(),
         },
         numbering: Numbering {
-            counted: object.kind != ObjectKind::Cover,
             page_offset: object.page_offset,
         },
         links: object.links.clone(),

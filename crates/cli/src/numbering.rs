@@ -3,21 +3,25 @@
 //! wkhtmltopdf's placeholders count in two frames at once. `[page]` and
 //! `[topage]` count across the whole output; `[sitepage]` and `[sitepages]`
 //! count within the document the page came from; `[frompage]` is where that
-//! document started in the first frame. A cover counts in neither: the page
-//! after it is page one, and `[topage]` leaves it out. `--page-offset` shifts
-//! the first frame for the document it was written on.
+//! document started in the first frame. A cover counts like anything else —
+//! the page behind it is page two (D45) — it is only the band it does not
+//! get. `--page-offset` shifts the first frame for the document it was
+//! written on.
 //!
 //! None of this can be decided before printing, because nobody knows how many
 //! pages a document has until it has been laid out (#39). So this runs after
 //! the merge, on the page counts the merge reports, and feeds the band sheets.
 //!
-//! # Two numbers, not one
+//! # Two questions, one number
 //!
 //! [`number`] answers what a band prints. [`dump_page`] answers what
-//! `--dump-outline` writes, and the two part company as soon as a cover or an
-//! offset is on the command line: the dump numbers a page of the file, which a
-//! cover is one of, and adds the offset of the document the page belongs to.
-//! Both were measured on wkhtmltopdf 0.12.6.1 (D40).
+//! `--dump-outline` writes. D40 had them parting company over a cover, which
+//! the dump counted and the band did not; measuring wkhtmltopdf 0.12.6.1
+//! again showed the band counting it too (D45), and the number both answer
+//! with is now the page of the file plus the offset of the document it came
+//! from. They stay two functions because they are two questions — #44 has the
+//! cross-document offset still to settle, and the answers may part again —
+//! but a case where they differ today would be a bug in one of them.
 //!
 //! # Sections
 //!
@@ -35,8 +39,6 @@ use rchtmltopdf_pdf::OutlineItem;
 pub struct Part {
     /// How many pages it printed.
     pub pages: usize,
-    /// Whether its pages count: a cover's do not.
-    pub counted: bool,
     /// `--page-offset`, as written on this document.
     pub page_offset: i64,
 }
@@ -44,25 +46,17 @@ pub struct Part {
 /// The numbers for every page of the output, in order, each with the index of
 /// the part it belongs to.
 pub fn number(parts: &[Part], outline: &[OutlineItem]) -> Vec<(usize, Numbers)> {
-    let total: i64 = parts
-        .iter()
-        .filter(|part| part.counted)
-        .map(|part| part.pages as i64)
-        .sum();
+    let total: i64 = parts.iter().map(|part| part.pages as i64).sum();
     let headings = flatten(outline);
 
     let mut out = Vec::new();
-    let mut running = 0i64;
     let mut physical = 0usize;
     for (index, part) in parts.iter().enumerate() {
         let first_physical = physical + 1;
         let last_physical = physical + part.pages;
-        let from = running + 1;
+        let from = first_physical as i64;
         for within in 1..=part.pages {
             physical += 1;
-            if part.counted {
-                running += 1;
-            }
             let heading = |level: usize| -> String {
                 headings
                     .iter()
@@ -77,7 +71,7 @@ pub fn number(parts: &[Part], outline: &[OutlineItem]) -> Vec<(usize, Numbers)> 
             out.push((
                 index,
                 Numbers {
-                    page: part.page_offset + running,
+                    page: part.page_offset + physical as i64,
                     topage: part.page_offset + total,
                     frompage: part.page_offset + from,
                     sitepage: within as i64,
@@ -94,12 +88,10 @@ pub fn number(parts: &[Part], outline: &[OutlineItem]) -> Vec<(usize, Numbers)> 
 
 /// The number `--dump-outline` writes for a page of the merged file.
 ///
-/// Not `[page]`, and the difference is measured rather than chosen: on
-/// wkhtmltopdf 0.12.6.1 a cover counts here — the first heading after a
-/// one-page cover is on page 2 in the dump and on page 1 in the footer — and
-/// what shifts it is `--page-offset`, added to the physical page. The offset
-/// applied is the one written on the document the page came from, which is
-/// where this parts company with wkhtmltopdf and why (D40).
+/// The page of the file plus `--page-offset`, which is what [`number`] answers
+/// too since a cover was measured counting in both (D45). The offset applied
+/// is the one written on the document the page came from, which is where this
+/// parts company with wkhtmltopdf and why (D40).
 ///
 /// `physical` is 1-based. A page past the last part keeps the last part's
 /// offset; the outline is read off the merged file, so there is none.
@@ -136,7 +128,6 @@ mod tests {
     fn part(pages: usize) -> Part {
         Part {
             pages,
-            counted: true,
             page_offset: 0,
         }
     }
@@ -167,21 +158,17 @@ mod tests {
         assert_eq!(parts, [0, 0, 0, 1, 1]);
     }
 
-    /// A cover does not count: the page after it is page one and the total
-    /// leaves it out.
+    /// **A cover counts** (D45): the page behind it is page two, the total
+    /// includes it, and the document behind it began on page two.
     #[test]
-    fn a_cover_is_not_counted() {
-        let cover = Part {
-            pages: 1,
-            counted: false,
-            page_offset: 0,
-        };
-        let numbered = number(&[cover, part(2)], &[]);
-        assert_eq!(pages(&numbered)[1], (1, 2, 1, 1, 2));
-        assert_eq!(pages(&numbered)[2], (2, 2, 1, 2, 2));
-        // The cover's own numbers, should a band be written on it anyway: the
-        // count as it stands, and the total as everyone else sees it.
-        assert_eq!(pages(&numbered)[0], (0, 2, 1, 1, 1));
+    fn a_cover_counts_like_any_other_page() {
+        let numbered = number(&[part(1), part(2)], &[]);
+        assert_eq!(pages(&numbered)[1], (2, 3, 2, 1, 2));
+        assert_eq!(pages(&numbered)[2], (3, 3, 2, 2, 2));
+        // The cover's own numbers, should a band be written on it anyway. It
+        // never is: `cover` clears the bands before the object's own options
+        // are read.
+        assert_eq!(pages(&numbered)[0], (1, 3, 1, 1, 1));
     }
 
     /// `--page-offset` shifts the first frame for the document it was written
@@ -190,7 +177,6 @@ mod tests {
     fn the_offset_shifts_the_document_it_was_written_on() {
         let shifted = Part {
             pages: 2,
-            counted: true,
             page_offset: 10,
         };
         let numbered = number(&[part(1), shifted], &[]);
@@ -244,16 +230,12 @@ mod tests {
         );
     }
 
-    /// **The dump's number is not the band's.** A cover is a page of the file,
-    /// so the heading after it is on page 2 there and on page 1 in the footer.
+    /// **The dump and the band agree about a cover** (D45). Both number a page
+    /// of the file, so the heading after a one-page cover is on page 2 in the
+    /// dump and the footer under it says 2 as well.
     #[test]
-    fn the_dump_numbers_a_page_of_the_file_and_a_cover_is_one() {
-        let cover = Part {
-            pages: 1,
-            counted: false,
-            page_offset: 0,
-        };
-        let parts = [cover, part(2)];
+    fn the_dump_numbers_a_page_of_the_file_and_so_does_the_band() {
+        let parts = [part(1), part(2)];
         assert_eq!(
             [
                 dump_page(&parts, 1),
@@ -263,7 +245,15 @@ mod tests {
             [1, 2, 3]
         );
         // What the band prints on those same three pages.
-        assert_eq!(pages(&number(&parts, &[]))[1].0, 1);
+        let numbered = number(&parts, &[]);
+        assert_eq!(
+            [
+                pages(&numbered)[0].0,
+                pages(&numbered)[1].0,
+                pages(&numbered)[2].0
+            ],
+            [1, 2, 3]
+        );
     }
 
     /// The offset is the one written on the document the page came from, so
@@ -273,12 +263,10 @@ mod tests {
         let parts = [
             Part {
                 pages: 2,
-                counted: true,
                 page_offset: 10,
             },
             Part {
                 pages: 1,
-                counted: true,
                 page_offset: 100,
             },
         ];
@@ -303,7 +291,6 @@ mod tests {
     fn a_negative_offset_goes_below_zero_rather_than_wrapping() {
         let parts = [Part {
             pages: 2,
-            counted: true,
             page_offset: -3,
         }];
         assert_eq!([dump_page(&parts, 1), dump_page(&parts, 2)], [-2, -1]);
