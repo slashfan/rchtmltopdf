@@ -418,6 +418,19 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             .collect();
         let merged = rchtmltopdf_pdf::merge(&parts)?;
 
+        // How each document's pages count, in the order they were merged. The
+        // dump reads it for `--page-offset` (D40) and the bands for `[page]`.
+        let shares: Vec<numbering::Part> = printed
+            .documents
+            .iter()
+            .zip(&merged.pages)
+            .map(|((index, _), pages)| numbering::Part {
+                pages: *pages,
+                counted: plans[*index].finish.numbering.counted,
+                page_offset: plans[*index].finish.numbering.page_offset,
+            })
+            .collect();
+
         // The outline the browser wrote is all or nothing per document, so the
         // depth is cut here, and the dump describes what the file will carry.
         // The treatment is global, so the first plan's copy is every plan's.
@@ -430,11 +443,10 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             },
         )?;
         if let Some(path) = &finish.outline.dump {
-            std::fs::write(path, crate::outline::xml(&items)).map_err(|error| {
-                ConvertError::Dump {
-                    path: path.clone(),
-                    reason: error.to_string(),
-                }
+            let xml = crate::outline::xml(&items, |page| numbering::dump_page(&shares, page));
+            std::fs::write(path, xml).map_err(|error| ConvertError::Dump {
+                path: path.clone(),
+                reason: error.to_string(),
             })?;
         }
 
@@ -445,19 +457,7 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             .iter()
             .any(|(index, _)| !plans[*index].finish.bands.is_empty())
         {
-            let numbered = numbering::number(
-                &printed
-                    .documents
-                    .iter()
-                    .zip(&merged.pages)
-                    .map(|((index, _), pages)| numbering::Part {
-                        pages: *pages,
-                        counted: plans[*index].finish.bands.counted,
-                        page_offset: plans[*index].finish.bands.page_offset,
-                    })
-                    .collect::<Vec<_>>(),
-                &items,
-            );
+            let numbered = numbering::number(&shares, &items);
             let (left, right) = (
                 settings.global.page.margins.left.to_mm(),
                 settings.global.page.margins.right.to_mm(),

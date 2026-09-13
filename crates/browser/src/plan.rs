@@ -190,6 +190,9 @@ pub struct Finishing {
     /// The bands to draw on this document's pages, once the counts are known
     /// (D38). Expanded against [`Plan::context`] and the page's numbers.
     pub bands: Bands,
+    /// How this document's pages count, for the bands and for the outline
+    /// dump (D40).
+    pub numbering: Numbering,
     /// This document's links: which kinds stay, and whether a relative one is
     /// written back relative.
     pub links: LinkSettings,
@@ -199,11 +202,21 @@ pub struct Finishing {
     pub document_url: String,
 }
 
-/// One document's bands and how its pages count.
+/// One document's bands: what is drawn on every page of it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Bands {
     pub header: Band,
     pub footer: Band,
+}
+
+/// How one document's pages count.
+///
+/// Two things read this and they do not agree, which is what D40 is about: a
+/// band prints `[page]`, which a cover is left out of, while the outline dump
+/// numbers a page of the file, which a cover is one of. Both add
+/// `page_offset`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Numbering {
     /// Whether the pages count towards `[page]` and `[topage]`: a cover's do
     /// not.
     pub counted: bool,
@@ -242,8 +255,6 @@ pub fn outline_wanted(outline: &OutlineSettings, object: &ObjectSettings) -> boo
     let bands = Bands {
         header: object.header.clone(),
         footer: object.footer.clone(),
-        counted: true,
-        page_offset: 0,
     };
     (outline.wanted() || bands.names_a_section()) && object.in_outline
 }
@@ -255,6 +266,8 @@ pub fn finish(global: &GlobalSettings, object: &ObjectSettings, document_url: &s
         bands: Bands {
             header: object.header.clone(),
             footer: object.footer.clone(),
+        },
+        numbering: Numbering {
             counted: object.kind != ObjectKind::Cover,
             page_offset: object.page_offset,
         },

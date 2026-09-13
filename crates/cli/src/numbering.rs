@@ -11,6 +11,14 @@
 //! pages a document has until it has been laid out (#39). So this runs after
 //! the merge, on the page counts the merge reports, and feeds the band sheets.
 //!
+//! # Two numbers, not one
+//!
+//! [`number`] answers what a band prints. [`dump_page`] answers what
+//! `--dump-outline` writes, and the two part company as soon as a cover or an
+//! offset is on the command line: the dump numbers a page of the file, which a
+//! cover is one of, and adds the offset of the document the page belongs to.
+//! Both were measured on wkhtmltopdf 0.12.6.1 (D40).
+//!
 //! # Sections
 //!
 //! `[section]`, `[subsection]` and `[subsubsection]` name the heading in force
@@ -82,6 +90,30 @@ pub fn number(parts: &[Part], outline: &[OutlineItem]) -> Vec<(usize, Numbers)> 
         }
     }
     out
+}
+
+/// The number `--dump-outline` writes for a page of the merged file.
+///
+/// Not `[page]`, and the difference is measured rather than chosen: on
+/// wkhtmltopdf 0.12.6.1 a cover counts here — the first heading after a
+/// one-page cover is on page 2 in the dump and on page 1 in the footer — and
+/// what shifts it is `--page-offset`, added to the physical page. The offset
+/// applied is the one written on the document the page came from, which is
+/// where this parts company with wkhtmltopdf and why (D40).
+///
+/// `physical` is 1-based. A page past the last part keeps the last part's
+/// offset; the outline is read off the merged file, so there is none.
+pub fn dump_page(parts: &[Part], physical: usize) -> i64 {
+    let mut seen = 0usize;
+    let mut offset = 0i64;
+    for part in parts {
+        offset = part.page_offset;
+        seen += part.pages;
+        if physical <= seen {
+            break;
+        }
+    }
+    physical as i64 + offset
 }
 
 /// Every outline entry as `(level, page, title)`, in reading order.
@@ -208,6 +240,71 @@ mod tests {
                 ("Appendix", "", ""),
             ]
         );
+    }
+
+    /// **The dump's number is not the band's.** A cover is a page of the file,
+    /// so the heading after it is on page 2 there and on page 1 in the footer.
+    #[test]
+    fn the_dump_numbers_a_page_of_the_file_and_a_cover_is_one() {
+        let cover = Part {
+            pages: 1,
+            counted: false,
+            page_offset: 0,
+        };
+        let parts = [cover, part(2)];
+        assert_eq!(
+            [
+                dump_page(&parts, 1),
+                dump_page(&parts, 2),
+                dump_page(&parts, 3)
+            ],
+            [1, 2, 3]
+        );
+        // What the band prints on those same three pages.
+        assert_eq!(pages(&number(&parts, &[]))[1].0, 1);
+    }
+
+    /// The offset is the one written on the document the page came from, so
+    /// two documents shift by their own.
+    #[test]
+    fn the_dump_adds_the_offset_of_the_documents_own_pages() {
+        let parts = [
+            Part {
+                pages: 2,
+                counted: true,
+                page_offset: 10,
+            },
+            Part {
+                pages: 1,
+                counted: true,
+                page_offset: 100,
+            },
+        ];
+        let numbered: Vec<i64> = (1..=3).map(|page| dump_page(&parts, page)).collect();
+        assert_eq!(numbered, [11, 12, 103]);
+    }
+
+    /// No offset anywhere leaves the physical page alone, which is what every
+    /// dump said before #37.
+    #[test]
+    fn the_dump_without_an_offset_is_the_physical_page() {
+        let parts = [part(2), part(1)];
+        let numbered: Vec<i64> = (1..=3).map(|page| dump_page(&parts, page)).collect();
+        assert_eq!(numbered, [1, 2, 3]);
+        assert_eq!(dump_page(&[], 1), 1);
+    }
+
+    /// A negative offset is written as the negative number it comes to.
+    /// wkhtmltopdf underflows here and prints 4294967295; that is a bug, not a
+    /// format (D40).
+    #[test]
+    fn a_negative_offset_goes_below_zero_rather_than_wrapping() {
+        let parts = [Part {
+            pages: 2,
+            counted: true,
+            page_offset: -3,
+        }];
+        assert_eq!([dump_page(&parts, 1), dump_page(&parts, 2)], [-2, -1]);
     }
 
     #[test]
