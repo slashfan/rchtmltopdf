@@ -162,8 +162,22 @@ const SHRINK: &str = "rendering is fixed at 96 CSS px per inch; see the smart sh
 /// no widget — so there is nothing to turn on or off (D37).
 const FORMS: &str =
     "Chromium's print path draws form fields as they look and makes no interactive fields";
-const V2: &str = "planned for V2";
-const V3: &str = "planned for V3";
+/// What a `Planned` marker names: the milestone that will build the option.
+///
+/// **A milestone that has shipped must not still be named here.** V2 closed
+/// with seventeen options still pointing at it, which is the same kind of
+/// claim #19 found in `Support::Implemented` — one nobody had to keep true.
+/// They now say what is actually so: nothing is scheduled, and the option is
+/// not built. The check that keeps V3 honest is in `plan.rs`.
+const UNSCHEDULED: &str = "not built, and not scheduled";
+
+/// The milestones that have shipped.
+///
+/// A `Planned` marker naming one of these is a promise nobody is left to keep,
+/// which is what `a_shipped_milestone_is_not_still_promised` in
+/// `tests/plan.rs` exists to catch. Add to this list when a milestone closes,
+/// and the test will say which options were still pointing at it.
+pub const SHIPPED_MILESTONES: &[&str] = &["V1", "V2", "V3"];
 
 // The V1 surface: understood by the command line, not yet acted on by a
 // conversion. Each says what is missing rather than which milestone it waits
@@ -176,21 +190,21 @@ pub const GENERAL_OPTIONS: &[OptionSpec] = &[
         "collate",
         None,
         Global,
-        Planned(V2),
+        Planned(UNSCHEDULED),
         "Collate when printing multiple copies (default)",
     ),
     OptionSpec::flag(
         "no-collate",
         None,
         Global,
-        Planned(V2),
+        Planned(UNSCHEDULED),
         "Do not collate when printing multiple copies",
     ),
     OptionSpec::new(
         "cookie-jar",
         None,
         Global,
-        Planned(V2),
+        Planned(UNSCHEDULED),
         &["path"],
         "Read and write cookies from and to the supplied cookie jar file",
     ),
@@ -198,7 +212,7 @@ pub const GENERAL_OPTIONS: &[OptionSpec] = &[
         "copies",
         None,
         Global,
-        Planned(V2),
+        Planned(UNSCHEDULED),
         &["number"],
         "Number of copies to print into the pdf file (default 1)",
     ),
@@ -333,7 +347,7 @@ pub const GENERAL_OPTIONS: &[OptionSpec] = &[
         "no-pdf-compression",
         None,
         Global,
-        Planned(V2),
+        Planned(UNSCHEDULED),
         "Do not use lossless compression on pdf objects",
     ),
     OptionSpec::flag(
@@ -347,7 +361,7 @@ pub const GENERAL_OPTIONS: &[OptionSpec] = &[
         "read-args-from-stdin",
         None,
         Global,
-        Planned(V2),
+        Planned(UNSCHEDULED),
         "Read command line arguments from stdin",
     ),
     OptionSpec::flag("readme", None, Global, Meta, "Output program readme"),
@@ -448,7 +462,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "bypass-proxy-for",
         None,
         Object,
-        Planned(V2),
+        Implemented,
         &["value"],
         "Bypass proxy for host (repeatable)",
     )
@@ -457,7 +471,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "cache-dir",
         None,
         Object,
-        Planned(V2),
+        Implemented,
         &["path"],
         "Web cache directory",
     ),
@@ -513,14 +527,14 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "debug-javascript",
         None,
         Object,
-        Planned(V2),
+        Planned(UNSCHEDULED),
         "Show javascript debugging output",
     ),
     OptionSpec::flag(
         "no-debug-javascript",
         None,
         Object,
-        Planned(V2),
+        Planned(UNSCHEDULED),
         "Do not show javascript debugging output (default)",
     ),
     OptionSpec::flag(
@@ -709,7 +723,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "post",
         None,
         Object,
-        Planned(V2),
+        Planned(UNSCHEDULED),
         &["name", "value"],
         "Add an additional post field (repeatable)",
     )
@@ -718,7 +732,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "post-file",
         None,
         Object,
-        Planned(V2),
+        Planned(UNSCHEDULED),
         &["name", "path"],
         "Post an additional file (repeatable)",
     )
@@ -749,7 +763,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "proxy-hostname-lookup",
         None,
         Object,
-        Planned(V2),
+        Planned(UNSCHEDULED),
         "Use the proxy for resolving hostnames",
     ),
     OptionSpec::new(
@@ -802,7 +816,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "ssl-crt-path",
         None,
         Object,
-        Planned(V2),
+        Planned(UNSCHEDULED),
         &["path"],
         "Path to the ssl client cert public key in OpenSSL PEM format",
     ),
@@ -810,7 +824,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "ssl-key-password",
         None,
         Object,
-        Planned(V2),
+        Planned(UNSCHEDULED),
         &["password"],
         "Password to ssl client cert private key",
     ),
@@ -818,7 +832,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "ssl-key-path",
         None,
         Object,
-        Planned(V2),
+        Planned(UNSCHEDULED),
         &["path"],
         "Path to ssl client cert private key in OpenSSL PEM format",
     ),
@@ -826,7 +840,7 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "stop-slow-scripts",
         None,
         Object,
-        Planned(V2),
+        Planned(UNSCHEDULED),
         "Stop slow running javascripts (default)",
     ),
     OptionSpec::flag(
@@ -840,14 +854,22 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "disable-toc-back-links",
         None,
         Object,
-        Planned(V3),
+        NoEquivalent(
+            "a back link is an annotation over the heading, and Chromium reports a \
+             heading's position but not its box; the only ways to get one either \
+             guess it or wrap the heading in markup of ours, and D42 took neither",
+        ),
         "Do not link from section header to toc (default)",
     ),
     OptionSpec::flag(
         "enable-toc-back-links",
         None,
         Object,
-        Planned(V3),
+        NoEquivalent(
+            "a back link is an annotation over the heading, and Chromium reports a \
+             heading's position but not its box; the only ways to get one either \
+             guess it or wrap the heading in markup of ours, and D42 took neither",
+        ),
         "Link from section header to toc",
     ),
     OptionSpec::new(

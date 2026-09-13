@@ -237,6 +237,31 @@ fn every_exemption_names_a_real_option_and_a_test() {
     }
 }
 
+/// **A milestone that has shipped may not still be promised** (#46).
+///
+/// `Support::Planned("planned for V2")` was true of seventeen options on the
+/// day V2 opened and false on the day it closed, and nothing noticed: the
+/// marker names a date rather than a fact, so it goes stale silently. This is
+/// the milestone's own closing check, made mechanical — the same shape of
+/// claim as the one #19 found in `Implemented`.
+#[test]
+fn a_shipped_milestone_is_not_still_promised() {
+    let stale: Vec<&str> = table::all()
+        .filter(|spec| match spec.support {
+            Support::Planned(reason) => table::SHIPPED_MILESTONES
+                .iter()
+                .any(|milestone| reason.contains(milestone)),
+            _ => false,
+        })
+        .map(|spec| spec.long)
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "these options are still promised to a milestone that has shipped, and \
+         have to be built or reclassified: {stale:?}"
+    );
+}
+
 /// Not a guard, a record. The audit is the deliverable of #19, and a count that
 /// silently grows is how the previous claim went unexamined for so long: the
 /// table advertised sixty-one working options before anything read a command
@@ -247,7 +272,7 @@ fn the_advertised_surface_is_the_audited_one() {
         .filter(|spec| spec.support == Support::Implemented)
         .count();
     assert_eq!(
-        implemented, 78,
+        implemented, 80,
         "the number of options honoured end to end changed; \
          if that is deliberate, the audit and this number move together"
     );

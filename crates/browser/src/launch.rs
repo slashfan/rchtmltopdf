@@ -105,6 +105,16 @@ pub struct LaunchOptions {
     /// land (V2) two objects asking for different proxies cannot both be
     /// honoured, and the one that wins will have to be said out loud.
     pub proxy: Option<String>,
+    /// Hosts that go direct rather than through the proxy, from
+    /// `--bypass-proxy-for`. Process-wide like the proxy itself.
+    ///
+    /// Chromium bypasses loopback on its own, which is why a bypass list can
+    /// look as though it does nothing until it is tried against a host that is
+    /// not `localhost`.
+    pub bypass_proxy_for: Vec<String>,
+    /// Where the web cache lives, from `--cache-dir`. The throwaway profile's
+    /// own directory when nothing was written, which goes with it.
+    pub cache_dir: Option<PathBuf>,
     /// Use this profile directory instead of a throwaway one.
     pub user_data_dir: Option<PathBuf>,
     /// Override how long to wait for the browser to answer after starting.
@@ -440,6 +450,16 @@ pub fn build_args(
     if let Some(proxy) = &options.proxy {
         args.push(format!("--proxy-server={proxy}"));
     }
+    if !options.bypass_proxy_for.is_empty() {
+        // Semicolons, which is what Chromium's bypass list is written with.
+        args.push(format!(
+            "--proxy-bypass-list={}",
+            options.bypass_proxy_for.join(";")
+        ));
+    }
+    if let Some(cache) = &options.cache_dir {
+        args.push(format!("--disk-cache-dir={}", cache.display()));
+    }
 
     // Two of wkhtmltopdf's page options are Blink settings rather than switches,
     // and Chromium takes the lot as one comma-separated flag. Both are
@@ -745,6 +765,55 @@ mod tests {
         assert!(
             args(Flavour::HeadlessShell, &asked)
                 .contains(&"--proxy-server=http://127.0.0.1:8080".to_string())
+        );
+    }
+
+    /// `--bypass-proxy-for` is the proxy's own exception list, and Chromium
+    /// writes it with semicolons.
+    ///
+    /// Measured against a dead proxy: without the list, a page on a host that
+    /// is not loopback gets Chromium's error page; with it, the page loads.
+    /// Loopback is bypassed by Chromium anyway, which is why a list can look
+    /// as though it does nothing until it is tried somewhere else.
+    #[test]
+    fn the_proxy_bypass_list_is_a_launch_flag() {
+        assert!(
+            !args(Flavour::HeadlessShell, &LaunchOptions::default())
+                .iter()
+                .any(|arg| arg.starts_with("--proxy-bypass-list")),
+            "nothing is bypassed unless it was asked for"
+        );
+        let options = LaunchOptions {
+            bypass_proxy_for: vec!["example.com".into(), "10.0.0.1".into()],
+            ..LaunchOptions::default()
+        };
+        assert!(
+            args(Flavour::HeadlessShell, &options)
+                .contains(&"--proxy-bypass-list=example.com;10.0.0.1".to_string()),
+            "{:?}",
+            args(Flavour::HeadlessShell, &options)
+        );
+    }
+
+    /// `--cache-dir` names the web cache, which otherwise lives in the
+    /// throwaway profile and goes with it.
+    #[test]
+    fn the_cache_directory_is_a_launch_flag() {
+        assert!(
+            !args(Flavour::HeadlessShell, &LaunchOptions::default())
+                .iter()
+                .any(|arg| arg.starts_with("--disk-cache-dir")),
+            "the profile's own cache is the default"
+        );
+        let options = LaunchOptions {
+            cache_dir: Some(PathBuf::from("/tmp/web-cache")),
+            ..LaunchOptions::default()
+        };
+        assert!(
+            args(Flavour::HeadlessShell, &options)
+                .contains(&"--disk-cache-dir=/tmp/web-cache".to_string()),
+            "{:?}",
+            args(Flavour::HeadlessShell, &options)
         );
     }
 
