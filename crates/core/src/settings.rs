@@ -324,6 +324,12 @@ pub struct WebSettings {
     pub username: Option<String>,
     pub password: Option<String>,
     pub proxy: Option<String>,
+    /// `--bypass-proxy-for`: hosts that go direct rather than through the
+    /// proxy. Repeatable, and empty when nothing was written.
+    pub bypass_proxy_for: Vec<String>,
+    /// `--cache-dir`: where the browser keeps its web cache, instead of the
+    /// throwaway profile's.
+    pub cache_dir: Option<PathBuf>,
     pub cookies: Vec<Pair>,
     pub custom_headers: Vec<Pair>,
     /// Send the custom headers with subresource requests too, not only the
@@ -352,6 +358,8 @@ impl Default for WebSettings {
             viewport: WKHTMLTOPDF_VIEWPORT,
             username: None,
             password: None,
+            bypass_proxy_for: Vec::new(),
+            cache_dir: None,
             proxy: None,
             cookies: Vec::new(),
             custom_headers: Vec::new(),

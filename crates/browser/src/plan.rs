@@ -367,6 +367,8 @@ pub fn launch(global: &GlobalSettings, object: &ObjectSettings) -> LaunchOptions
         extra_args: global.browser.extra_args.clone(),
         allow_slow_scripts: !object.load.stop_slow_scripts,
         proxy: object.web.proxy.clone(),
+        bypass_proxy_for: object.web.bypass_proxy_for.clone(),
+        cache_dir: object.web.cache_dir.clone(),
         // Blink settings rather than protocol commands, so they have to be
         // decided before the browser starts rather than before the page loads.
         minimum_font_size: object.web.minimum_font_size,

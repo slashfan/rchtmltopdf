@@ -277,6 +277,10 @@ pub fn apply_object(
         "disable-dotted-lines" => object.toc.dotted_lines = false,
         "disable-toc-links" => object.toc.links = false,
 
+        // --- the browser's own plumbing --------------------------------------
+        "bypass-proxy-for" => web.bypass_proxy_for.push(value(occurrence).to_string()),
+        "cache-dir" => web.cache_dir = Some(PathBuf::from(value(occurrence))),
+
         // --- links --------------------------------------------------------------
         "enable-external-links" => object.links.external = true,
         "disable-external-links" => object.links.external = false,

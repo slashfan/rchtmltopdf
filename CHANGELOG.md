@@ -52,6 +52,24 @@ warned about, and it is off by default in wkhtmltopdf too.
 heading above the list, a `padding-left` per level, a `font-size` per level, and the rule
 under each entry.
 
+**`--bypass-proxy-for` and `--cache-dir`** (#46) reach the browser: hosts written on the
+first go direct instead of through `--proxy`, and the second names where the web cache
+lives instead of letting it go with the throwaway profile. Both were measured before being
+claimed — Chromium ignores a flag it does not know, so a flag that is merely accepted
+proves nothing.
+
+**`--enable-toc-back-links` and `--disable-toc-back-links` have no equivalent** (D42). A
+back link is an annotation over the heading, so it needs the heading's box, and Chromium
+reports only its position. The ways to get the box either guess it or wrap the heading in
+markup of ours, which would let the page's own `a { }` rules repaint its headings.
+
+**Seventeen options stopped claiming a milestone that had shipped** (#46). They said
+"planned for V2" on the day V2 opened and went on saying it after V2 closed, which is the
+same kind of claim the audit found in `Implemented` (#19): one that names a date rather
+than a fact and goes stale in silence. They now say what is so — not built, and not
+scheduled — and a test fails if any option is ever left promising a milestone that has
+already shipped.
+
 **`--xsl-style-sheet` and `--dump-default-toc-xsl` have no equivalent** (D41). The table is
 generated rather than transformed, so there is no stylesheet to supply or to dump. Chromium
 does still perform the transform — the prototype worked on the pinned 153 — but Chrome
