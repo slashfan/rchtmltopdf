@@ -340,20 +340,6 @@ fn a_missing_document_fails_by_name_before_anything_starts() {
     );
 }
 
-/// Also browser-free: what is supported is settled before one is started.
-/// Converting the pages around it and saying nothing would produce a document
-/// that looks right and is missing part of itself.
-#[test]
-fn what_is_not_supported_yet_is_refused_by_name() {
-    let toc = run(&["toc", "out.pdf"]);
-    assert_outcome(&toc, 1, false);
-    assert!(
-        stderr(&toc).contains("table of contents"),
-        "{}",
-        stderr(&toc)
-    );
-}
-
 /// Every document is resolved before a browser starts, so the last of several
 /// missing fails as fast as the first, and the failure names it.
 #[test]

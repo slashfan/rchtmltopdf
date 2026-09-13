@@ -381,7 +381,10 @@ pub const OUTLINE_OPTIONS: &[OptionSpec] = &[
         "dump-default-toc-xsl",
         None,
         Global,
-        Planned(V3),
+        NoEquivalent(
+            "no stylesheet is used, so there is none to dump; the table of contents it \
+             described is generated directly (D41)",
+        ),
         "Dump the default TOC xsl style sheet to stdout",
     ),
     OptionSpec::new(
@@ -1048,14 +1051,14 @@ pub const TOC_OPTIONS: &[OptionSpec] = &[
         "disable-dotted-lines",
         None,
         Toc,
-        Planned(V3),
+        Implemented,
         "Do not use dotted lines in the toc",
     ),
     OptionSpec::new(
         "toc-header-text",
         None,
         Toc,
-        Planned(V3),
+        Implemented,
         &["text"],
         "The header text of the toc (default Table of Contents)",
     ),
@@ -1063,7 +1066,7 @@ pub const TOC_OPTIONS: &[OptionSpec] = &[
         "toc-level-indentation",
         None,
         Toc,
-        Planned(V3),
+        Implemented,
         &["width"],
         "For each level of headings in the toc indent by this length (default 1em)",
     ),
@@ -1078,7 +1081,7 @@ pub const TOC_OPTIONS: &[OptionSpec] = &[
         "toc-text-size-shrink",
         None,
         Toc,
-        Planned(V3),
+        Implemented,
         &["real"],
         "For each level of headings in the toc the font is scaled by this factor (default 0.8)",
     ),
@@ -1086,7 +1089,10 @@ pub const TOC_OPTIONS: &[OptionSpec] = &[
         "xsl-style-sheet",
         None,
         Toc,
-        Planned(V3),
+        NoEquivalent(
+            "the table of contents is generated rather than transformed: Rust has no \
+             XSLT engine, and Chromium's is removed in Chrome 158 (D41)",
+        ),
         &["file"],
         "Use the supplied xsl style sheet for printing the table of content",
     ),

@@ -27,6 +27,7 @@ pub mod numbering;
 pub mod outline;
 pub mod output;
 pub mod table;
+pub mod toc;
 pub mod tokenizer;
 
 pub use apply::{Applied, ApplyError, apply};

@@ -33,7 +33,7 @@
 //! and measured before the pages it decorates are printed (D39). The sheet
 //! then frames it once per page, with the page's numbers as a query string.
 
-use crate::{PROGRAM, VERSION, input, numbering, output};
+use crate::{PROGRAM, VERSION, input, numbering, output, toc};
 use rchtmltopdf_browser::Browser;
 use rchtmltopdf_browser::LaunchOptions;
 use rchtmltopdf_browser::band::{self, Edge, Measured, Sheet};
@@ -169,6 +169,190 @@ struct BandHeights {
     footer: Measured,
 }
 
+/// Everything that goes into the finished file, in the order it was written.
+///
+/// The printed documents come out of the loop in order, with any that
+/// `--load-error-handling skip` dropped simply missing; the tables of contents
+/// are slotted back in at the positions they were written on.
+fn ordered<'a>(
+    printed: &'a [(usize, Vec<u8>)],
+    tables: &'a [(usize, Vec<u8>)],
+) -> Vec<(usize, &'a [u8])> {
+    let mut all: Vec<(usize, &[u8])> = printed
+        .iter()
+        .map(|(index, pdf)| (*index, pdf.as_slice()))
+        .chain(tables.iter().map(|(index, pdf)| (*index, pdf.as_slice())))
+        .collect();
+    all.sort_by_key(|(index, _)| *index);
+    all
+}
+
+/// What one round of building the tables of contents needs to know.
+struct ContentsJob<'a> {
+    objects: &'a [&'a ObjectSettings],
+    plans: &'a [Plan],
+    documents: &'a [input::Resolved],
+    /// The documents that printed, in order, with their object index.
+    printed: &'a [(usize, Vec<u8>)],
+    /// How many pages each of those contributed to the merge.
+    counts: &'a [usize],
+    /// Which objects are tables of contents.
+    tables: &'a [usize],
+    /// The headings of the merge, to be listed.
+    headings: &'a [rchtmltopdf_pdf::OutlineItem],
+}
+
+/// How many times a table of contents is built before its length is taken as
+/// settled.
+///
+/// The length usually settles on the first go and always on the second: what
+/// can move it is a number growing a digit and wrapping a line. The bound is
+/// here so that a pathological document costs a few prints rather than a
+/// conversion that never ends.
+const CONTENTS_PASSES: usize = 4;
+
+/// Build and print every table of contents, until its length stops changing.
+///
+/// **Why it is a loop.** A table lists the pages of the documents behind it,
+/// and its own pages push those documents down, so the numbers depend on the
+/// length and the length can depend on the numbers. wkhtmltopdf settles the
+/// same way, and settles exactly: with a three-page table, the first heading
+/// behind it is numbered 4.
+async fn contents(
+    job: ContentsJob<'_>,
+    browser: &Browser,
+    progress: &Progress,
+) -> Result<Vec<(usize, Vec<u8>)>, ConvertError> {
+    // Where each printed document started in the merge the headings were read
+    // off, which is what carries a heading from that merge to the finished file.
+    let mut merged_first: HashMap<usize, usize> = HashMap::new();
+    let mut running = 1usize;
+    for ((index, _), pages) in job.printed.iter().zip(job.counts) {
+        merged_first.insert(*index, running);
+        running += pages;
+    }
+
+    let mut lengths: Vec<usize> = vec![1; job.tables.len()];
+    let mut printed: Vec<(usize, Vec<u8>)> = Vec::new();
+    for _ in 0..CONTENTS_PASSES {
+        // Where everything lands, with the tables at the length last measured.
+        let mut pieces: Vec<(usize, usize)> = job
+            .printed
+            .iter()
+            .zip(job.counts)
+            .map(|((index, _), pages)| (*index, *pages))
+            .chain(
+                job.tables
+                    .iter()
+                    .zip(&lengths)
+                    .map(|(index, pages)| (*index, *pages)),
+            )
+            .collect();
+        pieces.sort_by_key(|(index, _)| *index);
+
+        let mut first_page: HashMap<usize, usize> = HashMap::new();
+        let mut running = 1usize;
+        for (index, pages) in &pieces {
+            first_page.insert(*index, running);
+            running += pages;
+        }
+
+        // The same numbering the outline dump uses, over the finished layout.
+        let shares: Vec<numbering::Part> = pieces
+            .iter()
+            .map(|(index, pages)| numbering::Part {
+                pages: *pages,
+                counted: job.plans[*index].finish.numbering.counted,
+                page_offset: job.plans[*index].finish.numbering.page_offset,
+            })
+            .collect();
+        let where_tables_are: Vec<(usize, &str)> = job
+            .tables
+            .iter()
+            .map(|index| {
+                (
+                    first_page[index],
+                    job.objects[*index].toc.header_text.as_str(),
+                )
+            })
+            .collect();
+
+        printed.clear();
+        for index in job.tables {
+            let entries = toc::entries(
+                job.headings,
+                |page| moved(page, &merged_first, &first_page, job.printed, job.counts),
+                &where_tables_are,
+                |page| numbering::dump_page(&shares, page),
+            );
+            let settings = job.plans[*index]
+                .toc
+                .as_ref()
+                .expect("a table of contents carries its own settings");
+            let document = &job.documents[*index];
+            let path = document
+                .scratch_path()
+                .expect("a table of contents is written to a file of ours");
+            std::fs::write(path, toc::document(&entries, settings)).map_err(|error| {
+                ConvertError::Unsupported(format!("could not write the table of contents: {error}"))
+            })?;
+
+            let page = browser.new_page().await?;
+            page.prepare(&job.plans[*index].prepare).await?;
+            let report = page
+                .load(document.url(), &job.objects[*index].load, progress)
+                .await?;
+            if let Some(failed) = &report.document {
+                return Err(rchtmltopdf_browser::Error::Navigation {
+                    url: failed.url.clone(),
+                    reason: format!(
+                        "{} (the table of contents, which is written by this program)",
+                        failed.error.name()
+                    ),
+                }
+                .into());
+            }
+            printed.push((*index, page.print_to_pdf(&job.plans[*index].print).await?));
+        }
+
+        let measured: Vec<usize> = printed
+            .iter()
+            .map(|(_, pdf)| {
+                rchtmltopdf_pdf::merge(&[rchtmltopdf_pdf::Part {
+                    pdf,
+                    url: "",
+                    links: &rchtmltopdf_core::settings::LinkSettings::default(),
+                }])
+                .map(|merged| merged.pages[0])
+            })
+            .collect::<Result<_, _>>()?;
+        if measured == lengths {
+            break;
+        }
+        lengths = measured;
+    }
+    Ok(printed)
+}
+
+/// Carry a page of the merge the headings were read off to the page it landed
+/// on once the tables of contents were inserted.
+fn moved(
+    page: usize,
+    merged_first: &HashMap<usize, usize>,
+    first_page: &HashMap<usize, usize>,
+    printed: &[(usize, Vec<u8>)],
+    counts: &[usize],
+) -> usize {
+    let mut running = 1usize;
+    for ((index, _), pages) in printed.iter().zip(counts) {
+        if page < running + pages {
+            return first_page[index] + (page - merged_first[index]);
+        }
+        running += pages;
+    }
+    page
+}
+
 /// Convert, or say why not.
 ///
 /// Returns an exit code rather than nothing, because "wrote the document and
@@ -184,12 +368,33 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
     // document read from standard input lives in a file that goes away when this
     // is dropped, on every path out including the deadline.
     let mut documents = Vec::with_capacity(objects.len());
-    for object in &objects {
-        let source = object.input.as_ref().ok_or_else(|| {
-            ConvertError::Unsupported("this object has no document to read".into())
-        })?;
-        documents.push(input::resolve(source)?);
+    for (position, object) in objects.iter().enumerate() {
+        documents.push(match object.kind {
+            // A table of contents has no input to read: it is written here,
+            // empty for now, and written again with the real entries once the
+            // pages it lists have been counted (D41). The path stays the same
+            // across both, so the plan built from it below is the plan that
+            // prints it.
+            ObjectKind::Toc => input::scratch_document(
+                &format!("toc-{position}"),
+                &toc::document(&[], &object.toc),
+            )?,
+            ObjectKind::Page | ObjectKind::Cover => {
+                let source = object.input.as_ref().ok_or_else(|| {
+                    ConvertError::Unsupported("this object has no document to read".into())
+                })?;
+                input::resolve(source)?
+            }
+        });
     }
+
+    // Their positions among the objects, which is where their pages go.
+    let tables: Vec<usize> = objects
+        .iter()
+        .enumerate()
+        .filter(|(_, object)| object.kind == ObjectKind::Toc)
+        .map(|(position, _)| position)
+        .collect();
 
     // The band documents too, and for the same reason: `--header-html` names
     // a file the way the input does, and a missing one fails now.
@@ -278,6 +483,11 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
         for (index, ((object, document), plan)) in
             objects.iter().zip(&documents).zip(&plans).enumerate()
         {
+            // Printed after the merge, when there are pages to list (D41).
+            if object.kind == ObjectKind::Toc {
+                continue;
+            }
+
             // One browser for the conversion, restarted only when this document
             // needs one started differently. Closed rather than dropped, so it
             // can finish writing its profile away.
@@ -402,13 +612,85 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             printed.media.push((index, report.media));
         }
 
-        if printed.documents.is_empty() {
+        if printed.documents.is_empty() && tables.is_empty() {
             return Err(ConvertError::NothingLeft(printed.skipped));
         }
 
         say(settings, "Printing pages (2/2)");
-        let parts: Vec<rchtmltopdf_pdf::Part<'_>> = printed
+
+        // The documents, merged without the tables of contents: one of those
+        // lists the pages around it, and nobody knows how long it is until it
+        // has been laid out, so it is built from this merge and inserted into
+        // another (D41).
+        let content: Vec<rchtmltopdf_pdf::Part<'_>> = printed
             .documents
+            .iter()
+            .map(|(index, pdf)| rchtmltopdf_pdf::Part {
+                pdf,
+                url: &plans[*index].finish.document_url,
+                links: &plans[*index].finish.links,
+            })
+            .collect();
+
+        let tables_printed: Vec<(usize, Vec<u8>)> = if tables.is_empty() {
+            Vec::new()
+        } else {
+            let merged = match content.as_slice() {
+                [] => None,
+                parts => Some(rchtmltopdf_pdf::merge(parts)?),
+            };
+            let counts: Vec<usize> = merged
+                .as_ref()
+                .map(|merged| merged.pages.clone())
+                .unwrap_or_default();
+            // The headings to list. Generated whatever `--no-outline` says:
+            // that option is about the bookmarks the file carries, and a table
+            // of contents was asked for separately.
+            let headings = match &merged {
+                Some(merged) => {
+                    rchtmltopdf_pdf::outline(
+                        &merged.pdf,
+                        &rchtmltopdf_pdf::OutlineTreatment {
+                            keep: true,
+                            depth: plans[0].finish.outline.depth,
+                        },
+                    )?
+                    .1
+                }
+                None => Vec::new(),
+            };
+
+            let browser = match browser.as_ref() {
+                Some(running) => running,
+                // Nothing else was printed: `rchtmltopdf toc out.pdf` is a
+                // table of contents of nothing, and wkhtmltopdf prints the
+                // page.
+                // Nothing follows this, so `running_with` is not updated:
+                // there is no next document to compare it against.
+                None => {
+                    browser = Some(Browser::launch(&executable, &plans[tables[0]].launch).await?);
+                    browser.as_ref().expect("launched just above")
+                }
+            };
+            contents(
+                ContentsJob {
+                    objects: &objects,
+                    plans: &plans,
+                    documents: &documents,
+                    printed: &printed.documents,
+                    counts: &counts,
+                    tables: &tables,
+                    headings: &headings,
+                },
+                browser,
+                &progress,
+            )
+            .await?
+        };
+
+        // Everything in the order it was written, the tables among the rest.
+        let ordered = ordered(&printed.documents, &tables_printed);
+        let parts: Vec<rchtmltopdf_pdf::Part<'_>> = ordered
             .iter()
             .map(|(index, pdf)| rchtmltopdf_pdf::Part {
                 pdf,
@@ -420,8 +702,7 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
 
         // How each document's pages count, in the order they were merged. The
         // dump reads it for `--page-offset` (D40) and the bands for `[page]`.
-        let shares: Vec<numbering::Part> = printed
-            .documents
+        let shares: Vec<numbering::Part> = ordered
             .iter()
             .zip(&merged.pages)
             .map(|((index, _), pages)| numbering::Part {
@@ -452,8 +733,7 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
 
         // The bands, now that every count is known (#39): one sheet per page,
         // printed by the browser that printed the pages, drawn onto them (D38).
-        let pdf = if printed
-            .documents
+        let pdf = if ordered
             .iter()
             .any(|(index, _)| !plans[*index].finish.bands.is_empty())
         {
@@ -465,7 +745,7 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             let sheets: Vec<Sheet> = numbered
                 .iter()
                 .map(|(part, numbers)| {
-                    let index = printed.documents[*part].0;
+                    let index = ordered[*part].0;
                     let plan = &plans[index];
                     let bands = &plan.finish.bands;
                     // A band that is a document is framed with the page's
@@ -700,17 +980,6 @@ fn pages(settings: &Settings) -> Result<Vec<&ObjectSettings>, ConvertError> {
         return Err(ConvertError::Unsupported("no document to convert".into()));
     }
 
-    for object in &settings.objects {
-        match object.kind {
-            ObjectKind::Page | ObjectKind::Cover => {}
-            ObjectKind::Toc => {
-                return Err(ConvertError::Unsupported(
-                    "a table of contents is not supported yet (planned for V3)".into(),
-                ));
-            }
-        }
-    }
-
     // Standard input is a stream, and the second read of it gets nothing.
     // Converting an empty document in its place would look like a page that
     // rendered blank, so it is refused instead.
@@ -757,18 +1026,25 @@ mod tests {
         assert_eq!(pages(&with(vec![cover, page()])).unwrap().len(), 2);
     }
 
-    /// Converting the pages around it and saying nothing would produce a
-    /// document that looks right and is missing part of itself.
+    /// A table of contents is an object like the others, and the only one
+    /// with no document to read: it is generated from the pages around it
+    /// (D41).
     #[test]
-    fn a_table_of_contents_says_which_milestone_it_waits_for() {
+    fn a_table_of_contents_is_an_object_like_the_others() {
         let mut toc = page();
         toc.kind = ObjectKind::Toc;
-        assert!(
-            pages(&with(vec![toc, page()]))
-                .unwrap_err()
-                .to_string()
-                .contains("V3")
-        );
+        toc.input = None;
+        assert_eq!(pages(&with(vec![toc, page()])).unwrap().len(), 2);
+    }
+
+    /// On its own too: `rchtmltopdf toc out.pdf` is a table of contents of
+    /// nothing, and wkhtmltopdf prints the page rather than refusing.
+    #[test]
+    fn a_table_of_contents_alone_is_still_a_conversion() {
+        let mut toc = page();
+        toc.kind = ObjectKind::Toc;
+        toc.input = None;
+        assert_eq!(pages(&with(vec![toc])).unwrap().len(), 1);
     }
 
     /// The second read of a stream gets nothing, and a blank page in its place

@@ -270,6 +270,12 @@ pub fn apply_object(
 
         "page-offset" => object.page_offset = number(occurrence)?,
 
+        // --- the table of contents, all of it CSS in the generated document ---
+        "toc-header-text" => object.toc.header_text = value(occurrence).to_string(),
+        "toc-level-indentation" => object.toc.level_indentation = value(occurrence).to_string(),
+        "toc-text-size-shrink" => object.toc.text_size_shrink = number(occurrence)?,
+        "disable-dotted-lines" => object.toc.dotted_lines = false,
+
         // --- links --------------------------------------------------------------
         "enable-external-links" => object.links.external = true,
         "disable-external-links" => object.links.external = false,
