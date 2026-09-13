@@ -23,6 +23,14 @@ surface beyond that is understood on the command line and not yet acted on.
 
 ### Compatibility
 
+**`--replace` no longer shadows a built-in placeholder** (#111). A pair named after one
+of wkhtmltopdf's own placeholders defined nothing in a text band and hid the real answer:
+`--footer-center 'Page [page]' --replace page draft` printed "Page draft" on every page.
+The built-in wins now, which is the order wkhtmltopdf fills its hash in and what
+`--header-html`'s query string already did. A `--replace` pair still defines a placeholder
+of your own. Found by running a Symfony application through knp-snappy against both
+binaries (#32).
+
 **A `toc` no longer names the file after itself** (#107). The merged file is named after
 the first document, as wkhtmltopdf named it, and the contents page this program writes is
 passed over the way wkhtmltopdf passed over its own: `toc doc.html` carries `doc.html`'s

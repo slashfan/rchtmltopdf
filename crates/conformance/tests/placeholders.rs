@@ -173,6 +173,34 @@ fn replace_defines_a_placeholder() {
     assert!(pdf.text().contains("For Acme Ltd"), "{:?}", pdf.text());
 }
 
+/// And defines only those: a pair named after a built-in is shadowed by it
+/// (#111). The measured command line is the harness's, `--replace page`
+/// against a footer that asks for `[page]`.
+#[test]
+fn a_replacement_does_not_shadow_a_built_in() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("placeholders-replace-built-in");
+    let document = page(&scratch);
+
+    let (pdf, _) = run(
+        &document,
+        &[
+            "--replace",
+            "page",
+            "SHADOWED",
+            "--footer-center",
+            "PAGE=[page]",
+        ],
+    );
+    let text = flat(&pdf);
+    for expected in ["PAGE=1", "PAGE=2", "PAGE=3"] {
+        assert!(text.contains(expected), "{expected} missing from {text:?}");
+    }
+    assert!(!text.contains("SHADOWED"), "{text:?}");
+}
+
 /// The three that name a heading, read from the outline (D36): the last
 /// `h1`, `h2` or `h3` at or before the page.
 #[test]
