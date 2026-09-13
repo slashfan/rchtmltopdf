@@ -94,7 +94,7 @@ que nous reproduisons (voir [D39](decisions.md)) :
 `[page]`, `[topage]`, `[frompage]`, `[sitepage]`, `[sitepages]`, `[section]`,
 `[subsection]`, `[subsubsection]`, `[webpage]`, `[title]`, `[doctitle]`, `[date]`, `[isodate]`
 et `[time]` sont substitués, ainsi que ceux définis par `--replace`. `[page]` et `[topage]`
-comptent sur l'ensemble du document produit, une couverture exclue ; `[sitepage]` et
+comptent sur l'ensemble du document produit, couverture comprise (D45) ; `[sitepage]` et
 `[sitepages]` dans le document d'origine ; `--page-offset` décale les premiers. Les trois
 `[section]` nomment le dernier titre `h1`, `h2` ou `h3` sur la page ou avant elle.
 

@@ -44,8 +44,9 @@ pub struct Context {
 ///
 /// `page` and `topage` count across the whole output; `sitepage` and
 /// `sitepages` within the document the page came from; `frompage` is where
-/// that document began in the first frame. A cover is in neither count. The
-/// three sections name the heading in force on the page, from the outline.
+/// that document began in the first frame. A cover's pages are in both counts
+/// (D45); what a cover has not got is a band to print them in. The three
+/// sections name the heading in force on the page, from the outline.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Numbers {
     pub page: i64,

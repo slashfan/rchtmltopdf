@@ -267,7 +267,6 @@ async fn contents(
             .iter()
             .map(|(index, pages)| numbering::Part {
                 pages: *pages,
-                counted: job.plans[*index].finish.numbering.counted,
                 page_offset: job.plans[*index].finish.numbering.page_offset,
             })
             .collect();
@@ -738,7 +737,6 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             .zip(&merged.pages)
             .map(|((index, _), pages)| numbering::Part {
                 pages: *pages,
-                counted: plans[*index].finish.numbering.counted,
                 page_offset: plans[*index].finish.numbering.page_offset,
             })
             .collect();
