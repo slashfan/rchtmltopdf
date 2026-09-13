@@ -322,6 +322,7 @@ async fn contents(
                     pdf,
                     url: "",
                     links: &rchtmltopdf_core::settings::LinkSettings::default(),
+                    contents: true,
                 }])
                 .map(|merged| merged.pages[0])
             })
@@ -629,6 +630,7 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
                 pdf,
                 url: &plans[*index].finish.document_url,
                 links: &plans[*index].finish.links,
+                contents: false,
             })
             .collect();
 
@@ -696,6 +698,9 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
                 pdf,
                 url: &plans[*index].finish.document_url,
                 links: &plans[*index].finish.links,
+                // The file is named after the first document, and a table of
+                // contents is not one: wkhtmltopdf passed over its own.
+                contents: tables.contains(index),
             })
             .collect();
         let merged = rchtmltopdf_pdf::merge(&parts)?;

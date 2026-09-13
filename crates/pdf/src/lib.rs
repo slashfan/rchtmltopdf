@@ -10,7 +10,9 @@
 //! Every page, in command line order, with whatever it inherited from the page
 //! tree above it copied down onto it, because the tree it sat in is not coming
 //! along. The first document's Info dictionary, because wkhtmltopdf's output
-//! carried the first document's title and nothing else has a better claim.
+//! carried the first document's title and nothing else has a better claim; a
+//! table of contents this program wrote is passed over, as wkhtmltopdf passed
+//! over its own, so `toc` written first does not name the file after itself.
 //! The outlines, joined end to end under one root, so a reader's sidebar lists
 //! every document's headings in order (#40). The links, with every named
 //! destination resolved to the page it meant before the name table it lived in
@@ -122,6 +124,12 @@ pub struct Part<'a> {
     /// again.
     pub url: &'a str,
     pub links: &'a LinkSettings,
+    /// A table of contents this program wrote, rather than a document the user
+    /// gave. It has a `<title>` like any other part and is never the one the
+    /// merged file is named after: wkhtmltopdf passed over its contents
+    /// objects when it picked the title, so a conversion that starts with
+    /// `toc` is still named after the first document.
+    pub contents: bool,
 }
 
 /// What a merge produced.
@@ -181,7 +189,7 @@ pub fn merge(parts: &[Part<'_>]) -> Result<Merged, Error> {
         let mut absorbed = absorb(&mut merged, source)
             .map_err(|error| fail(format!("document {}: {}", index + 1, error.reason)))?;
         pages.extend(absorbed.pages.iter().copied());
-        if info.is_none() {
+        if info.is_none() && !part.contents {
             info = absorbed.info;
         }
         outlines.extend(absorbed.outline.take());
@@ -1543,6 +1551,7 @@ mod tests {
             pdf,
             url: "file:///nowhere/document.html",
             links: &DEFAULT_LINKS,
+            contents: false,
         }
     }
 
@@ -1652,6 +1661,24 @@ mod tests {
             .and_then(Object::as_dict)
             .expect("the page should carry the resources it inherited");
         assert!(resources.has(b"ProcSet"));
+    }
+
+    /// A conversion that starts with `toc` is named after the document, not
+    /// after the contents page this program wrote: wkhtmltopdf passed over its
+    /// contents objects when it picked the title.
+    #[test]
+    fn a_table_of_contents_does_not_name_the_document() {
+        let contents = titled(&["C"], "Table of Contents");
+        let document = titled(&["A"], "First");
+        let parts = [
+            Part {
+                contents: true,
+                ..part(&contents)
+            },
+            part(&document),
+        ];
+        let out = merge(&parts).expect("should merge").pdf;
+        assert_eq!(info(&out, "Title").as_deref(), Some("First"));
     }
 
     /// wkhtmltopdf's output carried the first document's title.
@@ -2069,7 +2096,12 @@ mod tests {
     }
 
     fn with_links<'a>(pdf: &'a [u8], url: &'a str, links: &'a LinkSettings) -> Part<'a> {
-        Part { pdf, url, links }
+        Part {
+            pdf,
+            url,
+            links,
+            contents: false,
+        }
     }
 
     /// **The reason named destinations are resolved.** The table they lived in
