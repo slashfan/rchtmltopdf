@@ -419,6 +419,39 @@ impl Band {
     }
 }
 
+/// `TOC Options`: what a generated table of contents looks like.
+///
+/// These are CSS rather than paper measurements. wkhtmltopdf substituted them
+/// into the stylesheet it transformed the outline with, where the indentation
+/// is a `padding-left` and its default is `1em` — which is why it is kept as
+/// the string it was written as. [`Length`] normalises
+/// to inches and has no `em`, so it could not carry the default, let alone
+/// echo back what the user typed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TocSettings {
+    /// `--toc-header-text`: the heading printed above the entries.
+    pub header_text: String,
+    /// `--toc-level-indentation`: how much further each level is indented.
+    pub level_indentation: String,
+    /// `--toc-text-size-shrink`: the factor the font is scaled by per level.
+    pub text_size_shrink: f64,
+    /// Whether a dotted line joins an entry to its page number. Off under
+    /// `--disable-dotted-lines`.
+    pub dotted_lines: bool,
+}
+
+impl Default for TocSettings {
+    /// wkhtmltopdf's defaults, as its help states them.
+    fn default() -> Self {
+        Self {
+            header_text: "Table of Contents".to_string(),
+            level_indentation: "1em".to_string(),
+            text_size_shrink: 0.8,
+            dotted_lines: true,
+        }
+    }
+}
+
 /// What kind of object this is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ObjectKind {
@@ -451,6 +484,9 @@ pub struct ObjectSettings {
     /// `--page-offset`: added to `[page]`, `[topage]` and `[frompage]` on this
     /// document's pages. Nought, as in wkhtmltopdf.
     pub page_offset: i64,
+    /// How this object looks, when it is a table of contents. Left at its
+    /// defaults on a page or a cover, which no `TOC Option` can be written on.
+    pub toc: TocSettings,
 }
 
 impl ObjectSettings {
@@ -468,6 +504,7 @@ impl ObjectSettings {
             in_outline: true,
             links: LinkSettings::default(),
             page_offset: 0,
+            toc: TocSettings::default(),
         }
     }
 }

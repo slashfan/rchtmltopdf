@@ -44,7 +44,7 @@ use crate::placeholder::Context;
 use rchtmltopdf_core::Clock;
 use rchtmltopdf_core::settings::{
     Band, GlobalSettings, LinkSettings, LoadSettings, MediaType, ObjectKind, ObjectSettings,
-    OutlineSettings, PageSetup, WebSettings,
+    OutlineSettings, PageSetup, TocSettings, WebSettings,
 };
 use rchtmltopdf_core::units::Length;
 use serde_json::{Value, json};
@@ -158,6 +158,10 @@ pub struct Plan {
     /// here depends on knowing which request is the document's own, and on
     /// whether the document is itself local.
     pub requests: Rules,
+    /// The table of contents this object *is*, if it is one (D41). `None` for
+    /// a page and a cover, which is what makes writing a `TOC Option` on one
+    /// change nothing — there is nothing for it to change.
+    pub toc: Option<TocSettings>,
 }
 
 impl Plan {
@@ -179,8 +183,19 @@ impl Plan {
             deadline: global.timeout,
             requests: rules(object, document_url),
             finish: finish(global, object, document_url),
+            toc: toc(object),
         }
     }
+}
+
+/// How this object's table of contents looks, when it is one.
+///
+/// The generation itself is the `cli` crate's — it is markup, and nothing here
+/// prints it differently — but the settings pass through the plan like every
+/// other decision, so that writing `--toc-header-text` moves the plan and the
+/// option table can be held to it (D27).
+pub fn toc(object: &ObjectSettings) -> Option<TocSettings> {
+    (object.kind == ObjectKind::Toc).then(|| object.toc.clone())
 }
 
 /// What happens to the printed document after the browser is done with it.

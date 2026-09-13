@@ -18,9 +18,32 @@ screen or print stylesheets, whether scripts run, and how long to wait before pr
 Options it does not act on are accepted and warned about rather than breaking a command
 line that uses them.
 
-A table of contents is not built. Neither is most of the option surface beyond what V0
-needed: everything a table of contents needs is understood on the command line and not yet
-acted on.
+A table of contents is built, from the same headings as the outline. Most of the option
+surface beyond that is understood on the command line and not yet acted on.
+
+### Added
+
+**The table of contents** (#42, D41). `toc` on the command line generates one from the
+headings of the documents around it, listing each with the page of the finished file it
+landed on — the page `--dump-outline` gives it, so a cover counts and `--page-offset` moves
+it. It goes where it was written, and it lists itself, which is the line wkhtmltopdf prints
+too.
+
+**Its length settles rather than being guessed.** A table lists the pages behind it and its
+own pages push them down, so it is built, measured and built again until the two agree. A
+table of contents running to three pages numbers the first heading behind it 4, as
+wkhtmltopdf does; a single pass would have said 2.
+
+`--toc-header-text`, `--toc-level-indentation`, `--toc-text-size-shrink` and
+`--disable-dotted-lines` land where wkhtmltopdf's default stylesheet carried them: the
+heading above the list, a `padding-left` per level, a `font-size` per level, and the rule
+under each entry.
+
+**`--xsl-style-sheet` and `--dump-default-toc-xsl` have no equivalent** (D41). The table is
+generated rather than transformed, so there is no stylesheet to supply or to dump. Chromium
+does still perform the transform — the prototype worked on the pinned 153 — but Chrome
+removes XSLT on stable in 158, on 17 November 2026, and D09 prefers whatever browser the
+machine already has. Both options are accepted with the usual warning.
 
 ### Changed
 
