@@ -33,6 +33,7 @@
 //! finished arriving; a script that ran before the network went quiet would see
 //! a different document on every run.
 
+use crate::band::Measured;
 use crate::cdp::{Event, Session};
 use crate::error::Error;
 use crate::error::Result;
@@ -226,6 +227,45 @@ impl Page {
 
         progress.enter(Stage::Settled);
         Ok(report)
+    }
+}
+
+impl Page {
+    /// Measure the band document this page has loaded (D39).
+    ///
+    /// The body's height is what wkhtmltopdf reserved for a band document,
+    /// and how far the body reaches is how tall the frame on the sheet has
+    /// to be for none of it to be cut off. Both in CSS pixels from the page,
+    /// converted here, so the sheet and the print call agree on the number.
+    pub async fn measure_band(&self) -> Result<Measured> {
+        const EXPRESSION: &str = "(() => { const body = document.body; \
+             if (!body) { return [0, 0]; } \
+             const box = body.getBoundingClientRect(); \
+             return [box.height, box.bottom]; })()";
+        let answer = self
+            .session()
+            .send(
+                "Runtime.evaluate",
+                json!({ "expression": EXPRESSION, "returnByValue": true }),
+            )
+            .await?;
+        if let Some(message) = thrown(&answer) {
+            return Err(Error::Script {
+                source: "measuring the band document".to_string(),
+                message,
+            });
+        }
+        let value = |index: usize| {
+            answer["result"]["value"][index]
+                .as_f64()
+                .unwrap_or(0.0)
+                .max(0.0)
+        };
+        let to_mm = |pixels: f64| pixels / crate::plan::CSS_PIXELS_PER_INCH * 25.4;
+        Ok(Measured {
+            height_mm: to_mm(value(0)),
+            extent_mm: to_mm(value(1)),
+        })
     }
 }
 

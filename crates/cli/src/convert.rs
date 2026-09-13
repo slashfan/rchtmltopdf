@@ -26,21 +26,30 @@
 //! printed without them and merged, the counts are read, one sheet per page is
 //! written with every placeholder expanded, the browser prints that document
 //! of sheets, and each sheet is drawn onto its page (D38).
+//!
+//! One thing about a band comes *first*. A band that is a document
+//! (`--header-html`) sizes the margin on its side unless that margin was
+//! written, and the print call needs the number, so the document is loaded
+//! and measured before the pages it decorates are printed (D39). The sheet
+//! then frames it once per page, with the page's numbers as a query string.
 
 use crate::{PROGRAM, VERSION, input, numbering, output};
 use rchtmltopdf_browser::Browser;
 use rchtmltopdf_browser::LaunchOptions;
-use rchtmltopdf_browser::band::{self, Edge, Sheet};
+use rchtmltopdf_browser::band::{self, Edge, Measured, Sheet};
 use rchtmltopdf_browser::clock;
 use rchtmltopdf_browser::deadline;
 use rchtmltopdf_browser::intercept;
 use rchtmltopdf_browser::locate::{SystemEnvironment, locate};
+use rchtmltopdf_browser::placeholder;
 use rchtmltopdf_browser::plan::{self, Plan};
 use rchtmltopdf_browser::render::{Failed, Progress};
-use rchtmltopdf_core::settings::{ObjectKind, ObjectSettings, Settings};
+use rchtmltopdf_core::settings::{Band, ObjectKind, ObjectSettings, Settings};
 use rchtmltopdf_core::{ExitCode, Input, LoadErrorHandling};
+use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[derive(Debug)]
 pub enum ConvertError {
@@ -124,6 +133,42 @@ struct Printed {
     skipped: Vec<String>,
 }
 
+/// One object's band documents, resolved the way its input is.
+#[derive(Debug, Default)]
+struct BandDocuments {
+    header: Option<input::Resolved>,
+    footer: Option<input::Resolved>,
+}
+
+impl BandDocuments {
+    fn resolve(object: &ObjectSettings) -> Result<Self, input::InputError> {
+        let resolve = |band: &Band| -> Result<Option<input::Resolved>, input::InputError> {
+            band.html
+                .as_deref()
+                .map(|written| input::resolve(&Input::classify(written)))
+                .transpose()
+        };
+        Ok(Self {
+            header: resolve(&object.header)?,
+            footer: resolve(&object.footer)?,
+        })
+    }
+
+    fn urls(&self) -> impl Iterator<Item = &str> {
+        [&self.header, &self.footer]
+            .into_iter()
+            .flatten()
+            .map(input::Resolved::url)
+    }
+}
+
+/// What one object's band documents measured. Zero where there is none.
+#[derive(Debug, Clone, Copy, Default)]
+struct BandHeights {
+    header: Measured,
+    footer: Measured,
+}
+
 /// Convert, or say why not.
 ///
 /// Returns an exit code rather than nothing, because "wrote the document and
@@ -145,6 +190,26 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
         })?;
         documents.push(input::resolve(source)?);
     }
+
+    // The band documents too, and for the same reason: `--header-html` names
+    // a file the way the input does, and a missing one fails now.
+    let mut band_documents = Vec::with_capacity(objects.len());
+    for object in &objects {
+        band_documents.push(BandDocuments::resolve(object)?);
+    }
+    // The sheets are one page for every object's bands, so one rule and one
+    // wait serve all of them.
+    let band_policy = plan::band_policy(objects.iter().copied());
+    let band_delay = objects
+        .iter()
+        .filter(|object| object.header.html.is_some() || object.footer.html.is_some())
+        .map(|object| object.load.javascript_delay)
+        .max()
+        .unwrap_or(Duration::ZERO);
+    let band_web = objects
+        .iter()
+        .find(|object| object.header.html.is_some() || object.footer.html.is_some())
+        .map(|object| &object.web);
 
     let executable = locate(settings.global.browser.path.as_deref(), &SystemEnvironment)?;
 
@@ -206,6 +271,9 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
         };
         let mut browser: Option<Browser> = None;
         let mut running_with: Option<LaunchOptions> = None;
+        // Measured once per document, whichever objects share it.
+        let mut measured: HashMap<String, Measured> = HashMap::new();
+        let mut heights: Vec<BandHeights> = vec![BandHeights::default(); total];
 
         for (index, ((object, document), plan)) in
             objects.iter().zip(&documents).zip(&plans).enumerate()
@@ -221,6 +289,50 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
                 running_with = Some(plan.launch.clone());
             }
             let browser = browser.as_ref().expect("launched just above");
+
+            // Before the pages, because the print call needs the numbers: a
+            // band document's height is its margin unless the margin was
+            // written (D39).
+            let page_setup = &settings.global.page;
+            let (mut header_height, mut footer_height) = (Measured::default(), Measured::default());
+            for (band_document, slot) in [
+                (&band_documents[index].header, &mut header_height),
+                (&band_documents[index].footer, &mut footer_height),
+            ] {
+                let Some(band_document) = band_document else {
+                    continue;
+                };
+                let url = band_document.url();
+                *slot = match measured.get(url) {
+                    Some(known) => *known,
+                    None => {
+                        let value = measure(
+                            browser,
+                            url,
+                            &plan::measure_prepare(page_setup, &object.web),
+                            &plan::band_load(object.load.javascript_delay),
+                            plan::band_rules(&band_policy, url, band_documents[index].urls()),
+                            &progress,
+                        )
+                        .await?;
+                        measured.insert(url.to_string(), value);
+                        value
+                    }
+                };
+            }
+            heights[index] = BandHeights {
+                header: header_height,
+                footer: footer_height,
+            };
+            let print = plan::reserve(
+                &plan.print,
+                reserved_inches(&object.header, page_setup.named.top, &heights[index].header),
+                reserved_inches(
+                    &object.footer,
+                    page_setup.named.bottom,
+                    &heights[index].footer,
+                ),
+            );
 
             say(settings, &loading_line(index, total));
             let page = browser.new_page().await?;
@@ -278,7 +390,7 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
 
             printed
                 .documents
-                .push((index, page.print_to_pdf(&plan.print).await?));
+                .push((index, page.print_to_pdf(&print).await?));
 
             // Read before the guard is dropped, which is what stops interception.
             printed.refused.extend(
@@ -353,24 +465,38 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             let sheets: Vec<Sheet> = numbered
                 .iter()
                 .map(|(part, numbers)| {
-                    let plan = &plans[printed.documents[*part].0];
+                    let index = printed.documents[*part].0;
+                    let plan = &plans[index];
                     let bands = &plan.finish.bands;
-                    Sheet {
-                        header: band::row(
-                            &bands.header,
-                            Edge::Header,
-                            left,
-                            right,
-                            &plan.context,
-                            numbers,
+                    // A band that is a document is framed with the page's
+                    // numbers as its query string; a band of text is a row.
+                    let markup = |band: &Band,
+                                  document: &Option<input::Resolved>,
+                                  measured: &Measured,
+                                  edge: Edge| match document {
+                        Some(document) => band::frame(
+                            &placeholder::with_query(
+                                document.url(),
+                                &placeholder::query(&plan.context, numbers),
+                            ),
+                            edge,
+                            &settings.global.page,
+                            measured,
                         ),
-                        footer: band::row(
+                        None => band::row(band, edge, left, right, &plan.context, numbers),
+                    };
+                    Sheet {
+                        header: markup(
+                            &bands.header,
+                            &band_documents[index].header,
+                            &heights[index].header,
+                            Edge::Header,
+                        ),
+                        footer: markup(
                             &bands.footer,
+                            &band_documents[index].footer,
+                            &heights[index].footer,
                             Edge::Footer,
-                            left,
-                            right,
-                            &plan.context,
-                            numbers,
                         ),
                     }
                 })
@@ -382,10 +508,24 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
                 .as_ref()
                 .expect("a document was printed, so a browser is running");
             let page = browser.new_page().await?;
-            // No interception: the document is ours and fetches nothing.
-            page.prepare(&plan::band_prepare()).await?;
+            // The sheets are ours, but what they frame is the user's: a band
+            // document reads the disk under the same rule as the input (D10).
+            let policing = intercept::install(
+                page.session(),
+                plan::band_rules(
+                    &band_policy,
+                    sheet_document.url(),
+                    band_documents.iter().flat_map(BandDocuments::urls),
+                ),
+            )
+            .await?;
+            page.prepare(&plan::band_prepare(band_web)).await?;
             let report = page
-                .load(sheet_document.url(), &plan::band_load(), &progress)
+                .load(
+                    sheet_document.url(),
+                    &plan::band_load(band_delay),
+                    &progress,
+                )
                 .await?;
             if let Some(failed) = &report.document {
                 return Err(rchtmltopdf_browser::Error::Navigation {
@@ -401,6 +541,12 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             let sheets_pdf = page
                 .print_to_pdf(&plan::band_print(&settings.global.page))
                 .await?;
+            printed.refused.extend(
+                policing
+                    .as_ref()
+                    .map(intercept::Interception::refused)
+                    .unwrap_or_default(),
+            );
             rchtmltopdf_pdf::stamp(&pdf, &sheets_pdf)?
         } else {
             pdf
@@ -473,6 +619,42 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
 
     say(settings, "Done");
     Ok(outcome)
+}
+
+/// Load a band document and measure it (D39).
+///
+/// On a page of its own, with the file rule the sheets will apply, so what
+/// is measured is what will be framed: an image the rule refuses is missing
+/// from both.
+async fn measure(
+    browser: &Browser,
+    url: &str,
+    prepare: &[plan::Command],
+    load: &rchtmltopdf_core::settings::LoadSettings,
+    rules: intercept::Rules,
+    progress: &Progress,
+) -> Result<Measured, ConvertError> {
+    let page = browser.new_page().await?;
+    let _policing = intercept::install(page.session(), rules).await?;
+    page.prepare(prepare).await?;
+    let report = page.load(url, load, progress).await?;
+    if let Some(failed) = &report.document {
+        return Err(rchtmltopdf_browser::Error::Navigation {
+            url: failed.url.clone(),
+            reason: format!("{} (a header or footer document)", failed.error.name()),
+        }
+        .into());
+    }
+    Ok(page.measure_band().await?)
+}
+
+/// How much a band document adds to the print margin on its side, in inches:
+/// its height when it sizes the margin, nothing when it is fitted into one.
+fn reserved_inches(band: &Band, named: bool, measured: &Measured) -> f64 {
+    match plan::sized_by_its_document(band, named) {
+        true => measured.height_mm / 25.4,
+        false => 0.0,
+    }
 }
 
 /// The progress line for one document, in wkhtmltopdf's shape.

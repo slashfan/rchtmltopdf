@@ -129,6 +129,91 @@ fn resolve(name: &str, context: &Context, numbers: &Numbers) -> Option<String> {
     })
 }
 
+/// The same values as a query string, for a band that is a document.
+///
+/// wkhtmltopdf hands `--header-html` its placeholders "in get fashion": the
+/// document is loaded once per page with `?page=3&topage=9&...` appended, and
+/// its own script reads `document.location.search`. The names are the
+/// placeholders' without the brackets, `--replace` pairs are added first and
+/// a built-in name wins over a replacement of the same name, which is the
+/// order wkhtmltopdf fills them in. Every value is percent-encoded, so the
+/// documented `decodeURI` reads it back as itself.
+pub fn query(context: &Context, numbers: &Numbers) -> String {
+    let mut pairs: Vec<(String, String)> = context
+        .replacements
+        .iter()
+        .map(|pair| (pair.name.clone(), pair.value.clone()))
+        .collect();
+    for name in BUILT_IN {
+        let value = resolve_built_in(name, context, numbers);
+        pairs.retain(|(existing, _)| existing != name);
+        pairs.push((name.to_string(), value));
+    }
+    pairs
+        .iter()
+        .map(|(name, value)| format!("{}={}", percent_encode(name), percent_encode(value)))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+/// Every built-in placeholder, in the order the query string names them.
+const BUILT_IN: &[&str] = &[
+    "page",
+    "topage",
+    "frompage",
+    "sitepage",
+    "sitepages",
+    "section",
+    "subsection",
+    "subsubsection",
+    "webpage",
+    "title",
+    "doctitle",
+    "date",
+    "isodate",
+    "time",
+];
+
+/// A built-in placeholder's value, `--replace` not consulted.
+fn resolve_built_in(name: &str, context: &Context, numbers: &Numbers) -> String {
+    let without = Context {
+        replacements: Vec::new(),
+        ..context.clone()
+    };
+    resolve(name, &without, numbers).unwrap_or_default()
+}
+
+/// A band document's URL with the query string attached.
+///
+/// Appended to a query the URL already has, and kept ahead of a fragment, so
+/// `header.html?theme=dark#top` still says both.
+pub fn with_query(url: &str, query: &str) -> String {
+    let (base, fragment) = match url.find('#') {
+        Some(at) => (&url[..at], &url[at..]),
+        None => (url, ""),
+    };
+    let joiner = if base.contains('?') { '&' } else { '?' };
+    format!("{base}{joiner}{query}{fragment}")
+}
+
+/// Percent-encode everything outside the unreserved set.
+///
+/// Bytes, not characters, so a title in any script arrives as UTF-8 the way
+/// `decodeURI` expects it. `&`, `=` and `#` are among what is encoded, so a
+/// value cannot end its own pair or start a fragment.
+fn percent_encode(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for byte in raw.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(byte as char);
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
 /// HTML-escape. A band's text is somebody's document title.
 pub(crate) fn escape(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
@@ -311,6 +396,93 @@ mod tests {
         assert_eq!(html("v1.2 — [frompage] of many"), "v1.2 — 4 of many");
         assert_eq!(html(""), "");
         assert_eq!(html("no placeholders here"), "no placeholders here");
+    }
+
+    // --- the query string, for a band that is a document ----------------------
+
+    /// The names are the placeholders' without the brackets, and the numbers
+    /// are the page's: this is what the documented `subst()` reads.
+    #[test]
+    fn the_query_names_every_placeholder_with_the_pages_numbers() {
+        let query = query(&context(&[]), &numbers());
+        for expected in [
+            "page=4",
+            "topage=5",
+            "frompage=4",
+            "sitepage=1",
+            "sitepages=2",
+            "section=Chapter%20Two",
+            "subsection=Section%202.1",
+            "subsubsection=",
+            "webpage=https%3A%2F%2Fexample.com%2Finvoice",
+            "title=Invoice%2042",
+            "doctitle=Invoice%2042",
+            "date=",
+            "isodate=2026-09-12",
+            "time=",
+        ] {
+            assert!(
+                query.split('&').any(|pair| pair.starts_with(expected)),
+                "{expected:?} missing from {query:?}"
+            );
+        }
+    }
+
+    /// A value is somebody's title, and `&`, `=` and a space in it must not
+    /// end the pair or start another. `decodeURI` reads the encoding back.
+    #[test]
+    fn values_are_percent_encoded() {
+        let mut with_title = context(&[]);
+        with_title.title = "Tom & Jerry = friends".into();
+        let query = query(&with_title, &numbers());
+        assert!(
+            query.contains("title=Tom%20%26%20Jerry%20%3D%20friends"),
+            "{query}"
+        );
+        assert_eq!(
+            query
+                .split('&')
+                .filter(|pair| pair.starts_with("title="))
+                .count(),
+            1
+        );
+    }
+
+    /// `--replace` pairs are added, and a built-in name wins over a
+    /// replacement of the same name: that is the order wkhtmltopdf fills its
+    /// hash in, and the opposite of what a text band does.
+    #[test]
+    fn replacements_are_added_and_built_ins_win_over_them() {
+        let replacements = [
+            Pair {
+                name: "client".into(),
+                value: "Acme Ltd".into(),
+            },
+            Pair {
+                name: "page".into(),
+                value: "none of your business".into(),
+            },
+        ];
+        let query = query(&context(&replacements), &numbers());
+        assert!(query.contains("client=Acme%20Ltd"), "{query}");
+        assert!(query.contains("page=4"), "{query}");
+        assert!(!query.contains("business"), "{query}");
+    }
+
+    #[test]
+    fn the_query_joins_what_the_url_already_says() {
+        assert_eq!(
+            with_query("file:///h.html", "page=1"),
+            "file:///h.html?page=1"
+        );
+        assert_eq!(
+            with_query("http://x/h?theme=dark", "page=1"),
+            "http://x/h?theme=dark&page=1"
+        );
+        assert_eq!(
+            with_query("file:///h.html#top", "page=1"),
+            "file:///h.html?page=1#top"
+        );
     }
 
     /// A title given to `--title` is not there by default, and an empty

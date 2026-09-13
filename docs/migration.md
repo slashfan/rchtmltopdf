@@ -69,6 +69,26 @@ toutes mesurées :
   puisse ouvrir un espace entre les deux : `--header-spacing 5` descend le contenu de 5 mm et
   laisse le bandeau où il est.
 
+### `--header-html` et `--footer-html`
+
+Un bandeau qui est un document suit **l'autre règle** de wkhtmltopdf, et c'est la sienne
+que nous reproduisons (voir [D39](decisions.md)) :
+
+* **Sans `--margin-top`, la hauteur du document devient la marge.** Le document est mesuré
+  avant l'impression, le cadre part du bord du papier, et le contenu commence à la hauteur
+  mesurée plus `--header-spacing`. Un en-tête de 20 mm pousse le contenu à 20 mm, pas aux
+  10 mm par défaut.
+* **Avec `--margin-top`, le document est logé dans la marge**, son bas sur la ligne de
+  marge, et le contenu ne bouge que de l'espacement. Plus haut que la marge, il déborde du
+  papier.
+* **Les placeholders arrivent en chaîne de requête**, `?page=3&topage=9&...`, comme avec
+  wkhtmltopdf : le script `subst()` de son manuel fonctionne tel quel. Le document est
+  chargé une fois par page.
+* **Ce qui ne s'applique pas au document du bandeau :** `--run-script`,
+  `--user-style-sheet`, `--custom-header`, `--username`/`--password` et `--encoding`
+  restent ceux de l'entrée. `--javascript-delay` s'applique. Ce qu'il lit sur le disque est
+  soumis à `--enable-local-file-access` et `--allow`, comme l'entrée.
+
 ### Placeholders
 
 `[page]`, `[topage]`, `[frompage]`, `[sitepage]`, `[sitepages]`, `[section]`,

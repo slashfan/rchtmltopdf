@@ -76,8 +76,10 @@ pub struct FileAccess {
     allowed: Vec<PathBuf>,
     /// Whether the document is itself local. A remote one may never read a file.
     document_is_local: bool,
-    /// The document's own file, always readable.
-    document: Option<PathBuf>,
+    /// The document's own file, always readable, and with it anything else
+    /// named on the command line: the header and footer documents, and the
+    /// document of sheets that carries them (D39).
+    documents: Vec<PathBuf>,
 }
 
 /// What to do with one request.
@@ -106,12 +108,28 @@ impl Policy {
                 .filter_map(|path| std::fs::canonicalize(path).ok())
                 .collect(),
             document_is_local: local_path(document_url).is_some(),
-            document: local_path(document_url).and_then(|path| std::fs::canonicalize(path).ok()),
+            documents: canonical(document_url).into_iter().collect(),
         }
     }
 }
 
+/// The canonical path a URL names, if it names a local file that exists.
+fn canonical(url: &str) -> Option<PathBuf> {
+    local_path(url).and_then(|path| std::fs::canonicalize(path).ok())
+}
+
 impl FileAccess {
+    /// Let another document through as if it were the one being converted.
+    ///
+    /// For the band documents: `--header-html` names a file on the command
+    /// line, exactly as the input does, and the policy governing what a
+    /// document may reach off the disk has nothing to say about it (D10). What
+    /// *that* document reaches is judged like any other request.
+    pub fn also(mut self, document_url: &str) -> Self {
+        self.documents.extend(canonical(document_url));
+        self
+    }
+
     /// Whether any request could be refused.
     ///
     /// When none can be — a local document that has been given the run of the
@@ -139,7 +157,7 @@ impl FileAccess {
         };
 
         // The document we were asked to convert, reached the only way it can be.
-        if self.document.as_deref() == Some(requested.as_path()) {
+        if self.documents.contains(&requested) {
             return Verdict::Allow;
         }
 
@@ -224,6 +242,7 @@ mod tests {
             std::fs::create_dir_all(root.join("pages")).unwrap();
             std::fs::write(root.join("pages/doc.html"), b"<p>x</p>").unwrap();
             std::fs::write(root.join("pages/style.css"), b"body{}").unwrap();
+            std::fs::write(root.join("pages/header.html"), b"<p>h</p>").unwrap();
             std::fs::write(root.join("secret.txt"), b"hunter2").unwrap();
             Self { root }
         }
@@ -271,6 +290,25 @@ mod tests {
         );
         // But the document itself has to be readable, or nothing converts at all.
         assert_eq!(access.verdict(&files.url("pages/doc.html")), Verdict::Allow);
+    }
+
+    /// A band document is named on the command line the way the input is, so
+    /// it is readable the way the input is, and what it reaches is judged the
+    /// way the input's subresources are.
+    #[test]
+    fn a_band_document_is_readable_like_the_input_and_reaches_no_further() {
+        let files = Fixtures::new("also");
+        let access = Policy::default()
+            .about(&files.url("pages/doc.html"))
+            .also(&files.url("pages/header.html"));
+        assert_eq!(
+            access.verdict(&files.url("pages/header.html")),
+            Verdict::Allow
+        );
+        assert_eq!(
+            access.verdict(&files.url("pages/style.css")),
+            Verdict::Block(NOT_ENABLED)
+        );
     }
 
     #[test]

@@ -84,6 +84,19 @@ impl Default for Margins {
     }
 }
 
+/// Which of the two vertical margins the command line named.
+///
+/// An HTML band replaces the margin on its side with its own measured height
+/// unless that margin was written, in which case the band is fitted into the
+/// margin asked for. That is wkhtmltopdf's rule, and it can only be followed
+/// if "written" and "left at ten millimetres" are told apart, which the
+/// lengths in [`Margins`] cannot do on their own.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NamedMargins {
+    pub top: bool,
+    pub bottom: bool,
+}
+
 /// Paper, orientation and margins.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PageSetup {
@@ -91,6 +104,9 @@ pub struct PageSetup {
     pub size: PageDimensions,
     pub orientation: Orientation,
     pub margins: Margins,
+    /// Whether `--margin-top` and `--margin-bottom` were written, as opposed
+    /// to defaulted. Only an HTML band cares.
+    pub named: NamedMargins,
 }
 
 impl PageSetup {
@@ -142,6 +158,7 @@ impl Default for PageSetup {
             size: PageDimensions::mm(210.0, 297.0),
             orientation: Orientation::Portrait,
             margins: Margins::default(),
+            named: NamedMargins::default(),
         }
     }
 }

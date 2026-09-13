@@ -378,6 +378,22 @@ L'asymétrie compte aussi. Ne pas l'intégrer laisse les deux options ouvertes �
 
 ---
 
+## D39 — `--header-html` et `--footer-html` : le document de l'utilisateur encadré dans la feuille, mesuré avant l'impression
+
+**Choix.** Un bandeau qui est un document est porté par le mécanisme de D38 : chaque feuille encadre le document dans un `<iframe>`, chargé une fois par page avec les placeholders passés **en chaîne de requête** — `?page=3&topage=9&section=...&date=...` — exactement comme wkhtmltopdf les passait « in get fashion », de sorte que le script `subst()` de son manuel, que tout en-tête migré embarque, lit `document.location.search` et fonctionne tel quel. Les paires de `--replace` sont ajoutées, un nom natif l'emporte sur une paire du même nom, comme dans le hash de wkhtmltopdf.
+
+**La géométrie suit la règle de wkhtmltopdf pour ces bandeaux, qui n'est pas celle des bandeaux texte.** Lue dans `pdfconverter.cc` : si `--margin-top` n'a pas été écrit, le document est chargé et mesuré avant l'impression des pages, et **la hauteur de son `body` devient la marge**, plus `--header-spacing` ; le cadre part du bord du papier. Si la marge a été écrite, le document est logé dedans, son bord côté contenu sur la ligne de marge, et la marge grandit de l'espacement seul ; un document plus haut que la marge déborde du papier. Le pied de page est le miroir. Pour appliquer la règle, le modèle de réglages retient si `--margin-top` et `--margin-bottom` ont été écrits (`NamedMargins`), ce que deux longueurs ne savaient pas dire.
+
+**Ce que ça fait au plan (D27).** L'appel d'impression ne peut pas connaître la hauteur d'un document sans le charger. `plan::print` décide tout le reste — la marge écrite ou zéro, l'espacement — et `plan::reserve` ajoute la mesure, et rien d'autre : le plan continue de décrire la conversion, et la mesure est un fait sur le document, pas un réglage. La mesure se fait à la largeur du contenu en pixels CSS, avec les feuilles de style que reçoivent les pages, sur une page qui applique la même règle d'accès au disque que la feuille finale, pour que ce qui est mesuré soit ce qui sera encadré.
+
+**Accès au disque (D10).** Le document du bandeau est nommé sur la ligne de commande comme l'entrée l'est, donc il est lisible comme elle ; ce qu'il atteint sur le disque est jugé comme les sous-ressources de l'entrée, sous `--enable-local-file-access` et `--allow`. La feuille porte les bandeaux de tous les objets, donc elle reçoit l'union de leurs règles.
+
+**Ce qui ne s'applique pas au document du bandeau.** `--run-script`, `--user-style-sheet`, `--custom-header`, `--username`/`--password` et `--encoding` sont ceux de l'entrée ; wkhtmltopdf en appliquait certains au chargement des en-têtes, nous non. `--javascript-delay` s'applique, le plus long des objets si plusieurs. Un document de bandeau servi en `http` depuis une feuille `file://` est un cadre hors processus pour Chromium : l'événement `load` de la feuille l'attend, mais son trafic réseau et ses polices ne sont pas observés par l'échelle d'attente.
+
+**Écarté.** Imprimer le document du bandeau lui-même, une fois par page, comme wkhtmltopdf le chargeait une fois par page : N navigations et N impressions au lieu d'une. Inliner le HTML du document dans la feuille : `document.location.search` est alors celui de la feuille et le script du manuel ne trouve rien, et les ressources relatives sont perdues. Reproduire la superposition des bandeaux texte et HTML de wkhtmltopdf quand les deux sont écrits sur le même objet : le document remplace le texte.
+
+---
+
 ## Conséquences transverses
 
 - **Le brief doit gagner une section « smart shrinking »** dans les contraintes, et un guide de migration (options à retirer, différences de taille attendues).
