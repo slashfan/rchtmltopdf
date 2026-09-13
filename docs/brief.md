@@ -128,7 +128,12 @@ V3 :
 * génération automatique de table des matières
 * compatibilité `toc`
 * pagination multi-document
-* éventuelle API C compatible `libwkhtmltox`
+
+Sans jalon :
+
+* API C compatible `libwkhtmltox` — possible, pas prévue, et attendant que quelqu'un en ait
+  besoin ([D43](decisions.md)). Le critère de réussite passe par la ligne de commande :
+  Snappy lance le binaire, il ne lie rien.
 
 ## Architecture Rust envisagée
 
