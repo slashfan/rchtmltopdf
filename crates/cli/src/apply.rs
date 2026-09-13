@@ -275,6 +275,7 @@ pub fn apply_object(
         "toc-level-indentation" => object.toc.level_indentation = value(occurrence).to_string(),
         "toc-text-size-shrink" => object.toc.text_size_shrink = number(occurrence)?,
         "disable-dotted-lines" => object.toc.dotted_lines = false,
+        "disable-toc-links" => object.toc.links = false,
 
         // --- links --------------------------------------------------------------
         "enable-external-links" => object.links.external = true,

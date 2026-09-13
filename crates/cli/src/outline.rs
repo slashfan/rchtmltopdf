@@ -89,6 +89,8 @@ mod tests {
         OutlineItem {
             title: title.into(),
             page,
+            left: 0.0,
+            top: 0.0,
             children,
         }
     }

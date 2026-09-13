@@ -1074,7 +1074,7 @@ pub const TOC_OPTIONS: &[OptionSpec] = &[
         "disable-toc-links",
         None,
         Toc,
-        Planned(V3),
+        Implemented,
         "Do not link from toc to sections",
     ),
     OptionSpec::new(

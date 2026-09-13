@@ -438,6 +438,9 @@ pub struct TocSettings {
     /// Whether a dotted line joins an entry to its page number. Off under
     /// `--disable-dotted-lines`.
     pub dotted_lines: bool,
+    /// Whether an entry links to the heading it names. Off under
+    /// `--disable-toc-links`.
+    pub links: bool,
 }
 
 impl Default for TocSettings {
@@ -448,6 +451,7 @@ impl Default for TocSettings {
             level_indentation: "1em".to_string(),
             text_size_shrink: 0.8,
             dotted_lines: true,
+            links: true,
         }
     }
 }

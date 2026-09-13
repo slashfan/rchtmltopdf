@@ -421,6 +421,20 @@ Ce que le dump numérote est la page du fichier, décalée. C'est aussi ce qu'un
 
 **Écarté.** Transformer dans le navigateur (ci-dessus) : élégant, vérifié, et mort en novembre 2026. Lier libxslt : dépendance C dans un projet qui tient son inventaire, travail de compilation croisée pour les binaires musl statiques (#92) et l'image Docker, et XSLT 1.0 là où la feuille de wkhtmltopdf se déclare 2.0. Réserver la place de la table plutôt qu'itérer : il faut connaître le nombre d'entrées et la hauteur d'une ligne pour réserver juste, et se tromper décale tout le document. Ne pas reproduire l'auto-entrée : elle change le contenu visible d'un document migré, ce qui n'est pas de la parité au pixel près.
 
+## D42 — Liens de la table des matières : le navigateur écrit l'annotation, le marqueur devient la destination
+
+**Choix.** Une entrée de la table est un `<a href>` dont la cible est un marqueur — `rchtmltopdf-contents:PAGE,LEFT,TOP`, la page du fichier fini et l'endroit où le titre se trouve — et la fusion transforme chaque marqueur en destination explicite une fois que toutes les pages ont un numéro. `--disable-toc-links` n'écrit pas de `href` du tout : le navigateur n'écrit alors aucune annotation, plutôt qu'une annotation qui ne mène nulle part.
+
+**Pourquoi passer par le navigateur.** Seul lui sait où une ligne de la table a atterri sur la page, donc l'annotation doit être celle qu'il écrit pour un `<a href>`. Et seule l'impression sait où un titre a atterri : c'est la destination que Chromium écrit dans l'outline, `[page /XYZ left top 0]`, qui est reprise telle quelle. Aucune ancre n'est plantée dans le document de l'utilisateur — le lien vise le titre exactement, sans y toucher.
+
+**Ni interne ni externe.** Le marqueur est un `URI` jusqu'à la fusion, et `--disable-external-links` l'aurait emporté. C'est le lien du programme, écrit par le programme dans un document qu'il a lui-même engendré : `link_kind` le classe à part, donc ni `--disable-external-links` ni `--disable-internal-links` ne le touchent. Mesuré sur wkhtmltopdf 0.12.6.1, qui fait de même : ses quatre annotations survivent aux deux options et ne disparaissent que sous `--disable-toc-links`.
+
+**Le schéma plutôt qu'une URL relative.** Chromium conserve un schéma inconnu verbatim ; un marqueur qui ressemble à un chemin aurait été résolu contre l'URL du document. Vérifié sur la 153 épinglée, avec les deux formes.
+
+**`--enable-toc-back-links` reste `Planned`.** Un lien retour est une annotation posée sur le titre, donc il faut sa *boîte*, et Chromium ne donne que son point : la destination de l'outline porte `left` et `top`, pas la hauteur ni la largeur. wkhtmltopdf l'obtenait en enveloppant le titre dans un `<a>` avant d'imprimer — ce qui modifie le document de l'utilisateur, et une règle `a { }` de sa feuille de style repeint alors ses titres. C'est probablement pourquoi l'option est désactivée par défaut chez lui. Deux sorties existent, aucune n'est prise ici : approximer la boîte (une bande pleine largeur d'une hauteur supposée, fausse pour un titre long) ou injecter l'ancre (parité exacte, verrue comprise). La ligne par défaut de wkhtmltopdf est servie exactement en attendant.
+
+**Écarté.** Écrire l'annotation nous-mêmes sur la page de la table : il faudrait savoir où chaque ligne a été posée, ce que seul le navigateur sait. Viser le haut de la page plutôt que le titre : deux titres sur la même page deviennent le même lien. Planter des ancres `__WKANCHOR` comme wkhtmltopdf : elles ne servaient qu'à nommer une destination que nous savons désigner directement, et elles touchent au document.
+
 ---
 
 ## Conséquences transverses

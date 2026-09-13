@@ -32,13 +32,25 @@ use rchtmltopdf_pdf::OutlineItem;
 use std::fmt::Write;
 
 /// One line of the table of contents.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Entry {
     /// Heading level, 1 for an `h1`. Nesting follows it.
     pub level: usize,
     pub title: String,
-    /// The page of the file the heading landed on, offset applied.
+    /// The page of the file the heading landed on, offset applied. What is
+    /// *printed*, which `--page-offset` moves.
     pub page: i64,
+    /// Where the heading actually is, for the link: the page of the finished
+    /// file and the place on it, which no offset touches (D42).
+    pub target: Target,
+}
+
+/// Where an entry's link goes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Target {
+    pub page: usize,
+    pub left: f64,
+    pub top: f64,
 }
 
 /// Every entry of the table of contents, in the order the documents come.
@@ -65,7 +77,7 @@ pub fn entries(
     number: impl Fn(usize) -> i64,
 ) -> Vec<Entry> {
     let mut placed: Vec<(usize, Entry)> = Vec::new();
-    walk(outline, 1, &mut |level, page, title| {
+    walk(outline, 1, &mut |level, page, title, left, top| {
         let page = moved(page);
         placed.push((
             page,
@@ -73,6 +85,7 @@ pub fn entries(
                 level,
                 title: title.to_string(),
                 page: number(page),
+                target: Target { page, left, top },
             },
         ));
     });
@@ -83,6 +96,14 @@ pub fn entries(
                 level: 1,
                 title: (*title).to_string(),
                 page: number(*page),
+                // Its own heading is at the top of its own first page: the
+                // table has not been printed yet, so there is no destination
+                // to read, and the heading is the first thing on it.
+                target: Target {
+                    page: *page,
+                    left: 0.0,
+                    top: TOP_OF_THE_PAGE,
+                },
             },
         ));
     }
@@ -90,10 +111,17 @@ pub fn entries(
     placed.into_iter().map(|(_, entry)| entry).collect()
 }
 
+/// High enough to be the top of any paper this prints on, for a link that has
+/// no destination of its own to read.
+///
+/// A destination past the top of the page is not an error: a reader clamps it,
+/// and lands at the top, which is where the table's own heading is.
+const TOP_OF_THE_PAGE: f64 = 10_000.0;
+
 /// Every outline entry, in reading order, with the level its nesting gives it.
-fn walk(items: &[OutlineItem], level: usize, visit: &mut impl FnMut(usize, usize, &str)) {
+fn walk(items: &[OutlineItem], level: usize, visit: &mut impl FnMut(usize, usize, &str, f64, f64)) {
     for item in items {
-        visit(level, item.page, &item.title);
+        visit(level, item.page, &item.title, item.left, item.top);
         walk(&item.children, level + 1, visit);
     }
 }
@@ -110,7 +138,7 @@ pub fn document(entries: &[Entry], toc: &TocSettings) -> String {
         "</head>\n<body>\n<h1>{}</h1>\n",
         escape(&toc.header_text)
     );
-    write_level(&mut out, entries, &mut 0, 1);
+    write_level(&mut out, entries, &mut 0, 1, toc.links);
     out.push_str("</body>\n</html>\n");
     out
 }
@@ -174,7 +202,7 @@ fn percent(factor: f64) -> String {
 /// their levels. A level that jumps — an `h3` under an `h1`, which is ordinary
 /// HTML — opens one list, not two: the stylesheet nested by *element*, so two
 /// lists would indent it twice and shrink it twice.
-fn write_level(out: &mut String, entries: &[Entry], at: &mut usize, level: usize) {
+fn write_level(out: &mut String, entries: &[Entry], at: &mut usize, level: usize, links: bool) {
     out.push_str("<ul>\n");
     while *at < entries.len() {
         let entry = &entries[*at];
@@ -183,19 +211,33 @@ fn write_level(out: &mut String, entries: &[Entry], at: &mut usize, level: usize
         }
         if entry.level > level {
             // Deeper: a nested list inside the item just written.
-            write_level(out, entries, at, entry.level);
+            write_level(out, entries, at, entry.level, links);
             continue;
         }
         *at += 1;
+        // The href names the heading rather than pointing at it: only the
+        // browser knows where this line lands on the page, so it writes the
+        // annotation and the `pdf` crate turns the marker into a destination
+        // once every page of the finished file has a number (D42).
+        let href = match links {
+            true => format!(
+                " href=\"{}{},{},{}\"",
+                rchtmltopdf_pdf::CONTENTS_SCHEME,
+                entry.target.page,
+                entry.target.left,
+                entry.target.top
+            ),
+            false => String::new(),
+        };
         let _ = write!(
             out,
-            "<li><div><a>{} </a><span> {} </span></div>",
+            "<li><div><a{href}>{} </a><span> {} </span></div>",
             escape(&entry.title),
             entry.page
         );
         // Children of this entry, if the next one is deeper.
         if entries.get(*at).is_some_and(|next| next.level > level) {
-            write_level(out, entries, at, entries[*at].level);
+            write_level(out, entries, at, entries[*at].level, links);
         }
         out.push_str("</li>\n");
     }
@@ -228,6 +270,11 @@ mod tests {
             level,
             title: title.into(),
             page,
+            target: Target {
+                page: page.max(0) as usize,
+                left: 0.0,
+                top: 0.0,
+            },
         }
     }
 
@@ -239,6 +286,8 @@ mod tests {
         OutlineItem {
             title: title.into(),
             page,
+            left: 0.0,
+            top: 0.0,
             children,
         }
     }
@@ -322,14 +371,8 @@ mod tests {
         let html =
             default_document(&[entry(1, "One", 2), entry(2, "One A", 2), entry(1, "Two", 3)]);
         assert!(html.contains("<h1>Table of Contents</h1>"), "{html}");
-        assert!(
-            html.contains("<li><div><a>One </a><span> 2 </span></div>"),
-            "{html}"
-        );
-        assert!(
-            html.contains("<li><div><a>One A </a><span> 2 </span></div>"),
-            "{html}"
-        );
+        assert!(html.contains(">One </a><span> 2 </span></div>"), "{html}");
+        assert!(html.contains(">One A </a><span> 2 </span></div>"), "{html}");
         // "One A" is inside the list belonging to "One", not a sibling of it.
         let one = html.find("One <").expect("the first entry");
         let one_a = html.find("One A").expect("the nested entry");
@@ -346,6 +389,7 @@ mod tests {
             level_indentation: "3em".into(),
             text_size_shrink: 0.5,
             dotted_lines: false,
+            links: true,
         };
         let html = document(&[entry(1, "One", 1)], &toc);
         assert!(html.contains("<h1>Sommaire</h1>"), "{html}");
@@ -367,6 +411,46 @@ mod tests {
         );
     }
 
+    /// **The href names the heading, it does not point at it.** Only the
+    /// browser knows where the line lands, so it writes the annotation and the
+    /// marker is turned into a destination after the merge (D42).
+    #[test]
+    fn an_entry_names_the_heading_it_links_to() {
+        let entry = Entry {
+            level: 1,
+            title: "One".into(),
+            page: 12,
+            target: Target {
+                page: 2,
+                left: 34.5,
+                top: 803.25,
+            },
+        };
+        let html = default_document(&[entry]);
+        assert!(
+            html.contains("href=\"rchtmltopdf-contents:2,34.5,803.25\""),
+            "{html}"
+        );
+        // The number printed is the offset one, the target is the real page.
+        assert!(html.contains("<span> 12 </span>"), "{html}");
+    }
+
+    /// `--disable-toc-links` writes the entry without an href, so the browser
+    /// writes no annotation at all and there is nothing to point anywhere.
+    #[test]
+    fn disable_toc_links_leaves_the_entries_unlinked() {
+        let toc = TocSettings {
+            links: false,
+            ..TocSettings::default()
+        };
+        let html = document(&[entry(1, "One", 2)], &toc);
+        assert!(!html.contains("href"), "{html}");
+        assert!(
+            html.contains("<a>One </a>"),
+            "the entry is still there: {html}"
+        );
+    }
+
     /// A factor that is not a round percentage keeps its digits rather than
     /// being rounded into a different size.
     #[test]
@@ -385,7 +469,7 @@ mod tests {
     fn a_skipped_level_opens_one_list() {
         let html = default_document(&[entry(1, "One", 1), entry(3, "Deep", 1)]);
         assert_eq!(html.matches("<ul>").count(), 2, "{html}");
-        assert!(html.contains("<a>Deep </a>"), "{html}");
+        assert!(html.contains(">Deep </a>"), "{html}");
     }
 
     /// Back out to a shallower level: the deeper list closes and the next

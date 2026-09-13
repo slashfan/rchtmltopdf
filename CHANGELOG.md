@@ -34,6 +34,19 @@ own pages push them down, so it is built, measured and built again until the two
 table of contents running to three pages numbers the first heading behind it 4, as
 wkhtmltopdf does; a single pass would have said 2.
 
+**Every entry links to the heading it names** (#43, D42), landing on the heading itself
+rather than on the top of its page, so two headings sharing a page are two different links.
+Nothing is planted in the document to make that work: the link is the destination Chromium
+wrote for its own outline. `--disable-toc-links` writes the entries without links at all.
+A table's links are its own — `--disable-internal-links` and `--disable-external-links` are
+about the documents being converted and leave them alone, as they do in wkhtmltopdf.
+
+**`--enable-toc-back-links` is not built yet** (D42). A back link is an annotation over the
+heading, so it needs the heading's box, and Chromium gives only its position. wkhtmltopdf
+got the box by wrapping each heading in an `<a>` before printing, which lets the page's own
+`a { }` rules repaint its headings; that is not done here. The option stays accepted and
+warned about, and it is off by default in wkhtmltopdf too.
+
 `--toc-header-text`, `--toc-level-indentation`, `--toc-text-size-shrink` and
 `--disable-dotted-lines` land where wkhtmltopdf's default stylesheet carried them: the
 heading above the list, a `padding-left` per level, a `font-size` per level, and the rule
