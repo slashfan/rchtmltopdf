@@ -31,8 +31,9 @@ pub struct Context {
     pub webpage: String,
     /// `--title`, for `[title]` and `[doctitle]`.
     pub title: String,
-    /// `--replace`, which defines placeholders of the user's own and is
-    /// consulted before any of the built-in ones.
+    /// `--replace`, which defines placeholders of the user's own. A pair named
+    /// after a built-in never shadows it, in a text band or in a query string
+    /// alike (#111).
     pub replacements: Vec<Pair>,
     /// Read once per conversion and carried, so a document whose header and
     /// footer both say `[time]` cannot print two different times.
@@ -98,13 +99,23 @@ pub fn expand(text: &str, context: &Context, numbers: &Numbers) -> String {
 }
 
 fn resolve(name: &str, context: &Context, numbers: &Numbers) -> Option<String> {
-    // `--replace` first, so a user who defines `[page]` gets their own answer.
-    // Its value is inserted literally and never rescanned, so a replacement
-    // containing `[page]` prints those six characters.
-    if let Some(pair) = context.replacements.iter().find(|pair| pair.name == name) {
-        return Some(pair.value.clone());
+    if let Some(value) = built_in(name, context, numbers) {
+        return Some(value);
     }
 
+    // `--replace` defines placeholders of the user's own, and only those: a
+    // pair named after a built-in is shadowed by it rather than the other way
+    // round (#111). Its value is inserted literally and never rescanned, so a
+    // replacement containing `[page]` prints those six characters.
+    context
+        .replacements
+        .iter()
+        .find(|pair| pair.name == name)
+        .map(|pair| pair.value.clone())
+}
+
+/// One built-in placeholder's value, `--replace` out of the picture.
+fn built_in(name: &str, context: &Context, numbers: &Numbers) -> Option<String> {
     Some(match name {
         // --- the counts, worked out after printing (#39) ----------------------
         "page" => numbers.page.to_string(),
@@ -136,7 +147,8 @@ fn resolve(name: &str, context: &Context, numbers: &Numbers) -> Option<String> {
 /// its own script reads `document.location.search`. The names are the
 /// placeholders' without the brackets, `--replace` pairs are added first and
 /// a built-in name wins over a replacement of the same name, which is the
-/// order wkhtmltopdf fills them in. Every value is percent-encoded, so the
+/// order wkhtmltopdf fills them in and what a text band does too. Every value
+/// is percent-encoded, so the
 /// documented `decodeURI` reads it back as itself.
 pub fn query(context: &Context, numbers: &Numbers) -> String {
     let mut pairs: Vec<(String, String)> = context
@@ -145,7 +157,7 @@ pub fn query(context: &Context, numbers: &Numbers) -> String {
         .map(|pair| (pair.name.clone(), pair.value.clone()))
         .collect();
     for name in BUILT_IN {
-        let value = resolve_built_in(name, context, numbers);
+        let value = built_in(name, context, numbers).unwrap_or_default();
         pairs.retain(|(existing, _)| existing != name);
         pairs.push((name.to_string(), value));
     }
@@ -173,15 +185,6 @@ const BUILT_IN: &[&str] = &[
     "isodate",
     "time",
 ];
-
-/// A built-in placeholder's value, `--replace` not consulted.
-fn resolve_built_in(name: &str, context: &Context, numbers: &Numbers) -> String {
-    let without = Context {
-        replacements: Vec::new(),
-        ..context.clone()
-    };
-    resolve(name, &without, numbers).unwrap_or_default()
-}
 
 /// A band document's URL with the query string attached.
 ///
@@ -319,10 +322,11 @@ mod tests {
         assert!(behind.iso().ends_with("-05:30"), "{}", behind.iso());
     }
 
-    /// `--replace` defines placeholders of the user's own, and is consulted
-    /// before the built-in ones so it can override them.
+    /// `--replace` defines placeholders of the user's own, and a built-in name
+    /// wins over a pair that shadows it (#111): wkhtmltopdf fills its hash with
+    /// the replacements and assigns the built-ins after, overwriting them.
     #[test]
-    fn replace_defines_placeholders_and_wins() {
+    fn a_built_in_wins_over_a_replacement_of_the_same_name() {
         let replacements = [
             Pair {
                 name: "client".into(),
@@ -334,7 +338,7 @@ mod tests {
             },
         ];
         let expansion = expand("[client] [page]", &context(&replacements), &numbers());
-        assert_eq!(expansion, "Acme Ltd none of your business");
+        assert_eq!(expansion, "Acme Ltd 4");
     }
 
     /// Literal, not a pattern: a replacement value is inserted as it is and
@@ -450,7 +454,7 @@ mod tests {
 
     /// `--replace` pairs are added, and a built-in name wins over a
     /// replacement of the same name: that is the order wkhtmltopdf fills its
-    /// hash in, and the opposite of what a text band does.
+    /// hash in, and since #111 what a text band does as well.
     #[test]
     fn replacements_are_added_and_built_ins_win_over_them() {
         let replacements = [
