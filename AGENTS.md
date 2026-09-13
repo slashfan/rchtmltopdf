@@ -28,11 +28,16 @@ anything else (D12).
 Run this before committing, not after:
 
 ```bash
-cargo fmt --all && cargo clippy --workspace --all-targets --all-features -- -D warnings && cargo test --workspace
+cargo fmt --all \
+  && cargo clippy --workspace --all-targets --all-features -- -D warnings \
+  && cargo test --workspace \
+  && RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
 
 Committing first and checking second costs a CI round trip every time. It has already cost
-three.
+four. **The last line is the one people leave out**, and it is the one that cost the fourth:
+a doc comment that names the same destination twice is an error under `-D warnings`, and
+nothing below rustdoc will tell you.
 
 ## Five rules the code will not tell you
 

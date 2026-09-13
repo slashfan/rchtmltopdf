@@ -44,7 +44,11 @@ runner. The product never gives the sandbox up on its own (D10).
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
+
+The last one is easy to forget and CI runs it: rustdoc rejects a broken or redundant
+intra-doc link, and no other command here looks at one.
 
 ## Pull requests
 
