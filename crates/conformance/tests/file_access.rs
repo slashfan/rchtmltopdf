@@ -71,6 +71,9 @@ fn file_url(path: &Path) -> String {
 }
 
 /// Convert a local document and read back what came out.
+///
+/// Whether the run succeeded is each test's to say: a refusal writes the PDF
+/// *and* exits 1 (D49), so the bytes are read back either way.
 fn convert(documents: &Documents, options: &[&str]) -> (Pdf, Outcome) {
     let outcome = Run::new()
         .args(options.iter().copied())
@@ -79,7 +82,6 @@ fn convert(documents: &Documents, options: &[&str]) -> (Pdf, Outcome) {
         // of an earlier run.
         .arg("-")
         .output();
-    outcome.succeeded();
     (Pdf::from_bytes(&outcome.stdout), outcome)
 }
 
@@ -112,6 +114,31 @@ fn a_local_document_cannot_read_the_file_beside_it_by_default() {
         "the refusal should say what to do about it:\n{}",
         outcome.stderr
     );
+
+    // And it is exit 1, with the PDF written (D49). wkhtmltopdf swapped a
+    // refused file for `about:blank`, failed that, and set the exit code on it,
+    // so a Snappy application that forgot the flag got an exception rather than
+    // an unstyled PDF. Measured against 0.12.6.1 (#112).
+    outcome.failed();
+    assert!(
+        outcome
+            .stderr
+            .contains("Exit with code 1 due to network error: ContentAccessDenied"),
+        "the line applications grep for:\n{}",
+        outcome.stderr
+    );
+    // Said once. The browser reports the refusal as a failed load as well, and
+    // for a while both lines were printed.
+    assert_eq!(
+        outcome
+            .stderr
+            .lines()
+            .filter(|line| line.contains("tall.css"))
+            .count(),
+        1,
+        "one line per refused file:\n{}",
+        outcome.stderr
+    );
 }
 
 #[test]
@@ -122,7 +149,8 @@ fn the_flag_lets_it_through() {
     let scratch = Scratch::new("file-access-enabled");
     let documents = build(&scratch);
 
-    let (pdf, _) = convert(&documents, &["--enable-local-file-access"]);
+    let (pdf, outcome) = convert(&documents, &["--enable-local-file-access"]);
+    outcome.succeeded();
     assert_eq!(
         pdf.page_count(),
         2,
@@ -141,7 +169,8 @@ fn allow_opens_the_directory_it_names_and_no_other() {
     let documents = build(&scratch);
 
     let allowed = documents.assets.display().to_string();
-    let (opened, _) = convert(&documents, &["--allow", &allowed]);
+    let (opened, outcome) = convert(&documents, &["--allow", &allowed]);
+    outcome.succeeded();
     assert_eq!(opened.page_count(), 2, "{}", opened.describe());
 
     // The document's own directory is not the stylesheet's, so naming it changes
@@ -152,7 +181,8 @@ fn allow_opens_the_directory_it_names_and_no_other() {
         .expect("the document is in a directory")
         .display()
         .to_string();
-    let (refused, _) = convert(&documents, &["--allow", &elsewhere]);
+    let (refused, outcome) = convert(&documents, &["--allow", &elsewhere]);
+    outcome.failed();
     assert_eq!(refused.page_count(), 1, "{}", refused.describe());
 }
 
@@ -166,6 +196,11 @@ fn allow_opens_the_directory_it_names_and_no_other() {
 /// made, so it never pauses and the policy is never asked. That is measured
 /// rather than assumed, and it is why the rule is kept anyway: the guarantee is
 /// ours to make rather than the browser's to keep.
+///
+/// For the same reason the exit code is 0 here: nothing was requested, so
+/// nothing was refused or failed. wkhtmltopdf's source says it would exit 1,
+/// and the harness has not measured it, so D49 records the gap rather than
+/// closing it blind.
 #[test]
 fn a_remote_document_may_not_read_a_local_file_even_with_the_flag() {
     let Some(_browser) = require_chromium() else {
@@ -219,6 +254,7 @@ fn the_second_page_comes_from_the_stylesheet_and_nothing_else() {
     // rule rather than the browser's mood.
     let scratch = Scratch::new("file-access-control-open");
     let documents = build(&scratch);
-    let (pdf, _) = convert(&documents, &["--enable-local-file-access"]);
+    let (pdf, outcome) = convert(&documents, &["--enable-local-file-access"]);
+    outcome.succeeded();
     assert_eq!(pdf.page_count(), 2, "{}", pdf.describe());
 }

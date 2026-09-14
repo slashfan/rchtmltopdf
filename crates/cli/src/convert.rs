@@ -45,8 +45,8 @@ use rchtmltopdf_browser::placeholder;
 use rchtmltopdf_browser::plan::{self, Plan};
 use rchtmltopdf_browser::render::{Failed, Progress};
 use rchtmltopdf_core::settings::{Band, ObjectKind, ObjectSettings, Settings};
-use rchtmltopdf_core::{ExitCode, Input, LoadErrorHandling, NetworkError};
-use std::collections::HashMap;
+use rchtmltopdf_core::{ExitCode, Input, LoadErrorHandling, NetworkError, is_media_file};
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -148,11 +148,13 @@ struct Printed {
     /// One PDF per document that was printed, in command line order, with the
     /// index of the object it came from.
     documents: Vec<(usize, Vec<u8>)>,
-    /// Subresources the interception refused, across every document.
+    /// Subresources the interception refused, across every document and band
+    /// sheet. Each one is exit 1 whatever the handlers say (D49).
     refused: Vec<intercept::Refusal>,
-    /// Subresources that failed, paired with the object whose
-    /// `--load-media-error-handling` judges them.
-    media: Vec<(usize, Vec<Failed>)>,
+    /// Subresources that failed, paired with the object they belong to. Its
+    /// `--load-media-error-handling` judges the media files among them, and
+    /// the exit code judges the rest (D49).
+    subresources: Vec<(usize, Vec<Failed>)>,
     /// Documents `--load-error-handling skip` dropped, as `could not load` lines.
     skipped: Vec<String>,
     /// Documents that never arrived and were not aborted on: skipped, or
@@ -500,7 +502,7 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
         let mut printed = Printed {
             documents: Vec::with_capacity(total),
             refused: Vec::new(),
-            media: Vec::new(),
+            subresources: Vec::new(),
             skipped: Vec::new(),
             failed: Vec::new(),
         };
@@ -662,7 +664,7 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
                     .map(intercept::Interception::refused)
                     .unwrap_or_default(),
             );
-            printed.media.push((index, report.media));
+            printed.subresources.push((index, report.subresources));
         }
 
         if printed.documents.is_empty() && tables.is_empty() {
@@ -955,49 +957,63 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
     // that raises on the exit code still has the PDF to look at.
     output::write(&settings.global.output, &pdf)?;
 
-    // Each document is judged by its own handler. The first `abort` decides the
-    // exit code and writes the line applications grep for; the rest are only
-    // reported.
-    let mut outcome = ExitCode::Success;
-    for (index, failures) in &printed.media {
-        match (objects[*index].load.on_media_error, failures.as_slice()) {
-            (_, []) => {}
+    // What failed is sorted the way wkhtmltopdf sorted it (D49). A media file
+    // — css, js, png, jpg, jpeg or gif, by the URL's extension — is the
+    // business of its object's `--load-media-error-handling`, and only `abort`
+    // turns it into an exit code. Anything else that failed is a network error
+    // whatever either handler says: a frame's document, a font, an svg, a
+    // request with no extension. So is a file the policy refused, on a document
+    // or on a band sheet: wkhtmltopdf judged the `about:blank` it swapped in
+    // for one, which has no extension either. The first error to decide the
+    // exit code is the one named on the line applications grep for.
+    let refused: HashSet<&str> = printed
+        .refused
+        .iter()
+        .map(|refusal| refusal.url.as_str())
+        .collect();
+    let mut decisive: Option<NetworkError> = None;
+    for (index, failures) in &printed.subresources {
+        for failed in failures {
+            // Reported already, with the remedy, by the refusal line above. The
+            // browser reports a refusal as a failed load as well, and it is one
+            // thing to say rather than two.
+            if refused.contains(failed.url.as_str()) {
+                continue;
+            }
+            if !is_media_file(&failed.url) {
+                // The request's own line, as for a document (D48): the URL and
+                // Qt's two numbers, under every handler.
+                report_failed_request(settings, failed);
+                decisive.get_or_insert(failed.error);
+                continue;
+            }
             // `ignore` is the default, and it used to say nothing at all. A
             // document that renders without its stylesheet is the hardest kind
             // of failure to diagnose precisely because it renders, and
             // wkhtmltopdf named the resource here too (#114).
-            (LoadErrorHandling::Ignore, failures) | (LoadErrorHandling::Skip, failures) => {
-                for failed in failures {
-                    report_media(settings, failed);
-                }
-            }
-            (LoadErrorHandling::Abort, failures) => {
-                for failed in failures {
-                    report_media(settings, failed);
-                }
-                if outcome == ExitCode::Success {
-                    // wkhtmltopdf's exact wording, and not prefixed with the
-                    // program name: applications grep for this line.
-                    println_stderr(&format!(
-                        "Exit with code 1 due to network error: {}",
-                        failures[0].error.name()
-                    ));
-                }
-                outcome = ExitCode::Failure;
+            report_media(settings, failed);
+            if objects[*index].load.on_media_error == LoadErrorHandling::Abort {
+                decisive.get_or_insert(failed.error);
             }
         }
     }
+    for refusal in &printed.refused {
+        decisive.get_or_insert(refusal.error());
+    }
+    // A document that never arrived is exit 1 under every handler too, and only
+    // `abort` kept the file from being written (D44).
+    if let Some(failed) = printed.failed.first() {
+        decisive.get_or_insert(failed.error);
+    }
 
-    // A document that never arrived is exit 1 under every handler, and only
-    // `abort` kept the file from being written (D44). Said once: a media
-    // failure under `abort` has already written the same line, and wkhtmltopdf
-    // prints it once too, naming one error.
-    if let Some(failed) = printed.failed.first()
-        && outcome == ExitCode::Success
-    {
+    let mut outcome = ExitCode::Success;
+    if let Some(error) = decisive {
+        // wkhtmltopdf's exact wording, and not prefixed with the program name:
+        // applications grep for this line. Written once, naming one error, as
+        // wkhtmltopdf does.
         println_stderr(&format!(
             "Exit with code 1 due to network error: {}",
-            failed.error.name()
+            error.name()
         ));
         outcome = ExitCode::Failure;
     }
@@ -1079,7 +1095,7 @@ fn report_failed_request(settings: &Settings, failed: &Failed) {
     }
 }
 
-/// One failed subresource, named the way wkhtmltopdf names it.
+/// One failed media file, named the way wkhtmltopdf names it.
 fn report_media(settings: &Settings, failed: &Failed) {
     if settings.global.log_level.shows_warnings() {
         eprintln!("{PROGRAM}: warning: {failed} was not loaded");

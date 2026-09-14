@@ -40,6 +40,29 @@ impl fmt::Display for LoadErrorHandling {
     }
 }
 
+/// Whether `--load-media-error-handling` judges a failed request, or the exit
+/// code does.
+///
+/// wkhtmltopdf sorted every failed request by the URL's extension: `css`, `js`,
+/// `png`, `jpg`, `jpeg` and `gif` were media files, whose loss the handler
+/// decided, and **anything else was a network error** that set the exit code
+/// whatever either handler said — a frame's document, a font, an svg, a request
+/// with no extension (D49). The rule is reproduced as it was written,
+/// `QFileInfo::completeSuffix` included: the suffix is everything after the
+/// **first** dot of the last path segment, lowercased, with a query string
+/// stripped. So `jquery.min.js` has the suffix `min.js` and is not a media
+/// file. That is wkhtmltopdf's quirk, and the applications reading our exit
+/// code were tuned against it.
+pub fn is_media_file(url: &str) -> bool {
+    let name = url.rsplit('/').next().unwrap_or(url);
+    let Some((_, suffix)) = name.split_once('.') else {
+        return false;
+    };
+    let suffix = suffix.to_lowercase();
+    let suffix = suffix.split('?').next().unwrap_or_default();
+    matches!(suffix, "css" | "js" | "png" | "jpg" | "jpeg" | "gif")
+}
+
 /// The network error names wkhtmltopdf prints, which are Qt's.
 ///
 /// **Applications grep for these strings.** A Symfony application that retries on
@@ -196,6 +219,43 @@ mod tests {
     fn exit_codes_match_wkhtmltopdf() {
         assert_eq!(ExitCode::Success.as_i32(), 0);
         assert_eq!(ExitCode::Failure.as_i32(), 1);
+    }
+
+    /// wkhtmltopdf's six extensions, and only those, are judged by
+    /// `--load-media-error-handling`. Everything else sets the exit code (D49).
+    #[test]
+    fn a_media_file_is_one_of_six_extensions_and_nothing_else() {
+        for url in [
+            "https://example.com/style.css",
+            "https://example.com/app.js",
+            "https://example.com/logo.png",
+            "https://example.com/photo.jpg",
+            "https://example.com/photo.jpeg",
+            "https://example.com/spinner.gif",
+            // Neither case nor a query string changes the answer.
+            "https://example.com/LOGO.PNG",
+            "https://example.com/style.css?v=3",
+            "file:///srv/invoice/assets/style.css",
+        ] {
+            assert!(is_media_file(url), "{url}");
+        }
+        for url in [
+            // The two cases the harness measured (#112): a frame's document,
+            // and what wkhtmltopdf swapped in for a refused local file.
+            "http://conformance.invalid/missing.html",
+            "about:blank",
+            // And the rest of what the rule catches.
+            "https://example.com/fonts/inter.woff2",
+            "https://example.com/logo.svg",
+            "https://example.com/api/data",
+            "https://example.com/",
+            // `completeSuffix`: everything after the first dot, so a minified
+            // file is not a media file. wkhtmltopdf's quirk, kept on purpose.
+            "https://example.com/jquery.min.js",
+            "https://example.com/style.min.css",
+        ] {
+            assert!(!is_media_file(url), "{url}");
+        }
     }
 
     /// The eight names the issue lists, which are the ones applications grep

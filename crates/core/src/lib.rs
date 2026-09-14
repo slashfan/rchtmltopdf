@@ -12,7 +12,7 @@ pub mod units;
 
 pub use clock::Clock;
 pub use document::{Input, Output, has_url_scheme};
-pub use error::{ExitCode, LoadErrorHandling, NetworkError};
+pub use error::{ExitCode, LoadErrorHandling, NetworkError, is_media_file};
 pub use page_size::{Orientation, PageDimensions};
 pub use settings::{GlobalSettings, ObjectSettings, PageSetup, Settings};
 pub use units::{Length, Unit};

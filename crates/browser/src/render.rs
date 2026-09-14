@@ -188,7 +188,7 @@ impl Page {
                     // The navigation never got a response to carry a status.
                     http_status: 0,
                 }),
-                media: Vec::new(),
+                subresources: Vec::new(),
             });
         }
 
@@ -409,9 +409,9 @@ fn js_string(raw: &str) -> String {
 /// `ContentNotFoundError` comes from.
 ///
 /// So the network events are watched, and what is found is **reported rather
-/// than decided on**. Whether a failed subresource is worth an exit code is
-/// `--load-media-error-handling`'s business and the command line layer's, not
-/// this module's (D14).
+/// than decided on**. Whether a failed subresource is worth an exit code is the
+/// command line layer's business, not this module's: `--load-media-error-handling`
+/// answers for a media file, and the exit code for everything else (D14, D49).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LoadReport {
     /// The document's own request, if it failed. A 404 is one of these: the
@@ -421,8 +421,9 @@ pub struct LoadReport {
     /// to print — not even an error page (D44). `document` names the failure.
     pub navigation_failed: bool,
     /// Everything else that failed, once per URL and in the order it was asked
-    /// for.
-    pub media: Vec<Failed>,
+    /// for. Not all of it is media: a frame's own document lands here too, and
+    /// the line between the two is drawn above (D49).
+    pub subresources: Vec<Failed>,
 }
 
 /// One request that did not produce what was wanted.
@@ -475,10 +476,15 @@ impl Watch {
         if url.ends_with("/favicon.ico") {
             return;
         }
-        if self.report.media.iter().any(|failed| failed.url == url) {
+        if self
+            .report
+            .subresources
+            .iter()
+            .any(|failed| failed.url == url)
+        {
             return;
         }
-        self.report.media.push(Failed {
+        self.report.subresources.push(Failed {
             url,
             error,
             http_status,
@@ -793,8 +799,11 @@ mod tests {
         );
         // And the image is reported separately, because a subresource is
         // somebody else's decision (D14).
-        assert_eq!(watch.report.media.len(), 1);
-        assert_eq!(watch.report.media[0].error, NetworkError::UnknownContent);
+        assert_eq!(watch.report.subresources.len(), 1);
+        assert_eq!(
+            watch.report.subresources[0].error,
+            NetworkError::UnknownContent
+        );
     }
 
     /// A redirect reuses the request id, so the first document-type request

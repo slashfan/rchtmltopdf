@@ -144,6 +144,20 @@ comportement est reproduit à l'identique : `screen` par défaut, `print` avec l
 vos styles d'impression n'étaient jamais appliqués auparavant, ils ne le seront pas
 davantage ici.
 
+## Sous-ressources qui ne chargent pas : la règle de l'extension
+
+wkhtmltopdf ne soumettait à `--load-media-error-handling` que six extensions — `css`, `js`,
+`png`, `jpg`, `jpeg`, `gif` — et **tout autre échec faisait sortir en 1**, le PDF écrit, quel
+que soit le gestionnaire : le document d'un `<iframe>`, une police web, un `.svg`, une
+requête sans extension, et même `jquery.min.js`, dont le suffixe au sens de Qt est `min.js`.
+Cette règle est reproduite telle quelle (voir [D49](decisions.md)). La conversion sort donc en
+1 avec `Exit with code 1 due to network error: <Nom>` sur stderr, et Snappy lève comme avant.
+
+**Un fichier local refusé fait sortir en 1**, lui aussi, sur le document comme sur un
+bandeau. Oublier `--enable-local-file-access` ne livre plus un PDF sans style en silence :
+le PDF est écrit, chaque fichier refusé est nommé avec le remède, et le code de sortie le
+dit.
+
 ## Différences attendues, et qui ne sont pas des bugs
 
 * pagination et nombre de pages ;
@@ -164,7 +178,8 @@ sortie de `--dump-parse`, qui résout la plupart des cas immédiatement.
 3. Vérifier que les media queries et les scripts ne dépendent pas d'une largeur de fenêtre
    pour la mise en page : à l'impression, c'est la largeur du papier qui décide.
 4. Ajouter `--enable-local-file-access`, ou `--allow <dossier>`, si le document lit des
-   fichiers locaux — ce n'est plus permis par défaut, et c'est délibéré (D10).
+   fichiers locaux — ce n'est plus permis par défaut, et c'est délibéré (D10). L'oublier
+   fait sortir en 1, PDF écrit, comme avec wkhtmltopdf (D49).
 5. Lancer une conversion avec `--dump-parse` pour vérifier que la ligne de commande est lue
    comme prévu.
 6. Comparer un document de référence, pas une capture d'écran.
