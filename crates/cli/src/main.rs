@@ -98,6 +98,15 @@ async fn run(args: &[String]) -> ExitCode {
         Ok(code) => code,
         Err(error) => {
             eprintln!("{PROGRAM}: {error}");
+            // A run that ended because something would not load ends with the
+            // line applications grep for, wherever the failure was noticed —
+            // a document missing from the disk reads the same as one missing
+            // from the network, because wkhtmltopdf fetched both the same way
+            // (D48). Written at every log level: it is a contract, like the
+            // exit code it announces.
+            if let Some(failure) = error.network_error() {
+                eprintln!("Exit with code 1 due to network error: {}", failure.name());
+            }
             ExitCode::Failure
         }
     }

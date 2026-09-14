@@ -87,6 +87,27 @@ impl NetworkError {
         }
     }
 
+    /// The number Qt gave it, which wkhtmltopdf prints beside the URL.
+    ///
+    /// `Failed to load <url>, with network status code 3 and http status code
+    /// 0 - …` is `QNetworkReply::NetworkError` as an integer, and applications
+    /// that parse that line read the number rather than the name. The values
+    /// are Qt 4.8's enumerators, which are not contiguous: the connection
+    /// errors are 1–4, the content errors 201–299 and the protocol errors 301
+    /// onward.
+    pub const fn code(self) -> u16 {
+        match self {
+            NetworkError::ConnectionRefused => 1,
+            NetworkError::RemoteHostClosed => 2,
+            NetworkError::HostNotFound => 3,
+            NetworkError::Timeout => 4,
+            NetworkError::ContentAccessDenied => 201,
+            NetworkError::ContentNotFound => 203,
+            NetworkError::UnknownContent => 299,
+            NetworkError::ProtocolUnknown => 301,
+        }
+    }
+
     /// Read one of Chromium's `net::ERR_*` strings.
     ///
     /// The prefix is optional so this can be given either `net::ERR_TIMED_OUT`

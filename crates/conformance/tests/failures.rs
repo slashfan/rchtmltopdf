@@ -115,6 +115,16 @@ fn skip_writes_the_other_documents_when_a_host_does_not_resolve() {
         "the skipped document should be named:\n{}",
         outcome.stderr
     );
+    // The request's own line, which is what names the URL under every handler
+    // and carries Qt's numbers for it (#114, D48). Nothing answered, so the
+    // http status is zero and the network status is Qt's HostNotFoundError.
+    assert!(
+        outcome.stderr.contains(&format!(
+            "Failed to load {UNRESOLVABLE}, with network status code 3 and http status code 0"
+        )),
+        "the line a script watching stderr finds the address in:\n{}",
+        outcome.stderr
+    );
     assert!(
         outcome
             .stderr
@@ -177,6 +187,56 @@ fn abort_writes_nothing_when_a_host_does_not_resolve() {
         outcome.stdout.is_empty(),
         "a document that failed under abort must leave no PDF (D14)"
     );
+    // Ending the conversion is not a reason to end it quietly: `abort` writes
+    // the same two lines the other handlers do (#114).
+    assert!(
+        outcome
+            .stderr
+            .contains(&format!("Failed to load {UNRESOLVABLE},")),
+        "abort names the request that failed:\n{}",
+        outcome.stderr
+    );
+    assert!(
+        outcome
+            .stderr
+            .contains("Exit with code 1 due to network error: HostNotFoundError"),
+        "the line applications grep for, under abort as under the rest:\n{}",
+        outcome.stderr
+    );
+}
+
+/// **A document missing from the disk reads like one missing from the network**
+/// (#114, D48). wkhtmltopdf fetched a local file through the same stack as a
+/// URL, so a path that is not there ends with the exit line too. The name is
+/// ours: wkhtmltopdf reports `HostNotFoundError` here only because it parses
+/// the path into `http://<first segment>/…` first, and we will not copy that.
+#[test]
+fn a_document_that_is_not_on_disk_ends_with_the_exit_line() {
+    let scratch = Scratch::new("failures-missing-file");
+    let missing = scratch.join("there-is-no-such-file.html");
+
+    let outcome = Run::new()
+        .arg(missing.display().to_string())
+        .arg("-")
+        .output();
+
+    outcome.failed();
+    assert!(
+        outcome.stderr.contains("no such file"),
+        "it still says which file:\n{}",
+        outcome.stderr
+    );
+    assert!(
+        outcome
+            .stderr
+            .contains("Exit with code 1 due to network error: ContentNotFoundError"),
+        "and ends with the line applications grep for:\n{}",
+        outcome.stderr
+    );
+    assert!(
+        outcome.stdout.is_empty(),
+        "a document that could not be read must leave no PDF (D14)"
+    );
 }
 
 /// **The case D14 is most specific about.** A subresource that fails under
@@ -190,10 +250,18 @@ fn a_failed_subresource_is_judged_by_the_media_handler() {
     let server = server::Server::start();
     let url = server.url(server::MISSING_MEDIA);
 
-    // The default. A missing image is not a reason to fail a conversion.
+    // The default. A missing image is not a reason to fail a conversion — but
+    // it is a reason to say so, and until #114 this said nothing at all. A
+    // document that renders without its stylesheet is the hardest failure to
+    // diagnose precisely because it renders.
     let ignored = Run::new().arg(&url).arg("-").output();
     ignored.succeeded();
     assert!(rchtmltopdf_conformance::binary::is_pdf(&ignored.stdout));
+    assert!(
+        ignored.stderr.contains(".png") && ignored.stderr.contains("was not loaded"),
+        "ignore names the image it ignored, and says what happened to it:\n{}",
+        ignored.stderr
+    );
 
     // `abort`: the document is still written, and the exit code still says so.
     let aborted = Run::new()

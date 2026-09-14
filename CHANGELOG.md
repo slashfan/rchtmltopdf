@@ -23,6 +23,17 @@ surface beyond that is understood on the command line and not yet acted on.
 
 ### Compatibility
 
+**Three stderr lines wkhtmltopdf writes and this program did not** (#114, D48). A document
+that fails to load is now named on its own line — `Failed to load <url>, with network status
+code 3 and http status code 0 - HostNotFoundError` — under `abort`, `skip` and `ignore`
+alike, which is the line that carries the address a script is watching for. A subresource
+lost under `--load-media-error-handling ignore`, the default, is named too instead of
+passing in silence: a PDF that rendered without its stylesheet now says why. And
+`Exit with code 1 due to network error: <Name>` ends every run that exits 1 because
+something would not load, including under `abort` and including a document that was missing
+from the disk rather than from the network. Found by running a Symfony application through
+knp-snappy against both binaries (#32).
+
 **`[section]`, `[subsection]` and `[subsubsection]` name the first heading on the page**
 (#109, D47). Where two headings of one level fall on the same page, the band now names the
 first, as wkhtmltopdf does; it named the last. A page that begins no heading of a level

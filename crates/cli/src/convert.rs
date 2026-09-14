@@ -45,7 +45,7 @@ use rchtmltopdf_browser::placeholder;
 use rchtmltopdf_browser::plan::{self, Plan};
 use rchtmltopdf_browser::render::{Failed, Progress};
 use rchtmltopdf_core::settings::{Band, ObjectKind, ObjectSettings, Settings};
-use rchtmltopdf_core::{ExitCode, Input, LoadErrorHandling};
+use rchtmltopdf_core::{ExitCode, Input, LoadErrorHandling, NetworkError};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
@@ -58,6 +58,10 @@ pub enum ConvertError {
     /// Every document was dropped by `--load-error-handling skip`, so there is
     /// nothing to write. One entry per document, as `could not load` lines.
     NothingLeft(Vec<String>),
+    /// A document never arrived and `--load-error-handling abort` — the default
+    /// — ended the conversion. Carries the failure rather than a sentence about
+    /// it, so the exit line can name it (D14).
+    DocumentFailed(Failed),
     /// `--dump-outline` named a file that could not be written.
     Dump {
         path: PathBuf,
@@ -85,10 +89,30 @@ impl fmt::Display for ConvertError {
                     path.display()
                 )
             }
+            ConvertError::DocumentFailed(failed) => {
+                write!(f, "could not load {}: {}", failed.url, failed.error.name())
+            }
             ConvertError::Input(error) => write!(f, "{error}"),
             ConvertError::Output(error) => write!(f, "{error}"),
             ConvertError::Browser(error) => write!(f, "{error}"),
             ConvertError::Pdf(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl ConvertError {
+    /// The load failure behind this, if a load is what failed.
+    ///
+    /// wkhtmltopdf ends such a run with `Exit with code 1 due to network
+    /// error: <Name>`, whether the document was missing from the disk or from
+    /// the network — it fetched both through the same stack. Applications grep
+    /// for that line, so the binary writes it once, for every error that
+    /// answers here (D14, D48).
+    pub fn network_error(&self) -> Option<NetworkError> {
+        match self {
+            ConvertError::DocumentFailed(failed) => Some(failed.error),
+            ConvertError::Input(error) => Some(error.error),
+            _ => None,
         }
     }
 }
@@ -578,13 +602,16 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             // from what did load, and all three exit 1 when the document never
             // arrived at all.
             if let Some(failed) = &report.document {
+                // The request itself, before the handler says what to do about
+                // it. wkhtmltopdf writes this line whichever handler is in
+                // force, and it is the one that names the URL under all three
+                // (#114): a script watching stderr finds the address that
+                // failed here, and the codes tell a server that refused from a
+                // server that was never reached.
+                report_failed_request(settings, failed);
                 match object.load.on_document_error {
                     LoadErrorHandling::Abort => {
-                        return Err(rchtmltopdf_browser::Error::Navigation {
-                            url: failed.url.clone(),
-                            reason: failed.error.name().to_string(),
-                        }
-                        .into());
+                        return Err(ConvertError::DocumentFailed(failed.clone()));
                     }
                     // `skip` drops the failing document and carries on with the
                     // others. Said now rather than at the end, in wkhtmltopdf's
@@ -934,8 +961,12 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
     let mut outcome = ExitCode::Success;
     for (index, failures) in &printed.media {
         match (objects[*index].load.on_media_error, failures.as_slice()) {
-            (_, []) | (LoadErrorHandling::Ignore, _) => {}
-            (LoadErrorHandling::Skip, failures) => {
+            (_, []) => {}
+            // `ignore` is the default, and it used to say nothing at all. A
+            // document that renders without its stylesheet is the hardest kind
+            // of failure to diagnose precisely because it renders, and
+            // wkhtmltopdf named the resource here too (#114).
+            (LoadErrorHandling::Ignore, failures) | (LoadErrorHandling::Skip, failures) => {
                 for failed in failures {
                     report_media(settings, failed);
                 }
@@ -1027,6 +1058,24 @@ fn loading_line(index: usize, total: usize) -> String {
 fn say(settings: &Settings, line: &str) {
     if settings.global.log_level.shows_progress() {
         eprintln!("{line}");
+    }
+}
+
+/// One failed request, in the shape wkhtmltopdf wrote for it.
+///
+/// `Failed to load <url>, with network status code <n> and http status code
+/// <n> - <Name>`. The numbers are Qt's, which is what an application parsing
+/// this line expects; the tail is the error's name rather than Qt's sentence
+/// about it, because that sentence is Qt's and not reproducible (D48).
+fn report_failed_request(settings: &Settings, failed: &Failed) {
+    if settings.global.log_level.shows_errors() {
+        eprintln!(
+            "{PROGRAM}: Failed to load {}, with network status code {} and http status code {} - {}",
+            failed.url,
+            failed.error.code(),
+            failed.http_status,
+            failed.error.name()
+        );
     }
 }
 
