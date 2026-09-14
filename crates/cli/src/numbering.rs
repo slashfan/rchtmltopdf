@@ -26,9 +26,14 @@
 //! # Sections
 //!
 //! `[section]`, `[subsection]` and `[subsubsection]` name the heading in force
-//! on the page: the last `h1`, `h2` or `h3` at or before it, within the same
-//! document. They are read from the outline Chromium wrote (D36), which is why
-//! a band that uses them asks for the outline to be generated even under
+//! on the page, and wkhtmltopdf's rule for that is narrower than it looks
+//! (D47): for each level, the **first** heading that begins on a page is the
+//! one that page names, and a page where none begins keeps what the page
+//! before it named — across a document boundary as well. So two `h2` on one
+//! page name the first, and the page after them still names the first.
+//!
+//! They are read from the outline Chromium wrote (D36), which is why a band
+//! that uses them asks for the outline to be generated even under
 //! `--no-outline`.
 
 use rchtmltopdf_browser::placeholder::Numbers;
@@ -49,25 +54,26 @@ pub fn number(parts: &[Part], outline: &[OutlineItem]) -> Vec<(usize, Numbers)> 
     let total: i64 = parts.iter().map(|part| part.pages as i64).sum();
     let headings = flatten(outline);
 
+    // wkhtmltopdf's header/footer cache, one slot per level, carried from page
+    // to page and never reset (D47). A page fills a slot only if the slot is
+    // still the one before it, which is what makes the *first* heading on the
+    // page win over the ones after it.
+    let mut in_force = [String::new(), String::new(), String::new()];
+
     let mut out = Vec::new();
     let mut physical = 0usize;
     for (index, part) in parts.iter().enumerate() {
-        let first_physical = physical + 1;
-        let last_physical = physical + part.pages;
-        let from = first_physical as i64;
+        let from = (physical + 1) as i64;
         for within in 1..=part.pages {
             physical += 1;
-            let heading = |level: usize| -> String {
-                headings
+            for (level, slot) in in_force.iter_mut().enumerate() {
+                if let Some((_, _, title)) = headings
                     .iter()
-                    .rfind(|(l, page, _)| {
-                        *l == level
-                            && *page <= physical
-                            && (first_physical..=last_physical).contains(page)
-                    })
-                    .map(|(_, _, title)| title.clone())
-                    .unwrap_or_default()
-            };
+                    .find(|(l, page, _)| *l == level + 1 && *page == physical)
+                {
+                    slot.clone_from(title);
+                }
+            }
             out.push((
                 index,
                 Numbers {
@@ -76,9 +82,9 @@ pub fn number(parts: &[Part], outline: &[OutlineItem]) -> Vec<(usize, Numbers)> 
                     frompage: part.page_offset + from,
                     sitepage: within as i64,
                     sitepages: part.pages as i64,
-                    section: heading(1),
-                    subsection: heading(2),
-                    subsubsection: heading(3),
+                    section: in_force[0].clone(),
+                    subsection: in_force[1].clone(),
+                    subsubsection: in_force[2].clone(),
                 },
             ));
         }
@@ -108,7 +114,9 @@ pub fn dump_page(parts: &[Part], physical: usize) -> i64 {
     physical as i64 + offset
 }
 
-/// Every outline entry as `(level, page, title)`, in reading order.
+/// Every outline entry as `(level, page, title)`, in **reading order**, which
+/// is the order the cache in [`number`] depends on: the first entry it finds
+/// for a page is the first heading that begins there.
 fn flatten(items: &[OutlineItem]) -> Vec<(usize, usize, String)> {
     fn walk(items: &[OutlineItem], level: usize, out: &mut Vec<(usize, usize, String)>) {
         for item in items {
@@ -195,21 +203,8 @@ mod tests {
         }
     }
 
-    /// The heading in force on a page is the last one at or before it, and a
-    /// heading in another document is not in force here.
-    #[test]
-    fn sections_follow_the_headings_within_a_document() {
-        let outline = vec![
-            item(
-                "One",
-                1,
-                vec![item("One A", 1, vec![item("Deep", 2, vec![])])],
-            ),
-            item("Two", 3, vec![]),
-            item("Appendix", 4, vec![]),
-        ];
-        let numbered = number(&[part(3), part(1)], &outline);
-        let sections: Vec<(&str, &str, &str)> = numbered
+    fn sections(numbered: &[(usize, Numbers)]) -> Vec<(&str, &str, &str)> {
+        numbered
             .iter()
             .map(|(_, n)| {
                 (
@@ -218,15 +213,54 @@ mod tests {
                     n.subsubsection.as_str(),
                 )
             })
-            .collect();
+            .collect()
+    }
+
+    /// **The first heading on the page wins, and the page after it keeps that
+    /// one** (D47). Two `h2` and two `h3` begin on page 1; the band names
+    /// `One A` and `Deep`, not the last of each. Page 2 begins no heading at
+    /// all, so it names what page 1 named — `One A` again, not `One B`.
+    #[test]
+    fn a_page_names_the_first_heading_that_begins_on_it() {
+        let outline = vec![
+            item(
+                "One",
+                1,
+                vec![
+                    item(
+                        "One A",
+                        1,
+                        vec![item("Deep", 1, vec![]), item("Deeper", 1, vec![])],
+                    ),
+                    item("One B", 1, vec![]),
+                ],
+            ),
+            item("Two", 3, vec![]),
+        ];
+        let numbered = number(&[part(3)], &outline);
         assert_eq!(
-            sections,
+            sections(&numbered),
             [
-                ("One", "One A", ""),
+                ("One", "One A", "Deep"),
                 ("One", "One A", "Deep"),
                 ("Two", "One A", "Deep"),
-                ("Appendix", "", ""),
             ]
+        );
+    }
+
+    /// **Nothing resets at a document boundary** (D47). The second document
+    /// brings its own `h1` and nothing below it, so its page names that `h1`
+    /// and keeps the `h2` and `h3` the first document left in force.
+    #[test]
+    fn a_heading_stays_in_force_into_the_next_document() {
+        let outline = vec![
+            item("One", 1, vec![item("One A", 1, vec![])]),
+            item("Appendix", 2, vec![]),
+        ];
+        let numbered = number(&[part(1), part(1)], &outline);
+        assert_eq!(
+            sections(&numbered),
+            [("One", "One A", ""), ("Appendix", "One A", "")]
         );
     }
 

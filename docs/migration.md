@@ -96,7 +96,9 @@ que nous reproduisons (voir [D39](decisions.md)) :
 et `[time]` sont substitués, ainsi que ceux définis par `--replace`. `[page]` et `[topage]`
 comptent sur l'ensemble du document produit, couverture comprise (D45) ; `[sitepage]` et
 `[sitepages]` dans le document d'origine ; `--page-offset` décale les premiers. Les trois
-`[section]` nomment le dernier titre `h1`, `h2` ou `h3` sur la page ou avant elle.
+`[section]` nomment le **premier** titre `h1`, `h2` ou `h3` qui commence sur la page ; une
+page qui n'en commence aucun garde celui que la page précédente nommait, y compris d'un
+document à l'autre (D47).
 `[title]` est le `<title>` du document sur lequel le bandeau est dessiné — avec plusieurs
 documents, chaque page nomme le sien — et `[doctitle]` le titre du fichier produit :
 `--title`, ou à défaut celui du premier document (D46).
