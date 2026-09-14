@@ -185,6 +185,8 @@ impl Page {
                     // does. An application branching on `HostNotFoundError` is
                     // reading the stderr of a program it did not write (D14).
                     error: NetworkError::from_chromium(reason),
+                    // The navigation never got a response to carry a status.
+                    http_status: 0,
                 }),
                 media: Vec::new(),
             });
@@ -428,6 +430,12 @@ pub struct LoadReport {
 pub struct Failed {
     pub url: String,
     pub error: NetworkError,
+    /// The status the server answered with, or **0 when no response arrived**
+    /// — a host that did not resolve, a connection nobody accepted, a file that
+    /// is not there. wkhtmltopdf prints both this and [`NetworkError::code`] on
+    /// the line applications grep for, and the pair is how they tell a server
+    /// that refused from a server that was never reached.
+    pub http_status: u16,
 }
 
 impl std::fmt::Display for Failed {
@@ -447,13 +455,17 @@ struct Watch {
 }
 
 impl Watch {
-    fn record(&mut self, id: &str, error: NetworkError) {
+    fn record(&mut self, id: &str, error: NetworkError, http_status: u16) {
         let url = self.urls.get(id).cloned().unwrap_or_default();
 
         if self.document.as_deref() == Some(id) {
             // The first failure is the one worth reporting: a redirect chain
             // that ends badly should name what went wrong, not what came after.
-            self.report.document.get_or_insert(Failed { url, error });
+            self.report.document.get_or_insert(Failed {
+                url,
+                error,
+                http_status,
+            });
             return;
         }
 
@@ -466,7 +478,11 @@ impl Watch {
         if self.report.media.iter().any(|failed| failed.url == url) {
             return;
         }
-        self.report.media.push(Failed { url, error });
+        self.report.media.push(Failed {
+            url,
+            error,
+            http_status,
+        });
     }
 }
 
@@ -538,7 +554,7 @@ fn apply_traffic(event: &Event, in_flight: &mut HashSet<String>, watch: &mut Wat
                 .and_then(Value::as_u64)
                 .unwrap_or(200);
             if let Some(error) = NetworkError::from_status(status as u16) {
-                watch.record(id, error);
+                watch.record(id, error, status as u16);
             }
         }
         "Network.loadingFinished" => {
@@ -551,7 +567,8 @@ fn apply_traffic(event: &Event, in_flight: &mut HashSet<String>, watch: &mut Wat
                 .get("errorText")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            watch.record(id, NetworkError::from_chromium(text));
+            // Nothing answered, so there is no status to report beside it.
+            watch.record(id, NetworkError::from_chromium(text), 0);
         }
         _ => {}
     }

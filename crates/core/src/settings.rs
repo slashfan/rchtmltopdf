@@ -48,6 +48,15 @@ impl LogLevel {
         matches!(self, LogLevel::Warn | LogLevel::Info)
     }
 
+    /// Whether an error should be shown at this level.
+    ///
+    /// Everything but `none`. wkhtmltopdf wrote its load failures through
+    /// `error()` rather than `warning()`, so `--log-level error` keeps the line
+    /// that names what failed while dropping the handler's own remark about it.
+    pub fn shows_errors(self) -> bool {
+        !matches!(self, LogLevel::None)
+    }
+
     /// Whether the progress lines should be shown.
     ///
     /// Only at `info`, which is the default. They are chatter rather than
@@ -702,6 +711,10 @@ mod tests {
         assert_eq!(LogLevel::parse("none"), Some(LogLevel::None));
         assert_eq!(LogLevel::parse("INFO"), Some(LogLevel::Info));
         assert_eq!(LogLevel::parse("shout"), None);
+        assert!(!LogLevel::None.shows_errors());
+        assert!(LogLevel::Error.shows_errors());
+        assert!(LogLevel::Warn.shows_errors());
+        assert!(LogLevel::Info.shows_errors());
         assert!(!LogLevel::None.shows_warnings());
         assert!(!LogLevel::Error.shows_warnings());
         assert!(LogLevel::Warn.shows_warnings());

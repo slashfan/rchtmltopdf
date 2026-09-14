@@ -13,7 +13,7 @@
 //! expects `logo.png` to mean the one they can see, so the file is written into
 //! the working directory and removed again afterwards.
 
-use rchtmltopdf_core::Input;
+use rchtmltopdf_core::{Input, NetworkError};
 use std::fmt;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -22,6 +22,11 @@ use std::path::{Path, PathBuf};
 pub struct InputError {
     pub input: String,
     pub reason: String,
+    /// What wkhtmltopdf would have called this, because it fetched even a local
+    /// file through its network stack and named every failure from Qt's enum.
+    /// It is what the `Exit with code 1 due to network error: …` line carries
+    /// when a document never arrived (D14), and applications grep for it.
+    pub error: NetworkError,
 }
 
 impl fmt::Display for InputError {
@@ -68,6 +73,7 @@ pub fn resolve(input: &Input) -> Result<Resolved, InputError> {
     let directory = std::env::current_dir().map_err(|error| InputError {
         input: "-".to_string(),
         reason: format!("the working directory is unreadable: {error}"),
+        error: NetworkError::UnknownContent,
     })?;
     let mut stdin = std::io::stdin().lock();
     resolve_in(input, &mut stdin, &directory)
@@ -103,19 +109,22 @@ pub fn resolve_in(
 /// Starting a browser to discover a file does not exist costs a second and
 /// produces a PDF of a "file not found" page instead of an error.
 fn existing_file(path: &Path) -> Result<PathBuf, InputError> {
-    let fail = |reason: &str| InputError {
+    let fail = |reason: &str, error: NetworkError| InputError {
         input: path.display().to_string(),
         reason: reason.to_string(),
+        error,
     };
 
     let resolved = std::fs::canonicalize(path).map_err(|error| match error.kind() {
-        std::io::ErrorKind::NotFound => fail("no such file"),
-        std::io::ErrorKind::PermissionDenied => fail("permission denied"),
-        _ => fail(&error.to_string()),
+        std::io::ErrorKind::NotFound => fail("no such file", NetworkError::ContentNotFound),
+        std::io::ErrorKind::PermissionDenied => {
+            fail("permission denied", NetworkError::ContentAccessDenied)
+        }
+        _ => fail(&error.to_string(), NetworkError::UnknownContent),
     })?;
 
     if !resolved.is_file() {
-        return Err(fail("not a file"));
+        return Err(fail("not a file", NetworkError::ContentNotFound));
     }
     Ok(resolved)
 }
@@ -123,6 +132,7 @@ fn existing_file(path: &Path) -> Result<PathBuf, InputError> {
 fn from_stdin(stdin: &mut dyn Read, directory: &Path) -> Result<Resolved, InputError> {
     let fail = |reason: String| InputError {
         input: "standard input".to_string(),
+        error: NetworkError::UnknownContent,
         reason,
     };
 
@@ -164,6 +174,7 @@ pub fn scratch_document(label: &str, html: &str) -> Result<Resolved, InputError>
     let fail = |reason: String| InputError {
         input: format!("the {label} document"),
         reason,
+        error: NetworkError::UnknownContent,
     };
     let path =
         std::env::temp_dir().join(format!(".rchtmltopdf-{label}-{}.html", std::process::id()));
