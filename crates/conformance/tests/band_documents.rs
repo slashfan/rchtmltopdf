@@ -280,7 +280,9 @@ fn a_footer_document_is_anchored_to_the_bottom_and_sizes_the_margin() {
 
 /// A band document is named on the command line the way the input is, so it
 /// is read under the same rule: what *it* reaches on the disk needs
-/// `--enable-local-file-access`, and is refused with a warning without it.
+/// `--enable-local-file-access`, and is refused without it — a warning, and
+/// exit 1 with the PDF written, as for the input (D49). wkhtmltopdf took the
+/// exit code from its header loader as it did from the page loader.
 #[test]
 fn a_band_document_reads_the_disk_under_the_same_rule_as_the_input() {
     let Some(_browser) = require_chromium() else {
@@ -301,10 +303,21 @@ fn a_band_document_reads_the_disk_under_the_same_rule_as_the_input() {
         .arg(page.display().to_string())
         .arg("-")
         .output();
-    refused.succeeded();
+    refused.failed();
+    assert!(
+        rchtmltopdf_conformance::binary::is_pdf(&refused.stdout),
+        "a refusal writes the PDF and exits 1; it does not throw the document away"
+    );
     assert!(
         refused.stderr.contains("style.css") && refused.stderr.contains("local file access"),
         "the stylesheet should have been refused with a warning: {}",
+        refused.stderr
+    );
+    assert!(
+        refused
+            .stderr
+            .contains("Exit with code 1 due to network error: ContentAccessDenied"),
+        "the line applications grep for:\n{}",
         refused.stderr
     );
 

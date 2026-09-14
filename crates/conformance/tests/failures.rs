@@ -298,6 +298,62 @@ fn a_failed_subresource_is_judged_by_the_media_handler() {
     );
 }
 
+/// **Not every subresource is a media file** (D49). wkhtmltopdf sorted a failed
+/// request by its extension: css, js, png, jpg, jpeg and gif went to
+/// `--load-media-error-handling`, and anything else set the exit code whatever
+/// either handler said. A frame's document is `.html`, so a frame that cannot
+/// load is exit 1 under the most lenient pair of handlers there is, with the
+/// PDF written. Measured against wkhtmltopdf 0.12.6.1 (#112).
+#[test]
+fn a_frame_that_does_not_resolve_is_a_network_error_under_every_handler() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("failures-frame-unresolvable");
+    let page = fixture::write(
+        scratch.path(),
+        "frame.html",
+        &format!("<p>before</p><iframe src=\"{UNRESOLVABLE}\"></iframe><p>after</p>"),
+    );
+
+    for handlers in [
+        vec![],
+        vec![
+            "--load-error-handling",
+            "ignore",
+            "--load-media-error-handling",
+            "ignore",
+        ],
+    ] {
+        let outcome = Run::new()
+            .args(handlers.iter().copied())
+            .arg(page.display().to_string())
+            .arg("-")
+            .output();
+        outcome.failed();
+        assert!(
+            rchtmltopdf_conformance::binary::is_pdf(&outcome.stdout),
+            "the PDF is written all the same ({handlers:?})"
+        );
+        // The request's own line, as for a document (D48): the only one that
+        // names the frame under every handler.
+        assert!(
+            outcome.stderr.contains(&format!(
+                "Failed to load {UNRESOLVABLE}, with network status code 3 and http status code 0"
+            )),
+            "the line a script watching stderr finds the address in ({handlers:?}):\n{}",
+            outcome.stderr
+        );
+        assert!(
+            outcome
+                .stderr
+                .contains("Exit with code 1 due to network error: HostNotFoundError"),
+            "the line applications grep for ({handlers:?}):\n{}",
+            outcome.stderr
+        );
+    }
+}
+
 /// Chromium asks for a favicon on every navigation and wkhtmltopdf never did.
 /// Counting it would fail a conversion under `abort` for a file the document
 /// never mentioned.

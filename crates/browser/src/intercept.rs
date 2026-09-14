@@ -35,6 +35,7 @@ use crate::cdp::Session;
 use crate::error::Result;
 use crate::file_access::{FileAccess, Verdict};
 use base64::Engine;
+use rchtmltopdf_core::NetworkError;
 use rchtmltopdf_core::settings::Pair;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -112,6 +113,20 @@ pub struct Refusal {
 impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} was not loaded: {}", self.url, self.reason)
+    }
+}
+
+impl Refusal {
+    /// The error the request was failed with.
+    ///
+    /// A refusal is answered with `AccessDenied`, so this is what the browser
+    /// reports back for it, and it is the name the exit line carries: a refused
+    /// file is exit 1 whatever the handlers say (D49). wkhtmltopdf wrote
+    /// `ProtocolUnknownError` here, because it swapped the file for
+    /// `about:blank` and failed that instead. The name is an artefact of the
+    /// swap rather than a rule, and D48 already declined to copy one of those.
+    pub fn error(&self) -> NetworkError {
+        NetworkError::ContentAccessDenied
     }
 }
 
