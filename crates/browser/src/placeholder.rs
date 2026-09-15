@@ -53,10 +53,11 @@ pub struct Context {
 /// What one page's numbers are, in wkhtmltopdf's two frames (#39).
 ///
 /// `page` and `topage` count across the whole output; `sitepage` and
-/// `sitepages` within the document the page came from; `frompage` is where
-/// that document began in the first frame. A cover's pages are in both counts
-/// (D45); what a cover has not got is a band to print them in. The three
-/// sections name the heading in force on the page, from the outline.
+/// `sitepages` within the object the page came from. `frompage` is in neither
+/// frame: it is the first page of the output, the same number on every page,
+/// which is what wkhtmltopdf fills it with (D51). A cover's pages are in both
+/// counts (D45); what a cover has not got is a band to print them in. The
+/// three sections name the heading in force on the page, from the outline.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Numbers {
     pub page: i64,
