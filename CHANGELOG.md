@@ -21,6 +21,12 @@ document included. A cover, or a document `--exclude-from-outline`, keeps its it
 `title=""` and nothing under it, as wkhtmltopdf writes it. The bookmarks in the file are not
 affected: they are the flat run of headings in both programs.
 
+**`--outline-depth` bounds the bookmarks and nothing else** (#115, D53). It used to cut
+the `--dump-outline` XML, the headings a table of contents lists and the headings
+`[subsection]` and `[subsubsection]` name to the same depth. wkhtmltopdf checks the depth
+only where it writes the bookmarks: with `--outline-depth 1`, its dump, its table of
+contents and its bands still carry every level, and so do ours now.
+
 **A document with no `<title>` element has no title** (D52). Chromium writes the URL into the
 Info dictionary of such a document — the file name, or the host and path — and that is what
 `[title]` printed, what `[doctitle]` fell back to and what the file carried. wkhtmltopdf
