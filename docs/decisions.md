@@ -632,3 +632,17 @@ La source dit la même chose : dans `outline.cc`, `outlineChildren` — qui écr
 **Ce que D36 disait.** « `--dump-outline` écrit ce que le fichier porte » : c'était la commodité d'une seule passe, et la mesure la contredit. La passe reste une — lire puis couper —, c'est ce qu'elle rend qui change.
 
 **Écarté.** Lire l'outline deux fois, une fois entière pour le dump et une fois coupée pour le reste : deux chemins pour un résultat que la mesure dit unique. Ajouter l'écart à D36 et aux attentes du harnais, comme #115 le proposait en second : un consommateur du dump sous `--outline-depth` est rare, mais la table des matières et les bandeaux ne le sont pas, et la même coupe les atteignait.
+
+## D54 — L'ordre d'extraction d'une table des matières est celui de l'extracteur, pas de la feuille : D41 tient
+
+**Choix.** La feuille de style de la table des matières reste celle que D41 a choisie, `span {float: right;}` compris. L'écart que le harnais Symfony/Snappy relève sur `toc/default`, `toc/options` et `toc/enable-toc-back-links` — `pdftotext` lit chez wkhtmltopdf chaque numéro à côté de son titre, et chez nous les numéros d'une liste groupés après ses titres — est déclaré **attendu** dans le harnais, et n'est pas reproduit.
+
+**Pourquoi.** #122 attribuait l'écart au flux de contenu : Chromium peindrait les flottants d'une liste en groupe, et un extracteur ne verrait que cet ordre. Mesuré sur le même balisage et la même feuille, imprimés par les deux binaires dans `debian:bookworm-slim`, `pdftotext` 22.12.0 :
+
+* en **ordre brut** (`-raw`, l'ordre du flux de contenu), les deux fichiers lisent la même chose : `2 2 2 3 4`, **puis** les titres. Qt peignait les flottants d'abord, exactement comme Chromium. Ce n'est pas là que les deux diffèrent ;
+* en ordre de lecture (le mode par défaut, celui du harnais), un titre assez long pour passer à la ligne fait grouper les numéros chez wkhtmltopdf aussi : `Deep One | Section Two … | Chapter Two | 2 | 3 | 4`. L'ordre est celui que l'analyse de mise en page de poppler décide, à partir de la géométrie des mots, et la géométrie des deux moteurs diffère de moins d'un point ;
+* le même document avec `div {display: flex; justify-content: space-between;}` à la place du flottant donne chez nous des boîtes de mots **identiques au centième de point** et un ordre de lecture **identique** — alors que son ordre brut, lui, met chaque numéro derrière son titre. Changer la feuille change le flux et ne change pas ce que le harnais lit.
+
+Ce que le harnais compare n'est donc pas une propriété de la table mais une décision de l'extracteur sur une géométrie que la promesse du projet ne couvre pas : une compatibilité fonctionnelle, jamais la parité au pixel près. Tous les mots et tous les numéros sont dans les deux fichiers, et les numéros s'accordent ; c'est ce que les tests de conformance tiennent (`contents.rs`), et c'est ce qu'un consommateur qui lit une table peut attendre.
+
+**Écarté.** Remplacer le flottant par une rangée flex ou une cellule de tableau : mesuré sans effet sur ce que le harnais lit, et une feuille de plus à justifier face à « même CSS ». Ajuster la géométrie jusqu'à ce que poppler groupe comme chez Qt : c'est la parité au pixel près par un autre nom, et poppler n'est qu'un extracteur parmi d'autres. Une assertion de conformance sur l'ordre du texte extrait, comme #122 le demandait : elle testerait l'heuristique de l'extracteur, pas le programme.
