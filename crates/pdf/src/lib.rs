@@ -974,19 +974,21 @@ pub struct OutlineItem {
 pub struct OutlineTreatment {
     /// Leave it in the file. Off is `--no-outline`.
     pub keep: bool,
-    /// Entries deeper than this are cut, `--outline-depth`. Nought cuts them
-    /// all.
+    /// Entries deeper than this are cut from the file, `--outline-depth`.
+    /// Nought cuts them all. What is read back is the whole tree regardless
+    /// (D53).
     pub depth: u32,
 }
 
-/// Bound the outline to a depth, read what is left, and take it out of the
-/// file when it was only wanted for reading.
+/// Read the whole outline, then bound what the file keeps of it.
 ///
 /// The print call can be asked for the outline or not, and nothing in between:
 /// the depth wkhtmltopdf lets a user set is cut here, after the fact, by
-/// unhooking the children of every entry at the boundary. What is read back is
-/// what a reader will show, so `--dump-outline` describes the outline the file
-/// actually carries.
+/// unhooking the children of every entry at the boundary. The cut is the
+/// file's alone: what is read back is every entry Chromium wrote, because
+/// `--outline-depth` bounds wkhtmltopdf's bookmarks and nothing else — its
+/// `--dump-outline`, its table of contents and its `[section]` bands all see
+/// the whole tree (D53).
 pub fn outline(
     pdf: &[u8],
     treatment: &OutlineTreatment,
@@ -1001,19 +1003,15 @@ pub fn outline(
         .into_iter()
         .map(|(number, id)| (id, number as usize))
         .collect();
-    let items = if treatment.depth == 0 {
-        Vec::new()
-    } else {
-        let first = document
-            .get_dictionary(root)
-            .map_err(fail)?
-            .get(b"First")
-            .and_then(Object::as_reference)
-            .ok();
-        read_and_cut(&mut document, first, 1, treatment.depth, &page_numbers)?
-    };
+    let first = document
+        .get_dictionary(root)
+        .map_err(fail)?
+        .get(b"First")
+        .and_then(Object::as_reference)
+        .ok();
+    let items = read_and_cut(&mut document, first, 1, treatment.depth, &page_numbers)?;
 
-    if treatment.keep && !items.is_empty() {
+    if treatment.keep && treatment.depth > 0 && !items.is_empty() {
         recount(&mut document, root)?;
     } else {
         document.catalog_mut().map_err(fail)?.remove(b"Outlines");
@@ -1027,8 +1025,10 @@ pub fn outline(
     Ok((out, items))
 }
 
-/// Read a chain of entries at `level`, descending while the depth allows and
-/// unhooking the children of entries at the boundary.
+/// Read a chain of entries at `level` and everything under it, unhooking the
+/// children of the entries at the depth boundary from the file on the way
+/// back up. What is returned is the whole tree; the file loses what hangs
+/// below the boundary.
 fn read_and_cut(
     document: &mut Document,
     first: Option<ObjectId>,
@@ -1051,15 +1051,13 @@ fn read_and_cut(
                 dictionary.get(b"First").and_then(Object::as_reference).ok(),
             )
         };
-        let children = if level < depth {
-            read_and_cut(document, child, level + 1, depth, page_numbers)?
-        } else {
+        let children = read_and_cut(document, child, level + 1, depth, page_numbers)?;
+        if level >= depth {
             let dictionary = document.get_dictionary_mut(id).map_err(fail)?;
             dictionary.remove(b"First");
             dictionary.remove(b"Last");
             dictionary.remove(b"Count");
-            Vec::new()
-        };
+        }
         items.push(OutlineItem {
             title,
             page,
@@ -1914,15 +1912,19 @@ mod tests {
         assert_eq!(items[1].page, 3);
     }
 
-    /// Cut at a depth, the entries below it are gone from the file, not only
-    /// from what was read back.
+    /// Cut at a depth, the entries below it are gone from the file — and
+    /// still in what was read back, which is the whole tree (D53).
     #[test]
     fn the_depth_cuts_the_tree_and_prunes_what_was_cut() {
         let (out, items) = outline(&chapters(), &keep(2)).expect("should read");
         assert_eq!(
             items,
             [
-                item("One", 1, vec![item("One A", 1, vec![])]),
+                item(
+                    "One",
+                    1,
+                    vec![item("One A", 1, vec![item("Deep", 1, vec![])])]
+                ),
                 item("Two", 2, vec![]),
             ]
         );
@@ -1963,12 +1965,19 @@ mod tests {
         assert_eq!(document.get_pages().len(), 2, "the pages are untouched");
     }
 
+    /// `--outline-depth 0` is a file with no bookmarks, and a dump with all
+    /// of them (D53).
     #[test]
     fn a_depth_of_nought_leaves_no_outline() {
         let (out, items) = outline(&chapters(), &keep(0)).expect("should read");
-        assert!(items.is_empty());
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].children[0].children[0].title, "Deep");
         let document = Document::load_mem(&out).expect("should parse");
         assert!(outline_root(&document).is_none());
+        assert!(
+            !String::from_utf8_lossy(&out).contains("Deep"),
+            "the cut entry was left in the bytes"
+        );
     }
 
     #[test]

@@ -719,9 +719,10 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
                 .as_ref()
                 .map(|merged| merged.pages.clone())
                 .unwrap_or_default();
-            // The headings to list. Generated whatever `--no-outline` says:
-            // that option is about the bookmarks the file carries, and a table
-            // of contents was asked for separately.
+            // The headings to list. Generated whatever `--no-outline` says,
+            // and every one of them whatever `--outline-depth` says: both
+            // options are about the bookmarks the file carries (D53), and a
+            // table of contents was asked for separately.
             let headings = match &merged {
                 Some(merged) => {
                     rchtmltopdf_pdf::outline(
@@ -794,8 +795,10 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
         };
 
         // The outline the browser wrote is all or nothing per document, so the
-        // depth is cut here, and the dump describes what the file will carry.
-        // The treatment is global, so the first plan's copy is every plan's.
+        // depth is cut here — from the file alone. What comes back is the
+        // whole tree: `--outline-depth` bounds the bookmarks and nothing
+        // else, so the dump and the bands see every heading (D53). The
+        // treatment is global, so the first plan's copy is every plan's.
         let finish = &plans[0].finish;
         // `--page-offset` is one number for the whole output, wherever it was
         // written (D51), so the same copy answers for every page.

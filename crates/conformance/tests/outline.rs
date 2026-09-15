@@ -122,6 +122,59 @@ fn the_depth_bounds_the_tree() {
     );
 }
 
+/// **`--outline-depth` bounds the bookmarks and nothing else** (#115, D53).
+/// Measured on wkhtmltopdf 0.12.6.1 with `--outline-depth 1` over a document
+/// of three levels: the file's bookmarks stop at the first level, and the
+/// dump, the table of contents and the `[subsection]` band all carry the
+/// levels below it. `outline.cc` checks the depth in `outlineChildren`, which
+/// writes the bookmarks, and nowhere else.
+#[test]
+fn the_depth_bounds_the_bookmarks_and_nothing_else() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("outline-depth-bookmarks-only");
+    let (chapters, _) = fixtures(&scratch);
+    let dump = scratch.join("outline.xml");
+
+    let pdf = convert(&[
+        "--outline-depth",
+        "1",
+        "--dump-outline",
+        &dump.display().to_string(),
+        "--footer-center",
+        "SS=[subsection]|SSS=[subsubsection]",
+        "toc",
+        &chapters,
+    ]);
+    let titles: Vec<String> = pdf
+        .outline()
+        .into_iter()
+        .map(|bookmark| bookmark.title)
+        .collect();
+    assert_eq!(
+        titles,
+        ["Table of Contents", "Chapter One", "Chapter Two"],
+        "{}",
+        pdf.describe()
+    );
+
+    let xml = std::fs::read_to_string(&dump).expect("the dump should be written");
+    assert!(
+        xml.contains("Section One") && xml.contains("Deep One"),
+        "{xml}"
+    );
+
+    let contents = pdf.page_text(1);
+    assert!(
+        contents.contains("Section One") && contents.contains("Deep One"),
+        "{contents:?}"
+    );
+
+    let first = pdf.page_text(2);
+    assert!(first.contains("SS=Section One|SSS=Deep One"), "{first:?}");
+}
+
 /// **Across documents.** The second document's entries follow the first's and
 /// point at the pages they landed on after the merge.
 #[test]
@@ -207,15 +260,15 @@ fn dump_outline_writes_wkhtmltopdfs_xml() {
     // item is numbered with the pages before it (D52).
     for expected in [
         "\n  <item title=\"conformance\" page=\"0\" link=\"\" backLink=\"\">\n    <item title=\"Chapter One\" page=\"1\" link=\"\" backLink=\"\">",
-        "<item title=\"Section One\" page=\"1\" link=\"\" backLink=\"\"/>",
+        "<item title=\"Section One\" page=\"1\" link=\"\" backLink=\"\">\n        <item title=\"Deep One\" page=\"1\" link=\"\" backLink=\"\"/>",
         "<item title=\"Chapter Two\" page=\"2\" link=\"\" backLink=\"\">",
         "\n  <item title=\"conformance\" page=\"2\" link=\"\" backLink=\"\">\n    <item title=\"Appendix\" page=\"3\" link=\"\" backLink=\"\"/>\n  </item>\n</outline>\n",
     ] {
         assert!(xml.contains(expected), "{expected:?} missing from:\n{xml}");
     }
     assert!(
-        !xml.contains("Deep One"),
-        "the depth applies to the dump too:\n{xml}"
+        xml.contains("Deep One"),
+        "the depth bounds the bookmarks, not the dump (D53):\n{xml}"
     );
 
     // `--no-outline --dump-outline`: the dump is the point, and it still comes.
