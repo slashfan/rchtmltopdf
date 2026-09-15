@@ -12,6 +12,22 @@ behaves. If you are migrating, that is the section to read.
 
 ### Compatibility
 
+**`--dump-outline` writes one `item` per object around that object's headings** (#127,
+D52). wkhtmltopdf wraps each document's headings in an item of its own, titled with the
+document's `<title>` — a table of contents with its caption — and numbered with the pages
+before it, so the first object is `page="0"`. We wrote the headings flat at the top level,
+which gave a consumer walking `outline/item` a different tree on every conversion, a single
+document included. A cover, or a document `--exclude-from-outline`, keeps its item with
+`title=""` and nothing under it, as wkhtmltopdf writes it. The bookmarks in the file are not
+affected: they are the flat run of headings in both programs.
+
+**A document with no `<title>` element has no title** (D52). Chromium writes the URL into the
+Info dictionary of such a document — the file name, or the host and path — and that is what
+`[title]` printed, what `[doctitle]` fell back to and what the file carried. wkhtmltopdf
+prints nothing for either and leaves the file's title empty, and so does this now: the title
+is read from the page itself once it has loaded, and the file's title is written whether or
+not `--title` was given.
+
 **`--page-offset` is one number for the whole output** (#44, D51). It used to shift the
 document it was written on, so `wkhtmltopdf a.html b.html --page-offset 100` numbered the
 first document `1 2 3` and the second `104 105`. wkhtmltopdf keeps the offset in its global

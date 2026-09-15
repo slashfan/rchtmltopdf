@@ -103,6 +103,16 @@ pub fn dump_page(physical: usize, offset: i64) -> i64 {
     physical as i64 + offset
 }
 
+/// The number `--dump-outline` writes for an object's own item (D52).
+///
+/// The pages of the file before the object, plus `--page-offset`: nought for
+/// the first object, and one less than the page its first heading is on.
+/// wkhtmltopdf's prefix sum over its objects, and it counts every page of a
+/// cover where wkhtmltopdf counted one.
+pub fn dump_object(before: usize, offset: i64) -> i64 {
+    before as i64 + offset
+}
+
 /// Every outline entry as `(level, page, title)`, in **reading order**, which
 /// is the order the cache in [`number`] depends on: the first entry it finds
 /// for a page is the first heading that begins there.
@@ -281,6 +291,20 @@ mod tests {
         assert_eq!([dump_page(1, -3), dump_page(2, -3)], [-2, -1]);
         let numbered = number(&[2], &[], -3);
         assert_eq!(pages(&numbered)[0], (-2, -1, -2, 1, 2));
+    }
+
+    /// An object's own item is numbered one less than its first page: the
+    /// pages before it, offset like everything else (D52). Measured on
+    /// wkhtmltopdf 0.12.6.1: a three-page document then a one-page one dump
+    /// `page="0"` and `page="3"` for the two objects, `1 2 3` and `4` for
+    /// their headings.
+    #[test]
+    fn an_object_is_numbered_by_the_pages_before_it() {
+        assert_eq!(dump_object(0, 0), 0);
+        assert_eq!(dump_object(3, 0), 3);
+        assert_eq!(dump_object(3, 0) + 1, dump_page(4, 0));
+        assert_eq!(dump_object(0, 100), 100);
+        assert_eq!(dump_object(3, -3), 0);
     }
 
     #[test]

@@ -59,6 +59,28 @@ fn a_document_without_the_option_keeps_the_title_it_had() {
     assert_eq!(pdf.info("Title").as_deref(), Some("conformance"));
 }
 
+/// **A document with no `<title>` element leaves the file's title empty**
+/// (D52). wkhtmltopdf 0.12.6.1 writes an empty one — `pdfinfo` prints a bare
+/// `Title:` — where Chromium writes the file name, which is not a title
+/// anybody gave the document.
+#[test]
+fn a_document_with_no_title_element_gives_the_file_an_empty_one() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("metadata-untitled");
+    let page = scratch.join("untitled.html");
+    std::fs::write(
+        &page,
+        fixture::document(THREE_PAGES).replace("<title>conformance</title>", ""),
+    )
+    .expect("writable");
+    let outcome = Run::new().arg(page.display().to_string()).arg("-").output();
+    outcome.succeeded();
+    let pdf = Pdf::from_bytes(&outcome.stdout);
+    assert_eq!(pdf.info("Title").as_deref(), Some(""));
+}
+
 /// The old dictionary is edited rather than orphaned, so nothing left in the
 /// file still claims the browser made it. A reader follows the trailer and would
 /// never notice; anybody looking at the bytes would.
