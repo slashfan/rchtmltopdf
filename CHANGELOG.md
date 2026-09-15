@@ -10,7 +10,12 @@ behaves. If you are migrating, that is the section to read.
 
 ## [Unreleased]
 
-Nothing released yet.
+## [0.1.0] - 2026-09-15
+
+The first published version. Static Linux binaries for x86_64 and aarch64, macOS binaries
+for Apple silicon and Intel, and a Docker image with a pinned browser, all published from a
+merge that raises the version (D50). A first version rather than a finished one: the warning
+at the top of the README still applies in full.
 
 The binary converts one document or several: each a URL, a local file or standard input,
 to one file or standard output, with paper size, margins, orientation, zoom, backgrounds,

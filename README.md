@@ -6,8 +6,9 @@
 > **A weekend project. Do not use it in production.**
 >
 > This is written for the interest of writing it, and published in case the approach is
-> useful to someone. It is not a maintained product: there is no release, no support, and
-> no undertaking that any of it keeps working or that the command line stays as it is.
+> useful to someone. It is not a maintained product: releases are cut when it suits, there is
+> no support, and no undertaking that any of it keeps working or that the command line stays
+> as it is.
 >
 > It drives a browser over untrusted HTML, which is a thing to get wrong, and nobody has
 > audited it. The threat model in [SECURITY.md](SECURITY.md) describes what the code tries
@@ -39,6 +40,50 @@ rchtmltopdf --page-size A4 --margin-top 15mm \
 ```
 
 A URL, a local file or standard input goes in; a file or standard output comes out.
+
+## Installing
+
+**Linux and macOS.** Windows is not built and cannot be: the browser protocol travels on
+file descriptors, and nobody has written the Windows transport. Every archive is on
+[Releases](https://github.com/slashfan/rchtmltopdf/releases), and each holds the binary, a
+`wkhtmltopdf` symlink to it (D13), the licences and the changelog.
+
+```bash
+# Linux x86_64 — static (musl), no system dependency: it starts on a server with
+# an older glibc, in a distroless image, anywhere the kernel runs.
+curl -sSL https://github.com/slashfan/rchtmltopdf/releases/latest/download/rchtmltopdf-linux-x86_64.tar.gz | tar xz
+```
+
+```bash
+# Linux aarch64 — the same, built on an Arm runner rather than emulated.
+curl -sSL https://github.com/slashfan/rchtmltopdf/releases/latest/download/rchtmltopdf-linux-aarch64.tar.gz | tar xz
+```
+
+```bash
+# macOS Apple silicon
+curl -sSL https://github.com/slashfan/rchtmltopdf/releases/latest/download/rchtmltopdf-macos-arm64.tar.gz | tar xz
+```
+
+```bash
+# macOS Intel — cross-compiled, and the one archive nobody runs before publishing it.
+curl -sSL https://github.com/slashfan/rchtmltopdf/releases/latest/download/rchtmltopdf-macos-x86_64.tar.gz | tar xz
+```
+
+The macOS binaries are unsigned. Fetched with `curl` they run without fuss; downloaded
+through a browser, Gatekeeper quarantines them and `xattr -d com.apple.quarantine
+rchtmltopdf` lifts it.
+
+Every release carries a `SHA256SUMS` file, checkable with `shasum -c`.
+
+With a Rust toolchain at hand, cargo builds and installs it from the repository in one
+command:
+
+```bash
+cargo install --git https://github.com/slashfan/rchtmltopdf rchtmltopdf
+```
+
+Whichever way it arrives, **it needs a browser you install yourself**: see
+[You bring the browser](#you-bring-the-browser).
 
 ## Docker
 

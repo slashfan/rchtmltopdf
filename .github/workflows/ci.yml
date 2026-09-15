@@ -282,6 +282,44 @@ jobs:
       - run: cargo build -p rchtmltopdf --locked
       - run: cargo test -p rchtmltopdf-conformance --locked
 
+  # The version in Cargo.toml commands publication (release.yml, D50), so a
+  # pull request says what its merge will publish, and a version that moves
+  # back below the latest release is refused: a published version is not taken
+  # back, and the merge would publish nothing, silently.
+  version:
+    name: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The tags: they are what the version is compared against.
+          fetch-depth: 0
+      - name: The version does not move back, and announces what it will publish
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          latest="$(git tag -l 'v*' | sed 's/^v//' | sort -V | tail -1)"
+
+          if [ -z "$latest" ]; then
+            echo "::notice::no published version yet: merging will publish v${version}."
+            exit 0
+          fi
+
+          # `sort -V` compares version numbers, not text: without it, "0.10.0"
+          # would look older than "0.9.0".
+          oldest="$(printf '%s\n%s\n' "$version" "$latest" | sort -V | head -1)"
+          if [ "$version" != "$latest" ] && [ "$oldest" = "$version" ]; then
+            echo "::error::Cargo.toml announces ${version}, below the latest release v${latest}. A published version is not taken back: the merge would publish nothing, silently."
+            exit 1
+          fi
+
+          if [ "$version" = "$latest" ]; then
+            echo "::notice::version ${version} is unchanged: merging will publish no release."
+          else
+            echo "::notice::merging will publish v${version}."
+          fi
+
   # The single required status check. Every other job feeds this one, so the
   # branch ruleset never has to be edited when a job is added, renamed or split.
   # `if: always()` plus the explicit result test is what makes skipped jobs (such
@@ -289,7 +327,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [fmt, clippy, test, chromium, msrv, docs, deny, pr-title]
+    needs: [fmt, clippy, test, chromium, msrv, docs, deny, pr-title, version]
     runs-on: ubuntu-latest
     steps:
       - name: Check that every required job succeeded

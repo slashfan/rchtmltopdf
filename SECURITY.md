@@ -10,8 +10,8 @@ rendering HTML you did not write.
 
 ## Supported versions
 
-There are no releases. `main` is the only thing there is, and it is the only thing that gets
-fixed.
+The latest release, and `main`. A fix lands on `main` and becomes a release when the version
+is raised; nothing is backported to an earlier version.
 
 ## Reporting a vulnerability
 
