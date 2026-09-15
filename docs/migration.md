@@ -106,7 +106,9 @@ page qui n'en commence aucun garde celui que la page précédente nommait, y com
 document à l'autre (D47).
 `[title]` est le `<title>` du document sur lequel le bandeau est dessiné — avec plusieurs
 documents, chaque page nomme le sien — et `[doctitle]` le titre du fichier produit :
-`--title`, ou à défaut celui du premier document (D46).
+`--title`, ou à défaut celui du premier document (D46). Un document sans `<title>` n'a pas de
+titre : les deux impriment une chaîne vide et le fichier porte un titre vide, comme chez
+wkhtmltopdf (D52).
 
 **`[date]` n'est pas identique à celui de wkhtmltopdf.** Qt le rend via la locale du système,
 donc le même binaire écrit une chaîne différente sur deux machines et il n'y a pas de format

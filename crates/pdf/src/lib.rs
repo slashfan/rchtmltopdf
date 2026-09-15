@@ -115,33 +115,6 @@ pub fn set_metadata(pdf: &[u8], metadata: &Metadata) -> Result<Vec<u8>, Error> {
     Ok(out)
 }
 
-/// The document's own title, as the print call left it.
-///
-/// Chromium writes the `<title>` element into the Info dictionary of every
-/// document it prints, which is the only place a conversion can read it back:
-/// the page is gone by the time the bands are drawn, and `[title]` is the
-/// current document's own rather than the file's (#110). `None` when the file
-/// carries no title at all, which is not the same as an empty one.
-pub fn title(pdf: &[u8]) -> Result<Option<String>, Error> {
-    let document = Document::load_mem(pdf).map_err(fail)?;
-    let Ok(entry) = document.trailer.get(b"Info") else {
-        return Ok(None);
-    };
-    let dictionary = match entry {
-        Object::Reference(id) => match document.get_dictionary(*id) {
-            Ok(dictionary) => dictionary,
-            Err(_) => return Ok(None),
-        },
-        Object::Dictionary(dictionary) => dictionary,
-        _ => return Ok(None),
-    };
-    Ok(dictionary
-        .get(b"Title")
-        .ok()
-        .and_then(|title| title.as_str().ok())
-        .map(decode_text))
-}
-
 /// One printed document going into a merge, and what to do with its links.
 #[derive(Debug, Clone)]
 pub struct Part<'a> {
@@ -1395,46 +1368,6 @@ mod tests {
         let mut out = Vec::new();
         document.save_to(&mut out).expect("should save");
         out
-    }
-
-    /// **What `[title]` is read from** (#110). Chromium writes each printed
-    /// document's `<title>` into its Info dictionary, and that is where a band
-    /// finds the title of the document it is being drawn on.
-    #[test]
-    fn a_parts_own_title_is_read_back() {
-        let pdf = titled(&["A"], "The document's own title");
-        assert_eq!(
-            title(&pdf).expect("should parse"),
-            Some("The document's own title".to_string())
-        );
-    }
-
-    /// A file with no Info dictionary at all has no title, which is not the
-    /// same as an empty one: `[doctitle]` falls back to it rather than
-    /// printing nothing.
-    #[test]
-    fn a_part_without_an_info_dictionary_has_no_title() {
-        let pdf = pages(&["A"], None);
-        assert_eq!(title(&pdf).expect("should parse"), None);
-    }
-
-    /// A title outside ASCII travels as UTF-16BE, and comes back as itself.
-    #[test]
-    fn a_title_is_read_back_whatever_it_is_written_in() {
-        let written = set_metadata(
-            &pages(&["A"], None),
-            &Metadata {
-                title: Some("Facturé — 2026 ☕".to_string()),
-                producer: "test".into(),
-                creator: "test".into(),
-                created: Clock::default(),
-            },
-        )
-        .expect("should rewrite");
-        assert_eq!(
-            title(&written).expect("should parse"),
-            Some("Facturé — 2026 ☕".to_string())
-        );
     }
 
     /// The labels of every page, in reading order.

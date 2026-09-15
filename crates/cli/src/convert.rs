@@ -33,7 +33,7 @@
 //! and measured before the pages it decorates are printed (D39). The sheet
 //! then frames it once per page, with the page's numbers as a query string.
 
-use crate::{PROGRAM, VERSION, input, numbering, output, toc};
+use crate::{PROGRAM, VERSION, input, numbering, outline, output, toc};
 use rchtmltopdf_browser::Browser;
 use rchtmltopdf_browser::LaunchOptions;
 use rchtmltopdf_browser::band::{self, Edge, Measured, Sheet};
@@ -143,11 +143,22 @@ impl From<rchtmltopdf_browser::Error> for ConvertError {
     }
 }
 
+/// One object as the browser printed it.
+struct Piece {
+    pdf: Vec<u8>,
+    /// The document's own `<title>`, read from the page once it had settled
+    /// rather than off the printed part: Chromium writes the URL into the
+    /// Info dictionary of a document that has none (D52). What `[title]`
+    /// prints, what the file's title falls back to, and what names the
+    /// object's item in `--dump-outline`.
+    title: String,
+}
+
 /// What came out of the browser for the documents that made it.
 struct Printed {
-    /// One PDF per document that was printed, in command line order, with the
-    /// index of the object it came from.
-    documents: Vec<(usize, Vec<u8>)>,
+    /// One piece per document that was printed, in command line order, with
+    /// the index of the object it came from.
+    documents: Vec<(usize, Piece)>,
     /// Subresources the interception refused, across every document and band
     /// sheet. Each one is exit 1 whatever the handlers say (D49).
     refused: Vec<intercept::Refusal>,
@@ -206,13 +217,13 @@ struct BandHeights {
 /// `--load-error-handling skip` dropped simply missing; the tables of contents
 /// are slotted back in at the positions they were written on.
 fn ordered<'a>(
-    printed: &'a [(usize, Vec<u8>)],
-    tables: &'a [(usize, Vec<u8>)],
-) -> Vec<(usize, &'a [u8])> {
-    let mut all: Vec<(usize, &[u8])> = printed
+    printed: &'a [(usize, Piece)],
+    tables: &'a [(usize, Piece)],
+) -> Vec<(usize, &'a Piece)> {
+    let mut all: Vec<(usize, &Piece)> = printed
         .iter()
-        .map(|(index, pdf)| (*index, pdf.as_slice()))
-        .chain(tables.iter().map(|(index, pdf)| (*index, pdf.as_slice())))
+        .chain(tables)
+        .map(|(index, piece)| (*index, piece))
         .collect();
     all.sort_by_key(|(index, _)| *index);
     all
@@ -224,7 +235,7 @@ struct ContentsJob<'a> {
     plans: &'a [Plan],
     documents: &'a [input::Resolved],
     /// The documents that printed, in order, with their object index.
-    printed: &'a [(usize, Vec<u8>)],
+    printed: &'a [(usize, Piece)],
     /// How many pages each of those contributed to the merge.
     counts: &'a [usize],
     /// Which objects are tables of contents.
@@ -253,7 +264,7 @@ async fn contents(
     job: ContentsJob<'_>,
     browser: &Browser,
     progress: &Progress,
-) -> Result<Vec<(usize, Vec<u8>)>, ConvertError> {
+) -> Result<Vec<(usize, Piece)>, ConvertError> {
     // Where each printed document started in the merge the headings were read
     // off, which is what carries a heading from that merge to the finished file.
     let mut merged_first: HashMap<usize, usize> = HashMap::new();
@@ -264,7 +275,7 @@ async fn contents(
     }
 
     let mut lengths: Vec<usize> = vec![1; job.tables.len()];
-    let mut printed: Vec<(usize, Vec<u8>)> = Vec::new();
+    let mut printed: Vec<(usize, Piece)> = Vec::new();
     for _ in 0..CONTENTS_PASSES {
         // Where everything lands, with the tables at the length last measured.
         let mut pieces: Vec<(usize, usize)> = job
@@ -341,14 +352,20 @@ async fn contents(
                 }
                 .into());
             }
-            printed.push((*index, page.print_to_pdf(&job.plans[*index].print).await?));
+            printed.push((
+                *index,
+                Piece {
+                    pdf: page.print_to_pdf(&job.plans[*index].print).await?,
+                    title: report.title,
+                },
+            ));
         }
 
         let measured: Vec<usize> = printed
             .iter()
-            .map(|(_, pdf)| {
+            .map(|(_, piece)| {
                 rchtmltopdf_pdf::merge(&[rchtmltopdf_pdf::Part {
-                    pdf,
+                    pdf: &piece.pdf,
                     url: "",
                     links: &rchtmltopdf_core::settings::LinkSettings::default(),
                     contents: true,
@@ -370,7 +387,7 @@ fn moved(
     page: usize,
     merged_first: &HashMap<usize, usize>,
     first_page: &HashMap<usize, usize>,
-    printed: &[(usize, Vec<u8>)],
+    printed: &[(usize, Piece)],
     counts: &[usize],
 ) -> usize {
     let mut running = 1usize;
@@ -497,7 +514,7 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
     // stops the process group and removes the profile. Cleanup is not a step that
     // could be skipped. The merge and the bands are inside it too: the bands
     // need the browser, and D16 bounds the whole conversion.
-    let (pdf, printed) = deadline::within(settings.global.timeout, &progress, async {
+    let (pdf, printed, file_title) = deadline::within(settings.global.timeout, &progress, async {
         let mut printed = Printed {
             documents: Vec::with_capacity(total),
             refused: Vec::new(),
@@ -652,9 +669,13 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
                 }
             }
 
-            printed
-                .documents
-                .push((index, page.print_to_pdf(&print).await?));
+            printed.documents.push((
+                index,
+                Piece {
+                    pdf: page.print_to_pdf(&print).await?,
+                    title: report.title.clone(),
+                },
+            ));
 
             // Read before the guard is dropped, which is what stops interception.
             printed.refused.extend(
@@ -679,15 +700,15 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
         let content: Vec<rchtmltopdf_pdf::Part<'_>> = printed
             .documents
             .iter()
-            .map(|(index, pdf)| rchtmltopdf_pdf::Part {
-                pdf,
+            .map(|(index, piece)| rchtmltopdf_pdf::Part {
+                pdf: &piece.pdf,
                 url: &plans[*index].finish.document_url,
                 links: &plans[*index].finish.links,
                 contents: false,
             })
             .collect();
 
-        let tables_printed: Vec<(usize, Vec<u8>)> = if tables.is_empty() {
+        let tables_printed: Vec<(usize, Piece)> = if tables.is_empty() {
             Vec::new()
         } else {
             let merged = match content.as_slice() {
@@ -747,8 +768,8 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
         let ordered = ordered(&printed.documents, &tables_printed);
         let parts: Vec<rchtmltopdf_pdf::Part<'_>> = ordered
             .iter()
-            .map(|(index, pdf)| rchtmltopdf_pdf::Part {
-                pdf,
+            .map(|(index, piece)| rchtmltopdf_pdf::Part {
+                pdf: &piece.pdf,
                 url: &plans[*index].finish.document_url,
                 links: &plans[*index].finish.links,
                 // The file is named after the first document, and a table of
@@ -757,6 +778,20 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             })
             .collect();
         let merged = rchtmltopdf_pdf::merge(&parts)?;
+
+        // `[title]` is the document's own `<title>` and `[doctitle]` the
+        // finished file's, and neither was known when the plan was made
+        // (#110). Each document said its own once it had loaded (D52); the
+        // file's is `--title`, or the first document that is not a table of
+        // contents — the same part the merge took its Info dictionary from.
+        let file_title = match &settings.global.title {
+            Some(given) => given.clone(),
+            None => ordered
+                .iter()
+                .find(|(index, _)| !tables.contains(index))
+                .map(|(_, piece)| piece.title.clone())
+                .unwrap_or_default(),
+        };
 
         // The outline the browser wrote is all or nothing per document, so the
         // depth is cut here, and the dump describes what the file will carry.
@@ -773,7 +808,23 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             },
         )?;
         if let Some(path) = &finish.outline.dump {
-            let xml = crate::outline::xml(&items, |page| numbering::dump_page(page, offset));
+            // One item per object around its headings, in wkhtmltopdf's
+            // shape (D52): a document is named by its `<title>`, a table of
+            // contents by its caption, and an object the outline leaves out
+            // — a cover, or `--exclude-from-outline` — by nothing at all.
+            let dumped: Vec<outline::Object> = ordered
+                .iter()
+                .zip(&merged.pages)
+                .map(|((index, piece), pages)| outline::Object {
+                    title: match objects[*index].kind {
+                        ObjectKind::Toc => objects[*index].toc.header_text.clone(),
+                        _ if objects[*index].in_outline => piece.title.clone(),
+                        _ => String::new(),
+                    },
+                    pages: *pages,
+                })
+                .collect();
+            let xml = outline::xml(&outline::dump(&dumped, &items, offset));
             std::fs::write(path, xml).map_err(|error| ConvertError::Dump {
                 path: path.clone(),
                 reason: error.to_string(),
@@ -791,31 +842,11 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             // `[sitepages]` is cut from it.
             let numbered = numbering::number(&merged.pages, &items, offset);
 
-            // `[title]` is the document's own `<title>` and `[doctitle]` the
-            // finished file's, and neither was known when the plan was made
-            // (#110). Chromium wrote each document's title into the part it
-            // printed, so they are read back off the parts: the file's is
-            // `--title`, or the first part that is not a table of contents —
-            // the same part the merge took its Info dictionary from.
-            let titles: Vec<String> = ordered
-                .iter()
-                .map(|(_, pdf)| Ok(rchtmltopdf_pdf::title(pdf)?.unwrap_or_default()))
-                .collect::<Result<_, ConvertError>>()?;
-            let file_title = match &settings.global.title {
-                Some(given) => given.clone(),
-                None => ordered
-                    .iter()
-                    .zip(&titles)
-                    .find(|((index, _), _)| !tables.contains(index))
-                    .map(|(_, title)| title.clone())
-                    .unwrap_or_default(),
-            };
             let contexts: Vec<placeholder::Context> = ordered
                 .iter()
-                .zip(&titles)
-                .map(|((index, _), document_title)| placeholder::Context {
+                .map(|(index, piece)| placeholder::Context {
                     title: file_title.clone(),
-                    document_title: document_title.clone(),
+                    document_title: piece.title.clone(),
                     ..plans[*index].context.clone()
                 })
                 .collect();
@@ -919,7 +950,7 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
         if let Some(browser) = browser {
             browser.close().await?;
         }
-        Ok((pdf, printed))
+        Ok((pdf, printed, file_title))
     })
     .await?;
 
@@ -934,12 +965,15 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
 
     // The print call takes the title from the document's own `<title>` and
     // offers no override, so `--title` can only be honoured by rewriting the
-    // file afterwards. The same pass names the producer and dates the document
-    // (#29).
+    // file afterwards; and a document with no `<title>` gets the URL from
+    // Chromium where wkhtmltopdf wrote nothing, so the title is written
+    // whether the option was given or not, and it is the one `[doctitle]`
+    // prints (D46, D52). The same pass names the producer and dates the
+    // document (#29).
     let pdf = rchtmltopdf_pdf::set_metadata(
         &pdf,
         &rchtmltopdf_pdf::Metadata {
-            title: settings.global.title.clone(),
+            title: Some(file_title),
             producer: format!("{PROGRAM} {VERSION}"),
             creator: format!("{PROGRAM} {VERSION}"),
             created: now,

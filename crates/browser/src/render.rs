@@ -189,6 +189,7 @@ impl Page {
                     http_status: 0,
                 }),
                 subresources: Vec::new(),
+                title: String::new(),
             });
         }
 
@@ -206,7 +207,7 @@ impl Page {
         }
 
         progress.enter(Stage::AwaitingNetworkIdle);
-        let report = wait_for_quiet_network(&mut traffic).await;
+        let mut report = wait_for_quiet_network(&mut traffic).await;
 
         progress.enter(Stage::AwaitingFonts);
         wait_for_fonts(session).await;
@@ -233,6 +234,13 @@ impl Page {
                 run_script(session, source).await?;
             }
         }
+
+        // What the document calls itself, read once it has finished arriving
+        // and after any script has run: the moment wkhtmltopdf read
+        // `mainFrame()->title()`. Not read off the printed part, because
+        // Chromium writes the URL into the Info dictionary of a document
+        // that has no `<title>`, and nothing there tells the two apart (D52).
+        report.title = read_title(session).await;
 
         progress.enter(Stage::Settled);
         Ok(report)
@@ -424,6 +432,12 @@ pub struct LoadReport {
     /// for. Not all of it is media: a frame's own document lands here too, and
     /// the line between the two is drawn above (D49).
     pub subresources: Vec<Failed>,
+    /// The document's own `<title>`, as `document.title` gave it once the
+    /// page had settled: whitespace collapsed, and empty where there is none.
+    /// What `[title]` prints, what `[doctitle]` and the file's Info dictionary
+    /// fall back to, and what names the document's item in `--dump-outline`
+    /// (D46, D52). Empty when nothing arrived.
+    pub title: String,
 }
 
 /// One request that did not produce what was wanted.
@@ -597,6 +611,25 @@ async fn wait_for_fonts(session: &Session) {
             }),
         )
         .await;
+}
+
+/// The document's own title, or nothing.
+///
+/// Failures are swallowed for the same reason as above: a page that cannot
+/// answer is a page with no title, not a failed conversion.
+async fn read_title(session: &Session) -> String {
+    session
+        .send(
+            "Runtime.evaluate",
+            json!({
+                "expression": "String(document.title)",
+                "returnByValue": true,
+            }),
+        )
+        .await
+        .ok()
+        .and_then(|answer| answer["result"]["value"].as_str().map(str::to_owned))
+        .unwrap_or_default()
 }
 
 /// Poll until `window.status` matches.

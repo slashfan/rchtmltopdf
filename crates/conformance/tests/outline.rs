@@ -5,7 +5,8 @@
 //! line reaches it: on by default, off with `--no-outline`, cut to
 //! `--outline-depth`, joined across documents in order, left out for a cover
 //! or an excluded document, and written out by `--dump-outline` in the XML
-//! wkhtmltopdf's scripts read.
+//! wkhtmltopdf's scripts read — one `item` per object around that object's
+//! headings (D52).
 //!
 //! Headings are bold and the vendored font has one weight, so the *text* of
 //! these pages is not extractable (see `fixtures/fonts/README.md`). Nothing
@@ -202,11 +203,13 @@ fn dump_outline_writes_wkhtmltopdfs_xml() {
         xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<outline xmlns=\"http://wkhtmltopdf.org/outline\">"),
         "{xml}"
     );
+    // Every fixture carries `<title>conformance</title>`, and each document's
+    // item is numbered with the pages before it (D52).
     for expected in [
-        "<item title=\"Chapter One\" page=\"1\" link=\"\" backLink=\"\">",
+        "\n  <item title=\"conformance\" page=\"0\" link=\"\" backLink=\"\">\n    <item title=\"Chapter One\" page=\"1\" link=\"\" backLink=\"\">",
         "<item title=\"Section One\" page=\"1\" link=\"\" backLink=\"\"/>",
         "<item title=\"Chapter Two\" page=\"2\" link=\"\" backLink=\"\">",
-        "<item title=\"Appendix\" page=\"3\" link=\"\" backLink=\"\"/>",
+        "\n  <item title=\"conformance\" page=\"2\" link=\"\" backLink=\"\">\n    <item title=\"Appendix\" page=\"3\" link=\"\" backLink=\"\"/>\n  </item>\n</outline>\n",
     ] {
         assert!(xml.contains(expected), "{expected:?} missing from:\n{xml}");
     }
@@ -238,6 +241,10 @@ fn dump_outline_writes_wkhtmltopdfs_xml() {
 ///
 /// A cover is a page of the file here as it is in `[page]` (D45), so the
 /// heading behind a one-page cover moves up by one.
+///
+/// Each document's own item is in the list too, numbered with the pages
+/// before it (D52): the two-page `chapters` is 0 and `appendix` behind it is
+/// 2, and the offset reaches them as it reaches the headings.
 #[test]
 fn the_dump_carries_the_page_offset_and_counts_a_cover() {
     let Some(_browser) = require_chromium() else {
@@ -257,7 +264,7 @@ fn the_dump_carries_the_page_offset_and_counts_a_cover() {
     ]);
     assert_eq!(
         pages(&shifted),
-        [11, 11, 11, 12, 12, 13],
+        [10, 11, 11, 11, 12, 12, 12, 13],
         "the offset reaches every entry: {}",
         std::fs::read_to_string(&shifted).unwrap_or_default()
     );
@@ -274,10 +281,11 @@ fn the_dump_carries_the_page_offset_and_counts_a_cover() {
         "--page-offset",
         "100",
     ]);
-    assert_eq!(pages(&apart), [101, 101, 101, 102, 102, 103]);
+    assert_eq!(pages(&apart), [100, 101, 101, 101, 102, 102, 102, 103]);
 
     // A cover counts in the dump as it does in `[page]`, so the heading after
-    // it moves up by one.
+    // it moves up by one. The cover's own item is the `0`, with nothing under
+    // it; the document behind it is the `1`.
     let behind = scratch.join("behind.xml");
     convert(&[
         "--dump-outline",
@@ -286,7 +294,110 @@ fn the_dump_carries_the_page_offset_and_counts_a_cover() {
         &appendix,
         &chapters,
     ]);
-    assert_eq!(pages(&behind), [2, 2, 2, 3, 3]);
+    assert_eq!(pages(&behind), [0, 1, 2, 2, 2, 3, 3]);
+}
+
+/// **Every object is an item of the dump, around its own headings** (#127,
+/// D52). Measured on wkhtmltopdf 0.12.6.1: `three.html` — three `h1`, one
+/// per page — then `one.html` dump `Three` at 0 over `Alpha 1, Beta 2,
+/// Gamma 3`, then `One` at 3 over `Solo 4`. The item is titled with the
+/// document's `<title>`, and numbered with the pages before it.
+///
+/// A document with no `<title>` element is `title=""` — Chromium puts the
+/// file name in the Info dictionary of such a document, and this is where it
+/// would have leaked. A document `--exclude-from-outline` keeps its item and
+/// loses its headings: wkhtmltopdf dumps exactly one line for it. A table of
+/// contents is named by its caption, with its own heading under it.
+#[test]
+fn each_object_is_an_item_around_its_headings() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("outline-dump-objects");
+    let raw = |name: &str, html: &str| {
+        let path = scratch.join(name);
+        std::fs::write(&path, html).expect("a fixture should be writable");
+        path.display().to_string()
+    };
+    let three = raw(
+        "three.html",
+        "<html><head><title>Three</title></head><body>\
+         <h1>Alpha</h1><div style=\"page-break-before:always\"></div>\
+         <h1>Beta</h1><div style=\"page-break-before:always\"></div>\
+         <h1>Gamma</h1></body></html>",
+    );
+    let one = raw(
+        "one.html",
+        "<html><head><title>One</title></head><body><h1>Solo</h1></body></html>",
+    );
+    let untitled = raw("untitled.html", "<html><body><h1>Solo</h1></body></html>");
+    let read =
+        |dump: &std::path::Path| std::fs::read_to_string(dump).expect("the dump should be written");
+    const HEAD: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                        <outline xmlns=\"http://wkhtmltopdf.org/outline\">\n";
+
+    let dump = scratch.join("two.xml");
+    convert(&["--dump-outline", &dump.display().to_string(), &three, &one]);
+    assert_eq!(
+        read(&dump),
+        format!(
+            "{HEAD}  \
+             <item title=\"Three\" page=\"0\" link=\"\" backLink=\"\">\n    \
+               <item title=\"Alpha\" page=\"1\" link=\"\" backLink=\"\"/>\n    \
+               <item title=\"Beta\" page=\"2\" link=\"\" backLink=\"\"/>\n    \
+               <item title=\"Gamma\" page=\"3\" link=\"\" backLink=\"\"/>\n  \
+             </item>\n  \
+             <item title=\"One\" page=\"3\" link=\"\" backLink=\"\">\n    \
+               <item title=\"Solo\" page=\"4\" link=\"\" backLink=\"\"/>\n  \
+             </item>\n\
+             </outline>\n"
+        )
+    );
+
+    let dump = scratch.join("untitled.xml");
+    convert(&["--dump-outline", &dump.display().to_string(), &untitled]);
+    assert_eq!(
+        read(&dump),
+        format!(
+            "{HEAD}  \
+             <item title=\"\" page=\"0\" link=\"\" backLink=\"\">\n    \
+               <item title=\"Solo\" page=\"1\" link=\"\" backLink=\"\"/>\n  \
+             </item>\n\
+             </outline>\n"
+        )
+    );
+
+    let dump = scratch.join("excluded.xml");
+    convert(&[
+        "--dump-outline",
+        &dump.display().to_string(),
+        "--exclude-from-outline",
+        &three,
+    ]);
+    assert_eq!(
+        read(&dump),
+        format!("{HEAD}  <item title=\"\" page=\"0\" link=\"\" backLink=\"\"/>\n</outline>\n")
+    );
+
+    // The table lists three headings and takes a page, so `Three` moves to
+    // 1 and its headings to 2, 3 and 4 — the numbers wkhtmltopdf wrote.
+    let dump = scratch.join("contents.xml");
+    convert(&["--dump-outline", &dump.display().to_string(), "toc", &three]);
+    assert_eq!(
+        read(&dump),
+        format!(
+            "{HEAD}  \
+             <item title=\"Table of Contents\" page=\"0\" link=\"\" backLink=\"\">\n    \
+               <item title=\"Table of Contents\" page=\"1\" link=\"\" backLink=\"\"/>\n  \
+             </item>\n  \
+             <item title=\"Three\" page=\"1\" link=\"\" backLink=\"\">\n    \
+               <item title=\"Alpha\" page=\"2\" link=\"\" backLink=\"\"/>\n    \
+               <item title=\"Beta\" page=\"3\" link=\"\" backLink=\"\"/>\n    \
+               <item title=\"Gamma\" page=\"4\" link=\"\" backLink=\"\"/>\n  \
+             </item>\n\
+             </outline>\n"
+        )
+    );
 }
 
 /// A heading's title comes through as text: markup gone, entities resolved,

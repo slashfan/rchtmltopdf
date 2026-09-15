@@ -342,6 +342,30 @@ fn title_is_the_documents_element_and_doctitle_the_command_lines() {
     );
 }
 
+/// **A document with no `<title>` element prints nothing for either** (D52).
+/// Measured on wkhtmltopdf 0.12.6.1: `T=[title]|D=[doctitle]` comes out as
+/// `T=|D=`. Chromium writes the file name into such a document's Info
+/// dictionary, and reading the title back off the printed part put
+/// `untitled.html` in both.
+#[test]
+fn a_document_with_no_title_element_has_no_title_to_print() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("placeholders-untitled");
+    let document = scratch.join("untitled.html");
+    std::fs::write(
+        &document,
+        fixture::document("<p>one</p>").replace("<title>conformance</title>", ""),
+    )
+    .expect("writable");
+
+    let (pdf, _) = run(&document, &["--footer-center", "T=[title]|D=[doctitle]"]);
+    let text = flat(&pdf);
+    assert!(text.contains("T=|D="), "{text:?}");
+    assert!(!text.contains("untitled"), "{text:?}");
+}
+
 /// With several documents each page says its own, and the file's is the first
 /// document's when `--title` was not given — the same title the merge puts in
 /// the Info dictionary (#107).
