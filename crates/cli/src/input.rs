@@ -44,11 +44,21 @@ pub struct Resolved {
     /// Removed when this is dropped, which covers every way a conversion can
     /// end, including a deadline cutting it short.
     scratch: Option<Scratch>,
+    /// Why the document could not be read, when [`resolve_or_report`] was
+    /// asked to carry that rather than refuse (D55). `url` is then where the
+    /// file would have been.
+    missing: Option<InputError>,
 }
 
 impl Resolved {
     pub fn url(&self) -> &str {
         &self.url
+    }
+
+    /// The reason this document cannot be loaded, if it was reported rather
+    /// than refused: `--load-error-handling` decides what becomes of it.
+    pub fn missing(&self) -> Option<&InputError> {
+        self.missing.as_ref()
     }
 
     /// The file written for standard input, while one exists.
@@ -70,13 +80,48 @@ impl Drop for Scratch {
 
 /// Resolve a document, reading standard input if that is what it names.
 pub fn resolve(input: &Input) -> Result<Resolved, InputError> {
-    let directory = std::env::current_dir().map_err(|error| InputError {
+    let directory = working_directory()?;
+    let mut stdin = std::io::stdin().lock();
+    resolve_in(input, &mut stdin, &directory)
+}
+
+/// Resolve a document, and report a file that cannot be read rather than
+/// refusing it.
+///
+/// wkhtmltopdf fetched a local file through the same stack as a URL, so a
+/// path that is not there was a load that failed, and `--load-error-handling`
+/// said what became of it: `skip` dropped the document, `ignore` left a blank
+/// page in its place, and both still wrote the file (D44, D55). [`resolve`]
+/// fails at once, which is right under `abort` — nothing will be written, so
+/// nothing need be started — and this is for the other two.
+pub fn resolve_or_report(input: &Input) -> Result<Resolved, InputError> {
+    let directory = working_directory()?;
+    let mut stdin = std::io::stdin().lock();
+    resolve_in_or_report(input, &mut stdin, &directory)
+}
+
+/// [`resolve_or_report`], with the stream and directory supplied.
+pub fn resolve_in_or_report(
+    input: &Input,
+    stdin: &mut dyn Read,
+    directory: &Path,
+) -> Result<Resolved, InputError> {
+    match (input, resolve_in(input, stdin, directory)) {
+        (Input::Path(path), Err(error)) => Ok(Resolved {
+            url: file_url(&directory.join(path)),
+            scratch: None,
+            missing: Some(error),
+        }),
+        (_, outcome) => outcome,
+    }
+}
+
+fn working_directory() -> Result<PathBuf, InputError> {
+    std::env::current_dir().map_err(|error| InputError {
         input: "-".to_string(),
         reason: format!("the working directory is unreadable: {error}"),
         error: NetworkError::UnknownContent,
-    })?;
-    let mut stdin = std::io::stdin().lock();
-    resolve_in(input, &mut stdin, &directory)
+    })
 }
 
 /// Resolve a document, with the stream and directory supplied.
@@ -95,10 +140,12 @@ pub fn resolve_in(
         Input::Url(url) => Ok(Resolved {
             url: url.clone(),
             scratch: None,
+            missing: None,
         }),
         Input::Path(path) => Ok(Resolved {
             url: file_url(&existing_file(path)?),
             scratch: None,
+            missing: None,
         }),
         Input::Stdin => from_stdin(stdin, directory),
     }
@@ -161,6 +208,7 @@ fn from_stdin(stdin: &mut dyn Read, directory: &Path) -> Result<Resolved, InputE
     Ok(Resolved {
         url: file_url(&canonical),
         scratch: Some(Scratch { path }),
+        missing: None,
     })
 }
 
@@ -183,6 +231,7 @@ pub fn scratch_document(label: &str, html: &str) -> Result<Resolved, InputError>
     Ok(Resolved {
         url: file_url(&canonical),
         scratch: Some(Scratch { path }),
+        missing: None,
     })
 }
 
@@ -269,6 +318,32 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("/nowhere/page.html"), "{message}");
         assert!(message.contains("no such file"), "{message}");
+    }
+
+    /// Asked to report rather than refuse, a missing file comes back as a
+    /// document with its reason attached and the URL it would have had, for
+    /// `--load-error-handling` to judge (D55).
+    #[test]
+    fn a_missing_file_is_reported_when_the_handler_is_to_judge() {
+        let directory = std::env::temp_dir();
+        let input = Input::Path(PathBuf::from("rchtmltopdf-no-such-file.html"));
+        let resolved = resolve_in_or_report(&input, &mut std::io::empty(), &directory)
+            .expect("reported, not refused");
+        let missing = resolved.missing().expect("the reason travels with it");
+        assert_eq!(missing.error, NetworkError::ContentNotFound);
+        assert!(missing.to_string().contains("no such file"), "{missing}");
+        assert!(
+            resolved.url().starts_with("file://")
+                && resolved.url().ends_with("rchtmltopdf-no-such-file.html"),
+            "{}",
+            resolved.url()
+        );
+
+        // A URL is never missing: the browser is the one to say.
+        let input = Input::Url("http://example.invalid/".into());
+        let resolved =
+            resolve_in_or_report(&input, &mut std::io::empty(), &directory).expect("a URL");
+        assert!(resolved.missing().is_none());
     }
 
     #[test]

@@ -239,6 +239,99 @@ fn a_document_that_is_not_on_disk_ends_with_the_exit_line() {
     );
 }
 
+/// **A document missing from the disk is the handler's to judge** (D55).
+/// wkhtmltopdf fetched a local file through the same stack as a URL, so a
+/// path that is not there was a failed load: under `skip` it wrote the other
+/// documents, under `ignore` a blank page kept the missing one's place, and
+/// both exited 1. We refused the path before starting anything, whatever the
+/// handler said, and wrote nothing. The name stays ours (D48):
+/// `ContentNotFoundError`, with Qt's code 203 on the request line.
+#[test]
+fn skip_drops_a_document_that_is_not_on_disk_and_writes_the_rest() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("failures-skip-missing-file");
+    let first = fixture::write(scratch.path(), "first.html", "<p>first</p>");
+    let missing = scratch.join("there-is-no-such-file.html");
+    let third = fixture::write(scratch.path(), "third.html", "<p>third</p>");
+
+    let outcome = Run::new()
+        .arg("--load-error-handling")
+        .arg("skip")
+        .arg(first.display().to_string())
+        .arg(missing.display().to_string())
+        .arg(third.display().to_string())
+        .arg("-")
+        .output();
+
+    outcome.failed();
+    let pdf = Pdf::from_bytes(&outcome.stdout);
+    assert_eq!(pdf.page_count(), 2, "{}", pdf.describe());
+    assert!(pdf.text().contains("first"), "{:?}", pdf.text());
+    assert!(pdf.text().contains("third"), "{:?}", pdf.text());
+    assert!(
+        outcome.stderr.contains("(skipped)"),
+        "the skipped document should be named:\n{}",
+        outcome.stderr
+    );
+    assert!(
+        outcome.stderr.contains(
+            "there-is-no-such-file.html, with network status code 203 and http status code 0"
+        ),
+        "the request line names the file it would have read:\n{}",
+        outcome.stderr
+    );
+    assert!(
+        outcome
+            .stderr
+            .contains("Exit with code 1 due to network error: ContentNotFoundError"),
+        "the line applications grep for:\n{}",
+        outcome.stderr
+    );
+}
+
+/// And under `ignore` the missing document keeps its place as a blank page,
+/// exactly as one whose host did not resolve (D44).
+#[test]
+fn ignore_leaves_a_blank_page_where_the_document_was_not_on_disk() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("failures-ignore-missing-file");
+    let first = fixture::write(scratch.path(), "first.html", "<p>first</p>");
+    let missing = scratch.join("there-is-no-such-file.html");
+    let third = fixture::write(scratch.path(), "third.html", "<p>third</p>");
+
+    let outcome = Run::new()
+        .arg("--load-error-handling")
+        .arg("ignore")
+        .arg(first.display().to_string())
+        .arg(missing.display().to_string())
+        .arg(third.display().to_string())
+        .arg("-")
+        .output();
+
+    outcome.failed();
+    let pdf = Pdf::from_bytes(&outcome.stdout);
+    assert_eq!(pdf.page_count(), 3, "{}", pdf.describe());
+    assert!(pdf.page_text(1).contains("first"), "{:?}", pdf.page_text(1));
+    assert!(
+        pdf.page_text(2).trim().is_empty(),
+        "a blank page, not an error page: {:?}",
+        pdf.page_text(2)
+    );
+    assert!(pdf.page_text(3).contains("third"), "{:?}", pdf.page_text(3));
+    assert!(
+        outcome.stderr.contains("(ignored)")
+            && outcome
+                .stderr
+                .contains("Exit with code 1 due to network error: ContentNotFoundError"),
+        "{}",
+        outcome.stderr
+    );
+}
+
 /// **The case D14 is most specific about.** A subresource that fails under
 /// `abort` produces the PDF *and* exits 1, with a line applications grep for.
 /// The default is `ignore`, so the same document converts cleanly without it.
