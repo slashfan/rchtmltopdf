@@ -78,6 +78,44 @@ rejected and why is the point.
 If your change contradicts an existing decision, say so in the pull request and add the new
 entry in the same change.
 
+## Publishing a version
+
+**The version in `Cargo.toml` commands** (D50). Publishing means raising it in a pull request
+like any other change; the merge does the rest: tag, four binaries, the Docker image, the
+release, the checksums.
+
+```bash
+git switch -c version-0.2.0 main
+# raise `version` in the workspace manifest and the three internal dependency pins that
+# repeat it, move the `[Unreleased]` section of CHANGELOG.md under the new number, then
+# reflect the version in Cargo.lock:
+cargo update --workspace
+```
+
+There is **no tag to push**: `gh release create` lays it on the merge commit itself. The
+gesture that could be forgotten is gone, and with it any drift between what the binary
+announces and what is published.
+
+Three guards, each on a real failure mode:
+
+| What could happen | What catches it |
+| --- | --- |
+| Raising the version without updating `Cargo.lock` | `cargo build --locked`, everywhere in CI |
+| Moving the version back below the latest release | the `version` job, on the pull request |
+| Pushing a tag that does not match `Cargo.toml` | the `version` job of the release, before any build |
+
+A merge that does not touch the version publishes nothing: the workflow sees the tag already
+exists and stops without building. A hand-pushed tag is still accepted, to republish, but it
+must match `Cargo.toml`.
+
+The release notes are the README's caveats followed by that version's section of
+`CHANGELOG.md`, which is why the changelog is kept as it is written: the **Compatibility**
+section is the one a migrating user reads first.
+
+The release workflow also runs, without publishing, on any pull request that touches it, the
+manifests, the Dockerfile or the browser pin, and it can be dispatched by hand: the archives
+come out as workflow artifacts and no release is created.
+
 ## Minimum supported Rust version
 
 1.88, matching `rust-version` in the workspace manifest and verified by CI. Raising it is a

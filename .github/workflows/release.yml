@@ -1,11 +1,19 @@
 name: Release
 
-# Tags publish. Pull requests that could break the build run it without
-# publishing, because a release workflow that has never run is a release
-# workflow that does not work, and the first time to find that out is not while
-# cutting a tag.
+# **The version in Cargo.toml commands** (D50). A merge to main that brings a
+# version with no tag yet is published from that commit: binaries, image,
+# release, checksums. Nothing is pushed by hand, so nothing can be forgotten,
+# and what the binary announces cannot drift from what is published.
+#
+# A hand-pushed tag is still accepted, to republish, but it must match
+# Cargo.toml or nothing is built.
+#
+# Pull requests that could break the build run it without publishing, because a
+# release workflow that has never run is a release workflow that does not work,
+# and the first time to find that out is not the merge that publishes.
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   pull_request:
     paths:
@@ -21,13 +29,68 @@ permissions:
   contents: read
   packages: read
 
+# Two close merges must not publish at the same time, and neither is cancelled:
+# a half-made release would be worse than two that follow each other.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
 
 jobs:
+  version:
+    name: version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.decide.outputs.version }}
+      tag: ${{ steps.decide.outputs.tag }}
+      release: ${{ steps.decide.outputs.release }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The tags, to know whether this version's already exists.
+          fetch-depth: 0
+
+      - name: Decide whether this run publishes
+        id: decide
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          tag="v${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            # A tag that does not match would publish binaries announcing a
+            # version other than their own. Stop before building anything.
+            if [ "$GITHUB_REF_NAME" != "$tag" ]; then
+              echo "::error::tag ${GITHUB_REF_NAME} does not match version ${version} in Cargo.toml"
+              exit 1
+            fi
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::tag ${tag}: publishing."
+          elif [ "$GITHUB_EVENT_NAME" = push ]; then
+            if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+              echo "release=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::version ${version} is already published as ${tag}: nothing to do."
+            else
+              echo "release=true" >> "$GITHUB_OUTPUT"
+              echo "::notice::version ${version} has no tag: publishing ${tag}."
+            fi
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${GITHUB_EVENT_NAME}: building only, publishing nothing."
+          fi
+
   build:
-    name: ${{ matrix.target }}
+    name: ${{ matrix.name }}
+    needs: version
+    # An ordinary merge to main does not change the version, and there is no
+    # point building four targets for nothing.
+    if: needs.version.outputs.release == 'true' || github.event_name != 'push'
     strategy:
       fail-fast: false
       matrix:
@@ -36,10 +99,28 @@ jobs:
           # works and takes an order of magnitude longer, and a binary nobody has
           # run on the architecture it claims to support is not evidence of
           # anything. Arm runners are free on a public repository (D28).
-          - target: x86_64-unknown-linux-musl
+          #
+          # musl produces a static binary, which starts on any distribution,
+          # including a server whose glibc is older than the runner's.
+          - name: rchtmltopdf-linux-x86_64
+            target: x86_64-unknown-linux-musl
             runs-on: ubuntu-latest
-          - target: aarch64-unknown-linux-musl
+            smoke: true
+          - name: rchtmltopdf-linux-aarch64
+            target: aarch64-unknown-linux-musl
             runs-on: ubuntu-24.04-arm
+            smoke: true
+          - name: rchtmltopdf-macos-arm64
+            target: aarch64-apple-darwin
+            runs-on: macos-latest
+            smoke: true
+          # Cross-compiled from an arm64 runner, so it cannot be run here to
+          # prove itself. The one exception to the rule above, and a documented
+          # one: an Intel Mac runner costs money and Apple stopped making them.
+          - name: rchtmltopdf-macos-x86_64
+            target: x86_64-apple-darwin
+            runs-on: macos-latest
+            smoke: false
     runs-on: ${{ matrix.runs-on }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -52,14 +133,15 @@ jobs:
 
       # Rust links musl self-contained these days and this is usually redundant.
       # It is also two seconds, and the failure it prevents is a linker error at
-      # tag time.
+      # publishing time.
       - name: Install the musl toolchain
+        if: endsWith(matrix.target, '-musl')
         run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends musl-tools
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: ${{ matrix.target }}
-          save-if: ${{ startsWith(github.ref, 'refs/tags/') }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Only the binary crate. The conformance harness is not shipped and needs a
       # browser nobody is going to give it here.
@@ -84,6 +166,7 @@ jobs:
       # So the test is what must *not* be true: no dynamic linking, and no
       # interpreter to go looking for one.
       - name: Check that it is genuinely static
+        if: endsWith(matrix.target, '-musl')
         run: |
           set -euo pipefail
           binary="target/${{ matrix.target }}/release/rchtmltopdf"
@@ -99,6 +182,7 @@ jobs:
           esac
 
       - name: Check that it runs
+        if: matrix.smoke
         run: |
           set -euo pipefail
           binary="target/${{ matrix.target }}/release/rchtmltopdf"
@@ -107,6 +191,11 @@ jobs:
           # and still proves the binary starts and resolves.
           "$binary" --dump-chromium || true
 
+      # **The archive name carries no version**: that is what makes
+      # `releases/latest/download/rchtmltopdf-linux-x86_64.tar.gz` a URL worth
+      # writing down. The version is on the directory inside, so what was
+      # unpacked still says what it is.
+      #
       # **tar, never zip.** The archive carries a `wkhtmltopdf` symlink so a
       # drop-in replacement is a drop-in replacement (D13), and zip has no
       # portable way to hold one — it would arrive as a copy, or as a text file
@@ -115,36 +204,40 @@ jobs:
         id: archive
         run: |
           set -euo pipefail
-          case "${{ github.ref }}" in
-            refs/tags/v*) version="${GITHUB_REF_NAME#v}" ;;
-            *) version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" ;;
-          esac
-          name="rchtmltopdf-${version}-${{ matrix.target }}"
-          echo "name=$name" >> "$GITHUB_OUTPUT"
+          if [ "${{ needs.version.outputs.release }}" = true ]; then
+            version="${{ needs.version.outputs.version }}"
+          else
+            # A trial build. Nothing ties it to a published version, and the
+            # commit is the only honest marker.
+            version="$(git rev-parse --short HEAD)"
+          fi
+          inner="${{ matrix.name }}-${version}"
+          echo "inner=$inner" >> "$GITHUB_OUTPUT"
 
-          mkdir -p "dist/$name"
-          cp "target/${{ matrix.target }}/release/rchtmltopdf" "dist/$name/"
-          ln -s rchtmltopdf "dist/$name/wkhtmltopdf"
-          cp README.md LICENSE-MIT LICENSE-APACHE CHANGELOG.md "dist/$name/"
-          tar -C dist -czf "dist/$name.tar.gz" "$name"
-          ( cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256" )
+          mkdir -p "dist/$inner"
+          cp "target/${{ matrix.target }}/release/rchtmltopdf" "dist/$inner/"
+          ln -s rchtmltopdf "dist/$inner/wkhtmltopdf"
+          # The licences require their notice to accompany every copy, so they
+          # travel with the binary.
+          cp README.md LICENSE-MIT LICENSE-APACHE CHANGELOG.md "dist/$inner/"
+          tar -C dist -czf "dist/${{ matrix.name }}.tar.gz" "$inner"
 
       # The symlink is the reason for tar, so whether it survived is worth
       # knowing here rather than from somebody who unpacked a release.
       - name: Check that the symlink survived
         run: |
           set -euo pipefail
-          mkdir -p check && tar -C check -xzf "dist/${{ steps.archive.outputs.name }}.tar.gz"
-          link="check/${{ steps.archive.outputs.name }}/wkhtmltopdf"
+          mkdir -p check && tar -C check -xzf "dist/${{ matrix.name }}.tar.gz"
+          link="check/${{ steps.archive.outputs.inner }}/wkhtmltopdf"
           test -L "$link" || { echo "::error::wkhtmltopdf is not a symlink"; exit 1; }
           test "$(readlink "$link")" = "rchtmltopdf" \
             || { echo "::error::wkhtmltopdf points somewhere unexpected"; exit 1; }
-          "$link" --version
+          if [ "${{ matrix.smoke }}" = true ]; then "$link" --version; fi
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ steps.archive.outputs.name }}
-          path: dist/*.tar.gz*
+          name: ${{ matrix.name }}
+          path: dist/${{ matrix.name }}.tar.gz
           if-no-files-found: error
 
   # **Built on a runner of its own architecture and merged into one manifest**,
@@ -153,6 +246,8 @@ jobs:
   # magnitude slower at proving it (D32).
   image:
     name: image ${{ matrix.arch }}
+    needs: version
+    if: needs.version.outputs.release == 'true' || github.event_name != 'push'
     strategy:
       fail-fast: false
       matrix:
@@ -217,23 +312,23 @@ jobs:
           cat said.txt
 
       - name: Push
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: needs.version.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
           echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
-          version="${GITHUB_REF_NAME#v}"
-          docker tag "rchtmltopdf:${{ matrix.arch }}" "$image:$version-${{ matrix.arch }}"
-          docker push "$image:$version-${{ matrix.arch }}"
+          docker tag "rchtmltopdf:${{ matrix.arch }}" "$image:$VERSION-${{ matrix.arch }}"
+          docker push "$image:$VERSION-${{ matrix.arch }}"
 
   # One tag pointing at both architectures, assembled from what was pushed
   # rather than rebuilt.
   manifest:
     name: manifest
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: image
+    needs: [version, image]
+    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -242,25 +337,25 @@ jobs:
       - name: Merge
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
           echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
-          version="${GITHUB_REF_NAME#v}"
           docker buildx imagetools create \
-            --tag "$image:$version" \
+            --tag "$image:$VERSION" \
             --tag "$image:latest" \
-            "$image:$version-amd64" \
-            "$image:$version-arm64"
-          docker buildx imagetools inspect "$image:$version"
+            "$image:$VERSION-amd64" \
+            "$image:$VERSION-arm64"
+          docker buildx imagetools inspect "$image:$VERSION"
 
   publish:
     name: publish
-    # Tags only. Every other trigger above exists to prove the build, not to
-    # release anything.
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, manifest]
+    needs: [version, build, manifest]
+    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
+    # The only job that can write to the repository, and it calls no third-party
+    # action: publishing goes through the `gh` the runner ships.
     permissions:
       contents: write
     steps:
@@ -272,7 +367,13 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # What it takes to check a downloaded archive: `shasum -c SHA256SUMS`.
+      - name: Checksums
+        run: cd dist && sha256sum *.tar.gz | tee SHA256SUMS
+
       - name: Write the release notes
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
           cat > notes.md <<'NOTES'
@@ -294,20 +395,34 @@ jobs:
 
           ## The archives
 
-          Statically linked against musl, so they run wherever the kernel does — including a
-          distroless image or a machine whose glibc predates the one they were built on. Each
+          The Linux ones are statically linked against musl, so they run wherever the kernel
+          does — including a distroless image or a machine whose glibc predates the one they
+          were built on. The macOS ones are unsigned: fetched with `curl` they run without fuss,
+          and one downloaded through a browser needs `xattr -d com.apple.quarantine` first. Each
           carries a `wkhtmltopdf` symlink, which is why they are tars rather than zips.
 
-          Verify with the `.sha256` beside each one.
-          NOTES
-          sed -n '/^## \[Unreleased\]/,/^## \[/p' CHANGELOG.md | sed '1d;$d' >> notes.md || true
+          Verify with `shasum -c SHA256SUMS`. The image is
+          `ghcr.io/slashfan/rchtmltopdf`, tagged with this version and `latest`.
 
+          NOTES
+          # Then this version's section of the changelog, if it has one: from its
+          # heading, exclusive, to the next heading or the end of the file.
+          awk -v v="$VERSION" '/^## \[/{p=($0 ~ "^## \\[" v "\\]")} p' CHANGELOG.md \
+            | sed '1d' >> notes.md
+
+      # `gh release create` lays the tag itself on `--target` when it does not
+      # exist yet: that is what makes the merge sufficient, without a workflow
+      # pushing a tag. A tag created by the workflow token triggers no run, so
+      # this cannot publish twice.
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
         run: |
           set -euo pipefail
-          gh release create "$GITHUB_REF_NAME" \
-            --title "$GITHUB_REF_NAME" \
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --target "$GITHUB_SHA" \
             --notes-file notes.md \
-            dist/*.tar.gz dist/*.sha256
+            dist/*.tar.gz dist/SHA256SUMS
