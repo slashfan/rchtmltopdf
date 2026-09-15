@@ -289,13 +289,12 @@ async fn contents(
         }
 
         // The same numbering the outline dump uses, over the finished layout.
-        let shares: Vec<numbering::Part> = pieces
-            .iter()
-            .map(|(index, pages)| numbering::Part {
-                pages: *pages,
-                page_offset: job.plans[*index].finish.numbering.page_offset,
-            })
-            .collect();
+        // The offset is the conversion's, so any plan's copy is every plan's
+        // (D51).
+        let offset = job
+            .plans
+            .first()
+            .map_or(0, |plan| plan.finish.numbering.page_offset);
         let where_tables_are: Vec<(usize, &str)> = job
             .tables
             .iter()
@@ -313,7 +312,7 @@ async fn contents(
                 job.headings,
                 |page| moved(page, &merged_first, &first_page, job.printed, job.counts),
                 &where_tables_are,
-                |page| numbering::dump_page(&shares, page),
+                |page| numbering::dump_page(page, offset),
             );
             let settings = job.plans[*index]
                 .toc
@@ -759,21 +758,13 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             .collect();
         let merged = rchtmltopdf_pdf::merge(&parts)?;
 
-        // How each document's pages count, in the order they were merged. The
-        // dump reads it for `--page-offset` (D40) and the bands for `[page]`.
-        let shares: Vec<numbering::Part> = ordered
-            .iter()
-            .zip(&merged.pages)
-            .map(|((index, _), pages)| numbering::Part {
-                pages: *pages,
-                page_offset: plans[*index].finish.numbering.page_offset,
-            })
-            .collect();
-
         // The outline the browser wrote is all or nothing per document, so the
         // depth is cut here, and the dump describes what the file will carry.
         // The treatment is global, so the first plan's copy is every plan's.
         let finish = &plans[0].finish;
+        // `--page-offset` is one number for the whole output, wherever it was
+        // written (D51), so the same copy answers for every page.
+        let offset = finish.numbering.page_offset;
         let (pdf, items) = rchtmltopdf_pdf::outline(
             &merged.pdf,
             &rchtmltopdf_pdf::OutlineTreatment {
@@ -782,7 +773,7 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             },
         )?;
         if let Some(path) = &finish.outline.dump {
-            let xml = crate::outline::xml(&items, |page| numbering::dump_page(&shares, page));
+            let xml = crate::outline::xml(&items, |page| numbering::dump_page(page, offset));
             std::fs::write(path, xml).map_err(|error| ConvertError::Dump {
                 path: path.clone(),
                 reason: error.to_string(),
@@ -795,7 +786,10 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             .iter()
             .any(|(index, _)| !plans[*index].finish.bands.is_empty())
         {
-            let numbered = numbering::number(&shares, &items);
+            // `merged.pages` is how many pages each object printed, in the
+            // order they were merged: the site frame of `[sitepage]` and
+            // `[sitepages]` is cut from it.
+            let numbered = numbering::number(&merged.pages, &items, offset);
 
             // `[title]` is the document's own `<title>` and `[doctitle]` the
             // finished file's, and neither was known when the plan was made

@@ -10,6 +10,22 @@ behaves. If you are migrating, that is the section to read.
 
 ## [Unreleased]
 
+### Compatibility
+
+**`--page-offset` is one number for the whole output** (#44, D51). It used to shift the
+document it was written on, so `wkhtmltopdf a.html b.html --page-offset 100` numbered the
+first document `1 2 3` and the second `104 105`. wkhtmltopdf keeps the offset in its global
+settings, though its help lists it among the page options: written anywhere it shifts every
+page, and the last one written wins. The same command line now numbers all five pages
+`101` to `105`, and the `--dump-outline` attribute follows, which is what wkhtmltopdf has
+always done with it.
+
+**`[frompage]` is the first page of the output**, not of the document the page came from
+(#44, D51). Across two documents every page now prints `[frompage]` = 1, where the pages of
+the second document used to print the page it began on. Under an offset it is that offset
+plus one. `[sitepage]` and `[sitepages]` are unchanged: they are the frame that counts
+within a document, and a cover and a table of contents each have one of their own.
+
 ## [0.1.0] - 2026-09-15
 
 The first published version. Static Linux binaries for x86_64 and aarch64, macOS binaries

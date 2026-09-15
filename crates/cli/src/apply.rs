@@ -83,19 +83,23 @@ pub fn apply(parsed: &Tokenized) -> Result<Settings, ApplyError> {
     // object starts from; its own options then override them.
     let mut inherited = ObjectSettings::page(Input::Stdin);
     for occurrence in &parsed.defaults {
-        apply_object(occurrence, &mut inherited)?;
+        apply_object(occurrence, &mut inherited, &mut global)?;
     }
 
     let mut objects = Vec::with_capacity(parsed.objects.len());
     for object in &parsed.objects {
-        objects.push(build_object(object, &inherited)?);
+        objects.push(build_object(object, &inherited, &mut global)?);
     }
 
     page.resolve(&mut global);
     Ok(Settings { global, objects })
 }
 
-fn build_object(object: &Object, inherited: &ObjectSettings) -> Result<ObjectSettings, ApplyError> {
+fn build_object(
+    object: &Object,
+    inherited: &ObjectSettings,
+    global: &mut GlobalSettings,
+) -> Result<ObjectSettings, ApplyError> {
     let (kind, input) = match &object.kind {
         ObjectKind::Page(input) => (SettingsObjectKind::Page, Some(input.clone())),
         ObjectKind::Cover(input) => (SettingsObjectKind::Cover, Some(input.clone())),
@@ -119,7 +123,7 @@ fn build_object(object: &Object, inherited: &ObjectSettings) -> Result<ObjectSet
         settings.in_outline = false;
     }
     for occurrence in &object.options {
-        apply_object(occurrence, &mut settings)?;
+        apply_object(occurrence, &mut settings, global)?;
     }
     Ok(settings)
 }
@@ -229,9 +233,16 @@ pub fn apply_global(
     Ok(Applied::Here)
 }
 
+/// Read one option written on an object, or before the first one.
+///
+/// `global` is here for `--page-offset` alone: wkhtmltopdf lists it among the
+/// page options and keeps it in `PdfGlobal`, so it may be written anywhere and
+/// the last one written wins for the whole output (D51). Every other option on
+/// this line belongs to the object it follows.
 pub fn apply_object(
     occurrence: &Occurrence,
     object: &mut ObjectSettings,
+    global: &mut GlobalSettings,
 ) -> Result<Applied, ApplyError> {
     if let Some(applied) = answered_elsewhere(occurrence) {
         return Ok(applied);
@@ -268,7 +279,8 @@ pub fn apply_object(
         "include-in-outline" => object.in_outline = true,
         "exclude-from-outline" => object.in_outline = false,
 
-        "page-offset" => object.page_offset = number(occurrence)?,
+        // One number for the whole output, wherever it was written (D51).
+        "page-offset" => global.page_offset = number(occurrence)?,
 
         // --- the table of contents, all of it CSS in the generated document ---
         "toc-header-text" => object.toc.header_text = value(occurrence).to_string(),

@@ -229,6 +229,14 @@ pub struct GlobalSettings {
     pub log_level: LogLevel,
     pub browser: BrowserSettings,
     pub outline: OutlineSettings,
+    /// `--page-offset`: added to every page number the output prints —
+    /// `[page]`, `[topage]`, `[frompage]` and the `--dump-outline` attribute.
+    ///
+    /// One number for the whole conversion, though wkhtmltopdf's help lists
+    /// the option among the page options: it keeps the value in `PdfGlobal`,
+    /// so the last `--page-offset` written on the line wins wherever it was
+    /// written (D51). Nought, as in wkhtmltopdf.
+    pub page_offset: i64,
 }
 
 impl Default for GlobalSettings {
@@ -244,6 +252,7 @@ impl Default for GlobalSettings {
             timeout: Some(Duration::from_secs(30)),
             log_level: LogLevel::default(),
             browser: BrowserSettings::default(),
+            page_offset: 0,
         }
     }
 }
@@ -502,9 +511,6 @@ pub struct ObjectSettings {
     /// Off for a cover.
     pub in_outline: bool,
     pub links: LinkSettings,
-    /// `--page-offset`: added to `[page]`, `[topage]` and `[frompage]` on this
-    /// document's pages. Nought, as in wkhtmltopdf.
-    pub page_offset: i64,
     /// How this object looks, when it is a table of contents. Left at its
     /// defaults on a page or a cover, which no `TOC Option` can be written on.
     pub toc: TocSettings,
@@ -524,7 +530,6 @@ impl ObjectSettings {
             replacements: Vec::new(),
             in_outline: true,
             links: LinkSettings::default(),
-            page_offset: 0,
             toc: TocSettings::default(),
         }
     }
@@ -631,7 +636,10 @@ mod tests {
         assert!(object.links.internal);
         assert!(object.links.resolve_relative);
         assert!(object.links.leaves_everything());
-        assert_eq!(object.page_offset, 0);
+
+        // No page numbering offset, and it is one number for the whole
+        // conversion rather than one per document (D51).
+        assert_eq!(settings.global.page_offset, 0);
     }
 
     /// `--no-outline --dump-outline x` still needs the browser to produce one.

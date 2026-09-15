@@ -229,13 +229,15 @@ fn dump_outline_writes_wkhtmltopdfs_xml() {
 }
 
 /// **`--page-offset` shifts what the dump says, and a cover still counts in
-/// it** (#37, D40).
+/// it** (#37, D40, D51).
 ///
-/// Measured on wkhtmltopdf 0.12.6.1: the same two documents under
-/// `--page-offset 10` turn `1 1 2 3` into `11 11 12 13`, and behind a one-page
-/// cover the first heading is page 2 in the dump while the footer on that same
-/// page prints 1. So this number is the page of the file plus the offset, and
-/// not the one a band prints.
+/// Measured on wkhtmltopdf 0.12.6.1: three headings of one document dump as
+/// `1 2 3`, and `--page-offset 10` turns them into `11 12 13`. The offset is
+/// the conversion's, so writing it after the last document shifts the entries
+/// of the first one too.
+///
+/// A cover is a page of the file here as it is in `[page]` (D45), so the
+/// heading behind a one-page cover moves up by one.
 #[test]
 fn the_dump_carries_the_page_offset_and_counts_a_cover() {
     let Some(_browser) = require_chromium() else {
@@ -260,9 +262,9 @@ fn the_dump_carries_the_page_offset_and_counts_a_cover() {
         std::fs::read_to_string(&shifted).unwrap_or_default()
     );
 
-    // The offset is the one written on the document the entry came from. This
-    // is the deliberate divergence: wkhtmltopdf applies the last offset written
-    // on the command line to every entry, whichever object it belongs to (D40).
+    // Written after the last document, and still the whole dump's (D51).
+    // This was the last thing telling the dump's number apart from the one a
+    // band prints, and the measurement took it away.
     let apart = scratch.join("apart.xml");
     convert(&[
         "--dump-outline",
@@ -272,10 +274,10 @@ fn the_dump_carries_the_page_offset_and_counts_a_cover() {
         "--page-offset",
         "100",
     ]);
-    assert_eq!(pages(&apart), [1, 1, 1, 2, 2, 103]);
+    assert_eq!(pages(&apart), [101, 101, 101, 102, 102, 103]);
 
-    // A cover is not counted by `[page]` and is a page of the file all the
-    // same, so the heading after it moves up by one.
+    // A cover counts in the dump as it does in `[page]`, so the heading after
+    // it moves up by one.
     let behind = scratch.join("behind.xml");
     convert(&[
         "--dump-outline",

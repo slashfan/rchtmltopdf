@@ -95,7 +95,12 @@ que nous reproduisons (voir [D39](decisions.md)) :
 `[subsection]`, `[subsubsection]`, `[webpage]`, `[title]`, `[doctitle]`, `[date]`, `[isodate]`
 et `[time]` sont substitués, ainsi que ceux définis par `--replace`. `[page]` et `[topage]`
 comptent sur l'ensemble du document produit, couverture comprise (D45) ; `[sitepage]` et
-`[sitepages]` dans le document d'origine ; `--page-offset` décale les premiers. Les trois
+`[sitepages]` dans le document d'origine ; `[frompage]` n'est dans aucun des deux repères,
+c'est la **première page de la sortie**, donc le même nombre sur toutes les pages (D51).
+`--page-offset` est un décalage unique pour toute la conversion — l'aide de wkhtmltopdf le
+range parmi les options de page, mais il le garde dans ses réglages globaux : écrit
+n'importe où, le dernier écrit l'emporte et décale `[page]`, `[topage]`, `[frompage]` et le
+`page` de `--dump-outline`, sans toucher au repère du document (D51). Les trois
 `[section]` nomment le **premier** titre `h1`, `h2` ou `h3` qui commence sur la page ; une
 page qui n'en commence aucun garde celui que la page précédente nommait, y compris d'un
 document à l'autre (D47).

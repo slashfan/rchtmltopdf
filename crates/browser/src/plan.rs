@@ -224,15 +224,20 @@ pub struct Bands {
     pub footer: Band,
 }
 
-/// How one document's pages count.
+/// How the pages of the output count.
 ///
-/// Two things read this and they do not agree, which is what D40 is about: a
-/// band prints `[page]`, which a cover is left out of, while the outline dump
-/// numbers a page of the file, which a cover is one of. Both add
-/// `page_offset`.
+/// Two things read this and they agree: a band prints `[page]`, the outline
+/// dump writes a page attribute, and both are the page of the file plus
+/// `page_offset` (D40, D45). They stay two questions because a later
+/// measurement could part them again.
+///
+/// The offset is the conversion's, not the document's — every part of the
+/// output shifts by the same number, and the last `--page-offset` written on
+/// the line is the one that counts (D51). It is carried here per document all
+/// the same, because a plan describes one document.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Numbering {
-    /// `--page-offset`.
+    /// `--page-offset`, as it stands for the whole conversion.
     pub page_offset: i64,
 }
 
@@ -280,7 +285,7 @@ pub fn finish(global: &GlobalSettings, object: &ObjectSettings, document_url: &s
             footer: object.footer.clone(),
         },
         numbering: Numbering {
-            page_offset: object.page_offset,
+            page_offset: global.page_offset,
         },
         links: object.links.clone(),
         document_url: document_url.to_string(),

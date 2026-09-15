@@ -65,9 +65,16 @@ fn page_and_topage_count_across_documents() {
     }
 }
 
-/// The other frame: within the document, and where the document began.
+/// The other frame: within the document. `[sitepage]` and `[sitepages]`
+/// restart at each object, and `[frompage]` belongs to neither frame — it is
+/// the first page of the **output** (D51), the same number on every page.
+///
+/// Measured on wkhtmltopdf 0.12.6.1: two two-page documents print
+/// `1|4|1|1|2`, `2|4|1|2|2`, `3|4|1|1|2`, `4|4|1|2|2` for
+/// `[page]|[topage]|[frompage]|[sitepage]|[sitepages]`. `outline.cc` fills it
+/// as `off+1` and never looks at the object.
 #[test]
-fn sitepage_sitepages_and_frompage_count_within_the_document() {
+fn sitepage_and_sitepages_restart_but_frompage_is_the_first_page_of_the_output() {
     let Some(_browser) = require_chromium() else {
         return;
     };
@@ -82,11 +89,46 @@ fn sitepage_sitepages_and_frompage_count_within_the_document() {
         &a,
         &b,
     ]);
-    let expected = ["F1S1/3", "F1S2/3", "F1S3/3", "F4S1/2", "F4S2/2"];
+    let expected = ["F1S1/3", "F1S2/3", "F1S3/3", "F1S1/2", "F1S2/2"];
     for (page, expected) in expected.iter().enumerate() {
         let text = compact(&pdf, page + 1);
         assert!(text.contains(expected), "page {}: {text}", page + 1);
     }
+}
+
+/// A table of contents counts in `[page]` like any other object, and is its
+/// own site: the page it occupies prints `1/1`, and the document behind it
+/// starts its own frame again.
+///
+/// Measured on wkhtmltopdf 0.12.6.1: `toc a.html b.html` over a three-page and
+/// a two-page document prints `1|5|1|1|1` on the table and `2|5|1|1|3` on the
+/// page behind it.
+#[test]
+fn a_table_of_contents_counts_and_is_its_own_site() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("numbering-toc");
+    let (a, b, _) = fixtures(&scratch);
+
+    let pdf = convert(&[
+        "--footer-center",
+        "P[page]/[topage]S[sitepage]/[sitepages]",
+        "toc",
+        &a,
+        &b,
+    ]);
+    assert_eq!(pdf.page_count(), 6, "{}", pdf.describe());
+    assert!(
+        compact(&pdf, 1).contains("P1/6S1/1"),
+        "the table is page one of six, and one page of its own site: {}",
+        compact(&pdf, 1)
+    );
+    assert!(
+        compact(&pdf, 2).contains("P2/6S1/3"),
+        "the document behind it starts its own site again: {}",
+        compact(&pdf, 2)
+    );
 }
 
 /// A cover counts like any other page (D45): the page behind it is page two,
@@ -115,30 +157,57 @@ fn a_cover_counts_and_the_numbering_runs_through_it() {
             compact(&pdf, page)
         );
     }
+
+    // The cover is its own site, so the document behind it starts at one
+    // again rather than continuing the cover's frame.
+    let pdf = convert(&[
+        "--footer-center",
+        "S[sitepage]/[sitepages]",
+        "cover",
+        &c,
+        &a,
+    ]);
+    assert!(compact(&pdf, 2).contains("S1/3"), "{}", compact(&pdf, 2));
 }
 
-/// `--page-offset` shifts the numbers of the document it was written on.
+/// **`--page-offset` is one number for the whole output** (D51), though
+/// wkhtmltopdf's help lists it among the page options: it lives in `PdfGlobal`,
+/// so wherever it is written it shifts every page, and the last one written
+/// wins.
+///
+/// Measured on wkhtmltopdf 0.12.6.1 over two two-page documents:
+/// `--page-offset 100` written after the second document prints
+/// `101 102 103 104` of `104`, not `1 2 103 104`; and
+/// `--page-offset 10 a --page-offset 100 b` prints the same `101..104`.
 #[test]
-fn page_offset_shifts_the_numbers_of_its_document() {
+fn page_offset_is_one_number_for_the_whole_output() {
     let Some(_browser) = require_chromium() else {
         return;
     };
     let scratch = Scratch::new("numbering-offset");
     let (a, b, _) = fixtures(&scratch);
 
-    // As a default, so both documents carry it.
+    // Written before the first document, where it reads as a default.
     let pdf = convert(&[
         "--page-offset",
         "10",
         "--footer-center",
-        "P[page]/[topage]",
+        "P[page]/[topage]F[frompage]",
         &a,
         &b,
     ]);
-    assert!(compact(&pdf, 1).contains("P11/15"), "{}", compact(&pdf, 1));
-    assert!(compact(&pdf, 5).contains("P15/15"), "{}", compact(&pdf, 5));
+    assert!(
+        compact(&pdf, 1).contains("P11/15F11"),
+        "{}",
+        compact(&pdf, 1)
+    );
+    assert!(
+        compact(&pdf, 5).contains("P15/15F11"),
+        "the first page of the output is offset plus one: {}",
+        compact(&pdf, 5)
+    );
 
-    // On the second document only.
+    // Written after the second document, where it still reaches the first.
     let pdf = convert(&[
         "--footer-center",
         "P[page]/[topage]",
@@ -147,11 +216,35 @@ fn page_offset_shifts_the_numbers_of_its_document() {
         "--page-offset",
         "100",
     ]);
-    assert!(compact(&pdf, 3).contains("P3/5"), "{}", compact(&pdf, 3));
+    for page in 1..=5 {
+        let expected = format!("P{}/105", 100 + page);
+        assert!(
+            compact(&pdf, page).contains(&expected),
+            "page {page}: {}",
+            compact(&pdf, page)
+        );
+    }
+
+    // Written twice, on one document each: the last one wins for both.
+    let pdf = convert(&[
+        "--footer-center",
+        "P[page]/[topage]",
+        "--page-offset",
+        "10",
+        &a,
+        "--page-offset",
+        "100",
+        &b,
+    ]);
     assert!(
-        compact(&pdf, 4).contains("P104/105"),
+        compact(&pdf, 1).contains("P101/105"),
         "{}",
-        compact(&pdf, 4)
+        compact(&pdf, 1)
+    );
+    assert!(
+        compact(&pdf, 5).contains("P105/105"),
+        "{}",
+        compact(&pdf, 5)
     );
 }
 

@@ -56,7 +56,10 @@ fn drive(spec: &'static table::OptionSpec) -> Applied {
         apply_global(&occurrence, &mut global, &mut page)
     } else {
         let mut object = ObjectSettings::page(Input::Stdin);
-        apply_object(&occurrence, &mut object)
+        // `--page-offset` is the one object option that writes into the global
+        // settings (D51), so the harness has to offer it somewhere to land.
+        let mut global = GlobalSettings::default();
+        apply_object(&occurrence, &mut object, &mut global)
     };
     outcome.unwrap_or_else(|error| panic!("--{} rejected a plausible value: {error}", spec.long))
 }
@@ -334,11 +337,22 @@ fn the_outline_options_land_where_they_belong() {
     assert!(back.objects[0].in_outline);
 }
 
+/// **`--page-offset` lands on the whole conversion, not on an object** (D51).
+/// wkhtmltopdf lists it among the page options and keeps it in `PdfGlobal`, so
+/// it may be written anywhere and the last one written is the one that counts.
 #[test]
-fn the_page_offset_lands_on_its_object() {
-    let settings = settings("--page-offset 10 a.html b.html --page-offset 3 out.pdf");
-    assert_eq!(settings.objects[0].page_offset, 10);
-    assert_eq!(settings.objects[1].page_offset, 3);
+fn the_page_offset_lands_on_the_whole_conversion() {
+    let last_wins = settings("--page-offset 10 a.html b.html --page-offset 3 out.pdf");
+    assert_eq!(last_wins.global.page_offset, 3);
+
+    // Written once, before the first object, it still reaches everything.
+    let as_a_default = settings("--page-offset 10 a.html b.html out.pdf");
+    assert_eq!(as_a_default.global.page_offset, 10);
+
+    // And it is accepted wherever an object option is, which is the placement
+    // rule its `Scope::Object` in the table stands for (D26).
+    let after_an_object = settings("a.html --page-offset 7 out.pdf");
+    assert_eq!(after_an_object.global.page_offset, 7);
 }
 
 #[test]
