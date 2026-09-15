@@ -43,7 +43,7 @@ use rchtmltopdf_browser::intercept;
 use rchtmltopdf_browser::locate::{SystemEnvironment, locate};
 use rchtmltopdf_browser::placeholder;
 use rchtmltopdf_browser::plan::{self, Plan};
-use rchtmltopdf_browser::render::{Failed, Progress};
+use rchtmltopdf_browser::render::{Failed, LoadReport, Progress};
 use rchtmltopdf_core::settings::{Band, ObjectKind, ObjectSettings, Settings};
 use rchtmltopdf_core::{ExitCode, Input, LoadErrorHandling, NetworkError, is_media_file};
 use std::collections::{HashMap, HashSet};
@@ -430,7 +430,17 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
                 let source = object.input.as_ref().ok_or_else(|| {
                     ConvertError::Unsupported("this object has no document to read".into())
                 })?;
-                input::resolve(source)?
+                // A file that is not there is a load that failed, and the
+                // handler says what becomes of it (D55): under `abort` that
+                // is the end, so it is said now rather than after a launch;
+                // under the other two the document is carried to the loop,
+                // which drops it or leaves a blank page in its place (D44).
+                match object.load.on_document_error {
+                    LoadErrorHandling::Abort => input::resolve(source)?,
+                    LoadErrorHandling::Skip | LoadErrorHandling::Ignore => {
+                        input::resolve_or_report(source)?
+                    }
+                }
             }
         });
     }
@@ -600,7 +610,21 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             let policing = intercept::install(page.session(), plan.requests.clone()).await?;
 
             page.prepare(&plan.prepare).await?;
-            let report = page.load(document.url(), &object.load, &progress).await?;
+            let report = match document.missing() {
+                // Never sent to the browser: the file is not there to fetch,
+                // and the report says so the way a navigation that failed
+                // would (D55), so the handler below judges both alike.
+                Some(error) => LoadReport {
+                    navigation_failed: true,
+                    document: Some(Failed {
+                        url: document.url().to_string(),
+                        error: error.error,
+                        http_status: 0,
+                    }),
+                    ..LoadReport::default()
+                },
+                None => page.load(document.url(), &object.load, &progress).await?,
+            };
 
             // Before printing, not after. A rejected password leaves the
             // server's own 401 body as the response, which renders perfectly

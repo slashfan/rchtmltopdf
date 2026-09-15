@@ -12,6 +12,12 @@ behaves. If you are migrating, that is the section to read.
 
 ### Compatibility
 
+**A document missing from the disk is judged by `--load-error-handling`** (D55). wkhtmltopdf
+fetched a local file through the same stack as a URL, so a path that is not there was a
+failed load: `skip` dropped it and wrote the other documents, `ignore` left a blank page in
+its place, and both exited 1 with the file written. We refused the path before starting
+anything, whatever the handler said, and wrote nothing. `abort`, the default, is unchanged.
+
 **`--dump-outline` writes one `item` per object around that object's headings** (#127,
 D52). wkhtmltopdf wraps each document's headings in an item of its own, titled with the
 document's `<title>` — a table of contents with its caption — and numbered with the pages
