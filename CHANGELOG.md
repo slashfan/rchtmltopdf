@@ -12,6 +12,13 @@ behaves. If you are migrating, that is the section to read.
 
 ### Compatibility
 
+**An empty value for an option that names a file is ignored** (D59). `--header-html ""`,
+`--footer-html ""` and `--user-style-sheet ""` are what a template engine writes when there
+is nothing to put there, and wkhtmltopdf ignores them. They were read as a file called "",
+which is never there, so the conversion failed with `exit 1` over an option nobody meant to
+set. An empty value for an option that carries text — `--header-left ""` — still means empty
+text, as it does in wkhtmltopdf.
+
 **A web font from another origin is loaded** (D58). Chromium fetches a font in CORS mode
 and wkhtmltopdf's Qt did not, so a document whose `@font-face` points at its own asset host
 lost every face — and the refused fetch exited 1 on top of it. Font responses now carry the

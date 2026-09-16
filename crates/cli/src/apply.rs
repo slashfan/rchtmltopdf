@@ -312,7 +312,7 @@ pub fn apply_object(
         "javascript-delay" => load.javascript_delay = Duration::from_millis(number(occurrence)?),
         "window-status" => load.window_status = Some(value(occurrence).to_string()),
         "run-script" => load.run_scripts.push(value(occurrence).to_string()),
-        "user-style-sheet" => load.user_style_sheet = Some(value(occurrence).to_string()),
+        "user-style-sheet" => load.user_style_sheet = file(occurrence),
         "no-stop-slow-scripts" => load.stop_slow_scripts = false,
         "load-error-handling" => load.on_document_error = handling(occurrence)?,
         "load-media-error-handling" => load.on_media_error = handling(occurrence)?,
@@ -326,7 +326,7 @@ pub fn apply_object(
         "header-spacing" => object.header.spacing = Some(number(occurrence)?),
         "header-line" => object.header.line = true,
         "no-header-line" => object.header.line = false,
-        "header-html" => object.header.html = Some(value(occurrence).to_string()),
+        "header-html" => object.header.html = file(occurrence),
         "footer-left" => object.footer.left = Some(value(occurrence).to_string()),
         "footer-center" => object.footer.center = Some(value(occurrence).to_string()),
         "footer-right" => object.footer.right = Some(value(occurrence).to_string()),
@@ -335,7 +335,7 @@ pub fn apply_object(
         "footer-spacing" => object.footer.spacing = Some(number(occurrence)?),
         "footer-line" => object.footer.line = true,
         "no-footer-line" => object.footer.line = false,
-        "footer-html" => object.footer.html = Some(value(occurrence).to_string()),
+        "footer-html" => object.footer.html = file(occurrence),
         "replace" => object.replacements.push(pair(occurrence)),
         "default-header" => object.header = default_header(),
 
@@ -376,6 +376,25 @@ fn fail(occurrence: &Occurrence, reason: impl Into<String>) -> ApplyError {
     ApplyError {
         option: occurrence.as_written.clone(),
         reason: reason.into(),
+    }
+}
+
+/// The value of an option that names a file to read, or nothing when it is
+/// empty (D59).
+///
+/// `--header-html ""` is what a template engine writes when the document has
+/// no header, and wkhtmltopdf ignores it: measured on 0.12.6.1, `--header-html
+/// ""`, `--footer-html ""` and `--user-style-sheet ""` all convert and exit 0.
+/// Read literally, the empty string is a file that is not there, which fails
+/// the conversion over an option the caller did not mean to set.
+///
+/// A document is not in this family. `cover ""` is an object with nowhere to
+/// load from, and both binaries refuse it — so this is about options that name
+/// a file to read, not about every empty value.
+fn file(occurrence: &Occurrence) -> Option<String> {
+    match value(occurrence) {
+        "" => None,
+        path => Some(path.to_string()),
     }
 }
 
