@@ -842,13 +842,20 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             let dumped: Vec<outline::Object> = ordered
                 .iter()
                 .zip(&merged.pages)
-                .map(|((index, piece), pages)| outline::Object {
-                    title: match objects[*index].kind {
-                        ObjectKind::Toc => objects[*index].toc.header_text.clone(),
-                        _ if objects[*index].in_outline => piece.title.clone(),
-                        _ => String::new(),
-                    },
-                    pages: *pages,
+                .map(|((index, piece), pages)| {
+                    let object = objects[*index];
+                    let (title, role) = match object.kind {
+                        ObjectKind::Toc => {
+                            (object.toc.header_text.clone(), outline::Role::Contents)
+                        }
+                        _ if object.in_outline => (piece.title.clone(), outline::Role::Document),
+                        _ => (String::new(), outline::Role::Excluded),
+                    };
+                    outline::Object {
+                        title,
+                        pages: *pages,
+                        role,
+                    }
                 })
                 .collect();
             let xml = outline::xml(&outline::dump(&dumped, &items, offset));

@@ -259,10 +259,10 @@ fn dump_outline_writes_wkhtmltopdfs_xml() {
     // Every fixture carries `<title>conformance</title>`, and each document's
     // item is numbered with the pages before it (D52).
     for expected in [
-        "\n  <item title=\"conformance\" page=\"0\" link=\"\" backLink=\"\">\n    <item title=\"Chapter One\" page=\"1\" link=\"\" backLink=\"\">",
-        "<item title=\"Section One\" page=\"1\" link=\"\" backLink=\"\">\n        <item title=\"Deep One\" page=\"1\" link=\"\" backLink=\"\"/>",
-        "<item title=\"Chapter Two\" page=\"2\" link=\"\" backLink=\"\">",
-        "\n  <item title=\"conformance\" page=\"2\" link=\"\" backLink=\"\">\n    <item title=\"Appendix\" page=\"3\" link=\"\" backLink=\"\"/>\n  </item>\n</outline>\n",
+        "\n  <item title=\"conformance\" page=\"0\" link=\"__WKANCHOR_0\" backLink=\"__WKANCHOR_1\">\n    <item title=\"Chapter One\" page=\"1\" link=\"__WKANCHOR_2\" backLink=\"__WKANCHOR_3\">",
+        "<item title=\"Section One\" page=\"1\" link=\"__WKANCHOR_4\" backLink=\"__WKANCHOR_5\">\n        <item title=\"Deep One\" page=\"1\" link=\"__WKANCHOR_6\" backLink=\"__WKANCHOR_7\"/>",
+        "<item title=\"Chapter Two\" page=\"2\" link=\"__WKANCHOR_8\" backLink=\"__WKANCHOR_9\">",
+        "\n  <item title=\"conformance\" page=\"2\" link=\"__WKANCHOR_c\" backLink=\"__WKANCHOR_d\">\n    <item title=\"Appendix\" page=\"3\" link=\"__WKANCHOR_e\" backLink=\"__WKANCHOR_f\"/>\n  </item>\n</outline>\n",
     ] {
         assert!(xml.contains(expected), "{expected:?} missing from:\n{xml}");
     }
@@ -361,6 +361,10 @@ fn the_dump_carries_the_page_offset_and_counts_a_cover() {
 /// would have leaked. A document `--exclude-from-outline` keeps its item and
 /// loses its headings: wkhtmltopdf dumps exactly one line for it. A table of
 /// contents is named by its caption, with its own heading under it.
+///
+/// The anchors are wkhtmltopdf's too (D56): two per item in reading order,
+/// the documents first and the table after them, whose items carry the
+/// same name twice — `8/8` and `a/a` behind `Three` at `0/1`.
 #[test]
 fn each_object_is_an_item_around_its_headings() {
     let Some(_browser) = require_chromium() else {
@@ -395,13 +399,13 @@ fn each_object_is_an_item_around_its_headings() {
         read(&dump),
         format!(
             "{HEAD}  \
-             <item title=\"Three\" page=\"0\" link=\"\" backLink=\"\">\n    \
-               <item title=\"Alpha\" page=\"1\" link=\"\" backLink=\"\"/>\n    \
-               <item title=\"Beta\" page=\"2\" link=\"\" backLink=\"\"/>\n    \
-               <item title=\"Gamma\" page=\"3\" link=\"\" backLink=\"\"/>\n  \
+             <item title=\"Three\" page=\"0\" link=\"__WKANCHOR_0\" backLink=\"__WKANCHOR_1\">\n    \
+               <item title=\"Alpha\" page=\"1\" link=\"__WKANCHOR_2\" backLink=\"__WKANCHOR_3\"/>\n    \
+               <item title=\"Beta\" page=\"2\" link=\"__WKANCHOR_4\" backLink=\"__WKANCHOR_5\"/>\n    \
+               <item title=\"Gamma\" page=\"3\" link=\"__WKANCHOR_6\" backLink=\"__WKANCHOR_7\"/>\n  \
              </item>\n  \
-             <item title=\"One\" page=\"3\" link=\"\" backLink=\"\">\n    \
-               <item title=\"Solo\" page=\"4\" link=\"\" backLink=\"\"/>\n  \
+             <item title=\"One\" page=\"3\" link=\"__WKANCHOR_8\" backLink=\"__WKANCHOR_9\">\n    \
+               <item title=\"Solo\" page=\"4\" link=\"__WKANCHOR_a\" backLink=\"__WKANCHOR_b\"/>\n  \
              </item>\n\
              </outline>\n"
         )
@@ -413,8 +417,8 @@ fn each_object_is_an_item_around_its_headings() {
         read(&dump),
         format!(
             "{HEAD}  \
-             <item title=\"\" page=\"0\" link=\"\" backLink=\"\">\n    \
-               <item title=\"Solo\" page=\"1\" link=\"\" backLink=\"\"/>\n  \
+             <item title=\"\" page=\"0\" link=\"__WKANCHOR_0\" backLink=\"__WKANCHOR_1\">\n    \
+               <item title=\"Solo\" page=\"1\" link=\"__WKANCHOR_2\" backLink=\"__WKANCHOR_3\"/>\n  \
              </item>\n\
              </outline>\n"
         )
@@ -440,13 +444,13 @@ fn each_object_is_an_item_around_its_headings() {
         read(&dump),
         format!(
             "{HEAD}  \
-             <item title=\"Table of Contents\" page=\"0\" link=\"\" backLink=\"\">\n    \
-               <item title=\"Table of Contents\" page=\"1\" link=\"\" backLink=\"\"/>\n  \
+             <item title=\"Table of Contents\" page=\"0\" link=\"__WKANCHOR_8\" backLink=\"__WKANCHOR_8\">\n    \
+               <item title=\"Table of Contents\" page=\"1\" link=\"__WKANCHOR_a\" backLink=\"__WKANCHOR_a\"/>\n  \
              </item>\n  \
-             <item title=\"Three\" page=\"1\" link=\"\" backLink=\"\">\n    \
-               <item title=\"Alpha\" page=\"2\" link=\"\" backLink=\"\"/>\n    \
-               <item title=\"Beta\" page=\"3\" link=\"\" backLink=\"\"/>\n    \
-               <item title=\"Gamma\" page=\"4\" link=\"\" backLink=\"\"/>\n  \
+             <item title=\"Three\" page=\"1\" link=\"__WKANCHOR_0\" backLink=\"__WKANCHOR_1\">\n    \
+               <item title=\"Alpha\" page=\"2\" link=\"__WKANCHOR_2\" backLink=\"__WKANCHOR_3\"/>\n    \
+               <item title=\"Beta\" page=\"3\" link=\"__WKANCHOR_4\" backLink=\"__WKANCHOR_5\"/>\n    \
+               <item title=\"Gamma\" page=\"4\" link=\"__WKANCHOR_6\" backLink=\"__WKANCHOR_7\"/>\n  \
              </item>\n\
              </outline>\n"
         )
