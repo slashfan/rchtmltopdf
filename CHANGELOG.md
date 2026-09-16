@@ -10,6 +10,11 @@ behaves. If you are migrating, that is the section to read.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-16
+
+Six compatibility changes, each measured against wkhtmltopdf 0.12.6.1 and recorded as a
+decision (D51 to D55), and nothing else: the caveats at the top of the README still apply.
+
 ### Compatibility
 
 **A document missing from the disk is judged by `--load-error-handling`** (D55). wkhtmltopdf
