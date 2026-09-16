@@ -44,6 +44,14 @@ pub const PROPAGATION_STYLE: &str = "/propagation.css";
 /// `127.0.0.1` proves only that the option was accepted.
 pub const PROXIED: &str = "CONFORMANCE-PROXIED-3K9";
 
+/// The vendored font, served from this origin, **without** any
+/// `Access-Control-Allow-Origin`.
+///
+/// That absence is the fixture. A font is fetched in CORS mode, so a document
+/// with no origin of its own — a local file — may only use this face if
+/// something makes up for the missing header (D58).
+pub const FONT: &str = "/font.woff2";
+
 /// A document whose image is not there, for the media error handling.
 pub const MISSING_MEDIA: &str = "/missing-media";
 
@@ -115,6 +123,16 @@ impl Server {
                     if path.starts_with("http://") || path.starts_with("https://") {
                         let body = fixture::document(&format!("<p>{PROXIED}</p>"));
                         let _ = respond(&mut stream, "200 OK", "text/html", &body);
+                        return;
+                    }
+
+                    if path.starts_with(FONT) {
+                        let _ = respond_bytes(
+                            &mut stream,
+                            "200 OK",
+                            "font/woff2",
+                            crate::fixture::FONT,
+                        );
                         return;
                     }
 
@@ -246,6 +264,23 @@ fn read_request(stream: &mut std::net::TcpStream) -> Option<(String, Vec<(String
         .collect();
 
     Some((path, headers))
+}
+
+/// The same, for a body that is not text.
+fn respond_bytes(
+    stream: &mut std::net::TcpStream,
+    status: &str,
+    content_type: &str,
+    body: &[u8],
+) -> std::io::Result<()> {
+    let head = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(head.as_bytes())?;
+    stream.write_all(body)?;
+    stream.flush()
 }
 
 fn respond(

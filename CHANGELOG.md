@@ -12,6 +12,12 @@ behaves. If you are migrating, that is the section to read.
 
 ### Compatibility
 
+**A web font from another origin is loaded** (D58). Chromium fetches a font in CORS mode
+and wkhtmltopdf's Qt did not, so a document whose `@font-face` points at its own asset host
+lost every face — and the refused fetch exited 1 on top of it. Font responses now carry the
+header the check wants, for a document on disk as for one served over HTTP, which is what
+wkhtmltopdf does. The same-origin policy is untouched for everything else.
+
 **`--enable-toc-back-links` is honoured** (D57). Every heading of a document that carries the
 option gets a link back to its line in the table of contents, on the heading's box, and the
 table's own heading gets one to the entry it makes of itself, as wkhtmltopdf writes them.

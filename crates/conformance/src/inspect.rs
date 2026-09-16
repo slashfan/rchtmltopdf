@@ -197,6 +197,41 @@ impl Pdf {
         self.document.get_pages().len()
     }
 
+    /// Every font a 1-based page draws with, by the name in the file.
+    ///
+    /// The name is `BaseFont`, subset prefix and all: Chromium writes
+    /// `AAAAAA+NotoSans` for an embedded subset, so a caller asking whether a
+    /// face was used looks for a substring rather than for equality. A page
+    /// that draws no text has no `/Font` resource and answers nothing.
+    pub fn fonts(&self, page: usize) -> Vec<String> {
+        let id = self.page_id(page);
+        let Some(fonts) = self
+            .document
+            .get_dictionary(id)
+            .ok()
+            .and_then(|page| page.get(b"Resources").ok())
+            .and_then(|resources| self.document.dereference(resources).ok())
+            .and_then(|(_, resources)| resources.as_dict().ok())
+            .and_then(|resources| resources.get(b"Font").ok())
+            .and_then(|fonts| self.document.dereference(fonts).ok())
+            .and_then(|(_, fonts)| fonts.as_dict().ok().cloned())
+        else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = fonts
+            .iter()
+            .filter_map(|(_, font)| self.document.dereference(font).ok())
+            .filter_map(|(_, font)| font.as_dict().ok().cloned())
+            .filter_map(|font| {
+                let name = font.get(b"BaseFont").and_then(Object::as_name).ok()?;
+                Some(String::from_utf8_lossy(name).into_owned())
+            })
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
     /// The paper, for a 1-based page number.
     ///
     /// **`MediaBox` may not be on the page.** It is an inheritable attribute, so
