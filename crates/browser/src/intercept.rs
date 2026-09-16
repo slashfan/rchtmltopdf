@@ -15,6 +15,14 @@
 //! So `Fetch.enable` pauses each request before it goes out, and this decides
 //! what to do with it.
 //!
+//! A fifth thing needs a say in a request, and it comes from no option at all:
+//! a **web font from another origin** (D58). Chromium fetches a font in CORS
+//! mode and refuses the face unless the server allows the document's origin;
+//! wkhtmltopdf's Qt never asked, so a document that has always rendered in its
+//! own fonts loses them here — and the failed fetch exits 1 on top. Font
+//! responses are therefore paused a second time, on the way back, and given
+//! the header that was missing.
+//!
 //! # Three things about `Fetch` that bite
 //!
 //! **Every paused request must be answered, including the navigation.** Enabling
@@ -86,7 +94,11 @@ pub struct Rules {
 }
 
 impl Rules {
-    /// Whether anything here needs a request paused.
+    /// Whether anything here needs a request paused **on its way out**.
+    ///
+    /// Font responses are paused whatever this says, so interception itself is
+    /// no longer conditional on it (D58); what it decides is whether every
+    /// request pauses or only the font responses do.
     pub fn needed(&self) -> bool {
         self.files.polices_anything()
             || self.serve_as.is_some()
@@ -163,9 +175,20 @@ impl Drop for Interception {
 /// not installed and every request keeps the round trip it would have paid to be
 /// waved through.
 pub async fn install(session: &Session, rules: Rules) -> Result<Option<Interception>> {
-    if !rules.needed() {
-        return Ok(None);
+    // Two patterns, and a conversion with no rules of its own still gets the
+    // second: font responses are paused on the way back so the CORS header
+    // Chromium wants can be put on them (D58). Everything else pauses on the
+    // way out, and only when something here has a say in it — pausing every
+    // request for nothing costs a round trip per subresource.
+    let mut patterns = Vec::new();
+    if rules.needed() {
+        patterns.push(json!({ "urlPattern": "*", "requestStage": "Request" }));
     }
+    patterns.push(json!({
+        "urlPattern": "*",
+        "resourceType": "Font",
+        "requestStage": "Response",
+    }));
 
     // Read once, up front, rather than inside the handler: the answer is the
     // same every time. An unreadable document is left to load itself; it will
@@ -181,9 +204,13 @@ pub async fn install(session: &Session, rules: Rules) -> Result<Option<Intercept
     session
         .send(
             "Fetch.enable",
-            // Without this the auth event never arrives and Chromium answers the
-            // challenge itself, which means not answering it.
-            json!({ "handleAuthRequests": rules.credentials.is_some() }),
+            // Without `handleAuthRequests` the auth event never arrives and
+            // Chromium answers the challenge itself, which means not answering
+            // it.
+            json!({
+                "handleAuthRequests": rules.credentials.is_some(),
+                "patterns": patterns,
+            }),
         )
         .await?;
 
@@ -219,6 +246,16 @@ pub async fn install(session: &Session, rules: Rules) -> Result<Option<Intercept
                     &note_rejection,
                 )
                 .await;
+                continue;
+            }
+
+            // A pause on the way back rather than on the way out: this is a
+            // font response, here only to be let through with the header
+            // Chromium's CORS check wants (D58).
+            if event.params.get("responseStatusCode").is_some()
+                || event.params.get("responseErrorReason").is_some()
+            {
+                allow_font(&answering, &id, &event.params).await;
                 continue;
             }
 
@@ -278,6 +315,85 @@ pub async fn install(session: &Session, rules: Rules) -> Result<Option<Intercept
         refused,
         rejected,
     }))
+}
+
+/// Let a font response through, with the CORS header it was missing (D58).
+///
+/// wkhtmltopdf's Qt fetched a font like any other file, so a stylesheet
+/// pointing at an asset host — the shape every application that serves its own
+/// fonts has — worked. Chromium fetches one in CORS mode instead: without an
+/// `Access-Control-Allow-Origin` the face is dropped, the text is drawn in
+/// whatever the machine falls back to, and the request counts as a failure,
+/// which is an exit code of its own. Measured on wkhtmltopdf 0.12.6.1 for a
+/// local document and for one served over HTTP: both keep the face and exit 0.
+///
+/// The header is put on the response rather than the check being turned off.
+/// `--disable-web-security` would do it in one flag and would also unpick the
+/// same-origin policy for scripts and XHR, which D10's threat model — untrusted
+/// HTML — is not willing to pay.
+///
+/// **The body has already been decoded when it comes back through `Fetch`.**
+/// `Content-Encoding` and `Content-Length` are dropped with the rest of the
+/// original headers' duplicates, because re-serving a decoded body under
+/// `gzip` gives the renderer bytes it cannot read.
+async fn allow_font(session: &Session, id: &str, params: &Value) {
+    // Nothing answered, so there is nothing to put a header on. Letting it
+    // continue keeps the failure the browser's to report.
+    if params.get("responseErrorReason").is_some() {
+        let _ = session
+            .send("Fetch.continueResponse", json!({ "requestId": id }))
+            .await;
+        return;
+    }
+
+    let Ok(body) = session
+        .send("Fetch.getResponseBody", json!({ "requestId": id }))
+        .await
+    else {
+        let _ = session
+            .send("Fetch.continueResponse", json!({ "requestId": id }))
+            .await;
+        return;
+    };
+    let encoded = match body["base64Encoded"].as_bool() {
+        Some(true) => body["body"].as_str().unwrap_or_default().to_string(),
+        _ => base64::engine::general_purpose::STANDARD
+            .encode(body["body"].as_str().unwrap_or_default()),
+    };
+
+    let mut headers: Vec<Value> = params["responseHeaders"]
+        .as_array()
+        .map(|headers| {
+            headers
+                .iter()
+                .filter(|header| {
+                    let name = header["name"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_ascii_lowercase();
+                    !matches!(
+                        name.as_str(),
+                        "access-control-allow-origin" | "content-encoding" | "content-length"
+                    )
+                })
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    headers.push(json!({ "name": "Access-Control-Allow-Origin", "value": "*" }));
+
+    let status = params["responseStatusCode"].as_u64().unwrap_or(200);
+    let _ = session
+        .send(
+            "Fetch.fulfillRequest",
+            json!({
+                "requestId": id,
+                "responseCode": status,
+                "responseHeaders": headers,
+                "body": encoded,
+            }),
+        )
+        .await;
 }
 
 async fn answer_challenge(

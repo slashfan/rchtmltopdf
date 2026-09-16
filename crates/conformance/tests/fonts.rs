@@ -19,7 +19,9 @@
 
 use rchtmltopdf_browser::render::Progress;
 use rchtmltopdf_browser::{Browser, LaunchOptions};
-use rchtmltopdf_conformance::{fixture, require_chromium, sandbox_unavailable};
+use rchtmltopdf_conformance::binary::Run;
+use rchtmltopdf_conformance::inspect::Pdf;
+use rchtmltopdf_conformance::{fixture, require_chromium, sandbox_unavailable, server};
 use rchtmltopdf_core::settings::LoadSettings;
 use serde_json::json;
 
@@ -115,4 +117,58 @@ async fn glyphs_come_from_the_vendored_font_and_not_a_system_one() {
     );
 
     browser.close().await.expect("the browser should close");
+}
+
+/// **A local document uses a web font served from another origin** (D58).
+///
+/// Measured on wkhtmltopdf 0.12.6.1 in `debian:bookworm-slim`, a local file
+/// whose `@font-face` points at a loopback server that sends no
+/// `Access-Control-Allow-Origin`:
+///
+/// | Format | wkhtmltopdf | exit |
+/// | --- | --- | --- |
+/// | `woff` | draws with the served face | 0 |
+/// | `truetype` | draws with the served face | 0 |
+/// | `woff2` | falls back, the format is beyond its Qt | 0 |
+///
+/// Chromium fetches a font in CORS mode, and a document loaded from disk has
+/// the null origin, so without help the face is refused, the text is drawn in
+/// whatever the machine falls back to, and the conversion exits 1 over it.
+/// Every application that lets Snappy write its HTML to a temporary file and
+/// serves its own fonts over HTTP lands on exactly this.
+///
+/// The page is written by hand rather than through `fixture::document`,
+/// because that one carries the same font inside it as a `data:` URI: the
+/// served face has to be the only way to get those glyphs, or the assertion
+/// passes without the fetch ever succeeding.
+#[test]
+fn a_local_document_uses_a_web_font_from_another_origin() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let server = server::Server::start();
+    let scratch = fixture::Scratch::new("fonts-cross-origin");
+    let path = scratch.path().join("page.html");
+    std::fs::write(
+        &path,
+        format!(
+            "<!doctype html>\n<html><head><meta charset=\"utf-8\"><style>\n\
+             @font-face {{ font-family: \"Remote Sans\";\n  \
+               src: url(\"{}\") format(\"woff2\"); font-display: block; }}\n\
+             html, body {{ font-family: \"Remote Sans\"; }}\n\
+             </style></head><body><p>Grumpy wizards make toxic brew.</p></body></html>\n",
+            server.url(server::FONT)
+        ),
+    )
+    .expect("a fixture should be writable");
+
+    let outcome = Run::new().arg(path.display().to_string()).arg("-").output();
+    outcome.succeeded();
+
+    let pdf = Pdf::from_bytes(&outcome.stdout);
+    let fonts = pdf.fonts(1);
+    assert!(
+        fonts.iter().any(|name| name.contains("NotoSans")),
+        "the page was drawn with {fonts:?} rather than with the served face"
+    );
 }
