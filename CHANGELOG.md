@@ -10,6 +10,15 @@ behaves. If you are migrating, that is the section to read.
 
 ## [Unreleased]
 
+### Compatibility
+
+**`--dump-outline` fills `link` and `backLink`** (D56). Both attributes were written empty,
+and wkhtmltopdf's own default table-of-contents stylesheet tests for them, so a consumer
+feeding the dump to it got a table without links. They now carry wkhtmltopdf's names:
+`__WKANCHOR_` and a base-36 counter, two per item in reading order, the documents first and
+the tables of contents after them, whose items carry the same name in both attributes, as
+wkhtmltopdf writes them.
+
 ## [0.2.0] - 2026-09-16
 
 Six compatibility changes, each measured against wkhtmltopdf 0.12.6.1 and recorded as a

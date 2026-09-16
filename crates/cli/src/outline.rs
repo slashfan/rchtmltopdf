@@ -14,11 +14,17 @@
 //! is `page="0"`. A cover, or a document `--exclude-from-outline`, keeps its
 //! item with `title=""` and nothing under it.
 //!
-//! `link` and `backLink` named anchors wkhtmltopdf planted in the document so
-//! a table of contents could point at a section and the section back at it.
-//! Nothing plants those yet (#43), so both are written empty rather than
-//! filled with a name nothing in the file answers to. The attributes stay,
-//! because a consumer that reads them by name should find them.
+//! `link` and `backLink` name the anchors wkhtmltopdf planted in the document
+//! so a table of contents could point at a section and the section back at
+//! it: `__WKANCHOR_` and a counter in base 36, two per item, handed out in
+//! reading order across the whole conversion (D56). Its default stylesheet
+//! tests for the attribute, so a dump without them makes a table without
+//! links. The names are reproduced exactly, quirks included: the page objects
+//! are numbered first, in command-line order, then the tables of contents,
+//! and a table's items carry the same name in both attributes, because
+//! wkhtmltopdf re-renders a table until it settles and copies the first name
+//! into both on the second pass. An object kept out of the outline has no
+//! anchors and consumes no numbers.
 //!
 //! `page` is not the page of the file: it is the number `--page-offset` makes
 //! of it (#37, D40, D51), which [`dump`] settles through `numbering` before
@@ -36,13 +42,29 @@ pub struct Object {
     pub title: String,
     /// How many pages of the file it printed.
     pub pages: usize,
+    pub role: Role,
 }
 
-/// One element of the dump, numbered as it will be written.
+/// What an object is to the outline, which decides its anchors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// A page in the outline: named first, in command-line order.
+    Document,
+    /// A table of contents: named after every document, each item with the
+    /// same name in both attributes.
+    Contents,
+    /// A cover, or `--exclude-from-outline`: an item with nothing in it and
+    /// no anchors.
+    Excluded,
+}
+
+/// One element of the dump, numbered and named as it will be written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub title: String,
     pub page: i64,
+    pub link: String,
+    pub back_link: String,
     pub children: Vec<Entry>,
 }
 
@@ -55,13 +77,15 @@ pub struct Entry {
 /// than filed under the wrong one.
 pub fn dump(objects: &[Object], headings: &[OutlineItem], offset: i64) -> Vec<Entry> {
     let mut before = 0usize;
-    objects
+    let mut entries: Vec<Entry> = objects
         .iter()
         .map(|object| {
             let last = before + object.pages;
             let entry = Entry {
                 title: object.title.clone(),
                 page: numbering::dump_object(before, offset),
+                link: String::new(),
+                back_link: String::new(),
                 children: headings
                     .iter()
                     .filter(|heading| heading.page > before && heading.page <= last)
@@ -71,7 +95,57 @@ pub fn dump(objects: &[Object], headings: &[OutlineItem], offset: i64) -> Vec<En
             before = last;
             entry
         })
-        .collect()
+        .collect();
+
+    // The anchors, in the order wkhtmltopdf handed them out: every document
+    // as it was preprocessed, then every table of contents as it was built.
+    let mut counter = 0u64;
+    for role in [Role::Document, Role::Contents] {
+        for (object, entry) in objects.iter().zip(entries.iter_mut()) {
+            if object.role == role {
+                name(entry, role, &mut counter);
+            }
+        }
+    }
+    entries
+}
+
+/// Two names per item, in reading order, from a counter that never resets.
+///
+/// A table of contents takes the first of its two into both attributes:
+/// wkhtmltopdf builds a table, measures it and builds it again until its
+/// length settles, and the second build copies `anchor` into `tocAnchor`
+/// (`OutlineItem::fillAnchors`, `outline.cc` 0.12.6). The second number is
+/// still consumed.
+fn name(entry: &mut Entry, role: Role, counter: &mut u64) {
+    let first = anchor(*counter);
+    let second = anchor(*counter + 1);
+    *counter += 2;
+    entry.link = first.clone();
+    entry.back_link = match role {
+        Role::Contents => first,
+        Role::Document | Role::Excluded => second,
+    };
+    for child in &mut entry.children {
+        name(child, role, counter);
+    }
+}
+
+/// `__WKANCHOR_` and the number in base 36, lowercase: `QString::number(n, 36)`.
+fn anchor(number: u64) -> String {
+    const DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut digits = Vec::new();
+    let mut rest = number;
+    loop {
+        digits.push(DIGITS[(rest % 36) as usize] as char);
+        rest /= 36;
+        if rest == 0 {
+            break;
+        }
+    }
+    let mut out = String::from("__WKANCHOR_");
+    out.extend(digits.iter().rev());
+    out
 }
 
 /// A heading and what hangs under it, with every page offset.
@@ -79,6 +153,8 @@ fn numbered(item: &OutlineItem, offset: i64) -> Entry {
     Entry {
         title: item.title.clone(),
         page: numbering::dump_page(item.page, offset),
+        link: String::new(),
+        back_link: String::new(),
         children: item
             .children
             .iter()
@@ -104,9 +180,11 @@ fn write_entry(out: &mut String, entry: &Entry, depth: usize) {
     let pad = "  ".repeat(depth);
     let _ = write!(
         out,
-        "{pad}<item title=\"{}\" page=\"{}\" link=\"\" backLink=\"\"",
+        "{pad}<item title=\"{}\" page=\"{}\" link=\"{}\" backLink=\"{}\"",
         escape(&entry.title),
-        entry.page
+        entry.page,
+        escape(&entry.link),
+        escape(&entry.back_link)
     );
     if entry.children.is_empty() {
         out.push_str("/>\n");
@@ -149,7 +227,27 @@ mod tests {
         Entry {
             title: title.into(),
             page,
+            link: String::new(),
+            back_link: String::new(),
             children,
+        }
+    }
+
+    /// An entry with its anchors, as a document's are: two numbers.
+    fn linked(title: &str, page: i64, first: u64, children: Vec<Entry>) -> Entry {
+        Entry {
+            link: anchor(first),
+            back_link: anchor(first + 1),
+            ..entry(title, page, children)
+        }
+    }
+
+    /// The anchors as a table of contents' are: the first number in both.
+    fn aliased(title: &str, page: i64, first: u64, children: Vec<Entry>) -> Entry {
+        Entry {
+            link: anchor(first),
+            back_link: anchor(first),
+            ..entry(title, page, children)
         }
     }
 
@@ -167,6 +265,23 @@ mod tests {
         Object {
             title: title.into(),
             pages,
+            role: Role::Document,
+        }
+    }
+
+    fn excluded(pages: usize) -> Object {
+        Object {
+            title: String::new(),
+            pages,
+            role: Role::Excluded,
+        }
+    }
+
+    fn contents(pages: usize) -> Object {
+        Object {
+            title: "Table of Contents".into(),
+            pages,
+            role: Role::Contents,
         }
     }
 
@@ -244,16 +359,17 @@ mod tests {
         assert_eq!(
             dump(&[object("Three", 3), object("One", 1)], &headings, 0),
             [
-                entry(
+                linked(
                     "Three",
                     0,
+                    0,
                     vec![
-                        entry("Alpha", 1, vec![]),
-                        entry("Beta", 2, vec![entry("Beta A", 2, vec![])]),
-                        entry("Gamma", 3, vec![]),
+                        linked("Alpha", 1, 2, vec![]),
+                        linked("Beta", 2, 4, vec![linked("Beta A", 2, 6, vec![])]),
+                        linked("Gamma", 3, 8, vec![]),
                     ]
                 ),
-                entry("One", 3, vec![entry("Solo", 4, vec![])]),
+                linked("One", 3, 10, vec![linked("Solo", 4, 12, vec![])]),
             ]
         );
     }
@@ -265,10 +381,10 @@ mod tests {
     fn an_object_kept_out_of_the_outline_keeps_an_empty_item() {
         let headings = [item("Solo", 3, vec![])];
         assert_eq!(
-            dump(&[object("", 2), object("One", 1)], &headings, 0),
+            dump(&[excluded(2), object("One", 1)], &headings, 0),
             [
                 entry("", 0, vec![]),
-                entry("One", 2, vec![entry("Solo", 3, vec![])]),
+                linked("One", 2, 0, vec![linked("Solo", 3, 2, vec![])]),
             ]
         );
     }
@@ -280,8 +396,8 @@ mod tests {
         assert_eq!(
             dump(&[object("A", 1), object("B", 1)], &headings, 10),
             [
-                entry("A", 10, vec![entry("Alpha", 11, vec![])]),
-                entry("B", 11, vec![entry("Solo", 12, vec![])]),
+                linked("A", 10, 0, vec![linked("Alpha", 11, 2, vec![])]),
+                linked("B", 11, 4, vec![linked("Solo", 12, 6, vec![])]),
             ]
         );
     }
@@ -292,7 +408,68 @@ mod tests {
         let headings = [item("Lost", 0, vec![]), item("Found", 1, vec![])];
         assert_eq!(
             dump(&[object("A", 1)], &headings, 0),
-            [entry("A", 0, vec![entry("Found", 1, vec![])])]
+            [linked("A", 0, 0, vec![linked("Found", 1, 2, vec![])])]
+        );
+    }
+
+    /// **The anchors, as measured** (D56). `one.html toc three.html` on
+    /// wkhtmltopdf 0.12.6.1: `One` 0/1 and `Solo` 2/3, then `Three` 4/5 over
+    /// `Alpha` 6/7, `Beta` 8/9, `Gamma` a/b — the table in between is named
+    /// **after** them, `c/c` for its item and `e/e` for its heading, the
+    /// second of each pair consumed and unused.
+    #[test]
+    fn a_table_of_contents_is_named_after_the_documents_with_one_name_twice() {
+        let headings = [
+            item("Solo", 1, vec![]),
+            item("Table of Contents", 2, vec![]),
+            item("Alpha", 3, vec![]),
+            item("Beta", 4, vec![]),
+            item("Gamma", 5, vec![]),
+        ];
+        assert_eq!(
+            dump(
+                &[object("One", 1), contents(1), object("Three", 3)],
+                &headings,
+                0
+            ),
+            [
+                linked("One", 0, 0, vec![linked("Solo", 1, 2, vec![])]),
+                aliased(
+                    "Table of Contents",
+                    1,
+                    12,
+                    vec![aliased("Table of Contents", 2, 14, vec![])]
+                ),
+                linked(
+                    "Three",
+                    2,
+                    4,
+                    vec![
+                        linked("Alpha", 3, 6, vec![]),
+                        linked("Beta", 4, 8, vec![]),
+                        linked("Gamma", 5, 10, vec![]),
+                    ]
+                ),
+            ]
+        );
+    }
+
+    /// Base 36, lowercase, as `QString::number(n, 36)` writes it.
+    #[test]
+    fn anchors_count_in_base_36() {
+        assert_eq!(anchor(0), "__WKANCHOR_0");
+        assert_eq!(anchor(10), "__WKANCHOR_a");
+        assert_eq!(anchor(35), "__WKANCHOR_z");
+        assert_eq!(anchor(36), "__WKANCHOR_10");
+        assert_eq!(anchor(1295), "__WKANCHOR_zz");
+    }
+
+    #[test]
+    fn the_anchors_are_written_as_attributes() {
+        let out = xml(&[linked("One", 1, 0, vec![])]);
+        assert!(
+            out.contains("link=\"__WKANCHOR_0\" backLink=\"__WKANCHOR_1\""),
+            "{out}"
         );
     }
 
