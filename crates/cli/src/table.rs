@@ -854,22 +854,14 @@ pub const PAGE_OPTIONS: &[OptionSpec] = &[
         "disable-toc-back-links",
         None,
         Object,
-        NoEquivalent(
-            "a back link is an annotation over the heading, and Chromium reports a \
-             heading's position but not its box; the only ways to get one either \
-             guess it or wrap the heading in markup of ours, and D42 took neither",
-        ),
+        Implemented,
         "Do not link from section header to toc (default)",
     ),
     OptionSpec::flag(
         "enable-toc-back-links",
         None,
         Object,
-        NoEquivalent(
-            "a back link is an annotation over the heading, and Chromium reports a \
-             heading's position but not its box; the only ways to get one either \
-             guess it or wrap the heading in markup of ours, and D42 took neither",
-        ),
+        Implemented,
         "Link from section header to toc",
     ),
     OptionSpec::new(

@@ -12,6 +12,12 @@ behaves. If you are migrating, that is the section to read.
 
 ### Compatibility
 
+**`--enable-toc-back-links` is honoured** (D57). Every heading of a document that carries the
+option gets a link back to its line in the table of contents, on the heading's box, and the
+table's own heading gets one to the entry it makes of itself, as wkhtmltopdf writes them.
+The option was accepted and ignored. `--disable-toc-links` and `--enable-toc-back-links`
+are independent, as they are in wkhtmltopdf.
+
 **`--dump-outline` fills `link` and `backLink`** (D56). Both attributes were written empty,
 and wkhtmltopdf's own default table-of-contents stylesheet tests for them, so a consumer
 feeding the dump to it got a table without links. They now carry wkhtmltopdf's names:

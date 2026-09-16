@@ -267,6 +267,46 @@ impl Pdf {
         out
     }
 
+    /// The box of every link annotation on a 1-based page, in the order the
+    /// page lists them. Points from the bottom-left, whichever way the
+    /// corners were written.
+    pub fn link_rects(&self, page: usize) -> Vec<Rect> {
+        let id = self.page_id(page);
+        let Some(annotations) = self
+            .document
+            .get_dictionary(id)
+            .ok()
+            .and_then(|page| page.get(b"Annots").ok())
+            .and_then(|annots| self.document.dereference(annots).ok())
+            .and_then(|(_, annots)| annots.as_array().ok())
+        else {
+            return Vec::new();
+        };
+        annotations
+            .iter()
+            .filter_map(|annotation| self.document.dereference(annotation).ok())
+            .filter_map(|(_, annotation)| annotation.as_dict().ok())
+            .filter(|annotation| {
+                annotation.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Link")
+            })
+            .filter_map(|annotation| {
+                let rect = annotation.get(b"Rect").ok()?.as_array().ok()?;
+                let at = |index: usize| {
+                    rect.get(index)
+                        .and_then(|value| value.as_float().ok())
+                        .map(f64::from)
+                        .unwrap_or(0.0)
+                };
+                Some(Rect {
+                    left: at(0).min(at(2)),
+                    bottom: at(1).min(at(3)),
+                    right: at(0).max(at(2)),
+                    top: at(1).max(at(3)),
+                })
+            })
+            .collect()
+    }
+
     /// The links on a 1-based page, in the order the page lists them.
     ///
     /// A named destination is looked up in the catalog's `Dests` dictionary,

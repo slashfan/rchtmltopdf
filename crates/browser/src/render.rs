@@ -307,6 +307,60 @@ impl Page {
     }
 }
 
+/// One heading of a settled document, as far as a back link needs it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeadingBox {
+    /// Its text, whitespace collapsed, which is how the outline names it.
+    pub title: String,
+    /// Its box height in CSS pixels.
+    pub height: f64,
+}
+
+impl Page {
+    /// Every heading's text and height, in reading order.
+    ///
+    /// For `--enable-toc-back-links` (D57): the annotation over a heading
+    /// needs its box, and the outline Chromium writes at print time carries
+    /// only where the heading starts. The height is read here, in the
+    /// viewport's layout, which is the printed one for any heading that fits
+    /// on a line; the width is not read at all, because the printed page is
+    /// narrower than the viewport and a heading spans its container anyway.
+    /// A heading with no text, or none of its own on the page, is left out,
+    /// as Chromium leaves it out of the outline.
+    pub async fn heading_boxes(&self) -> Result<Vec<HeadingBox>> {
+        const EXPRESSION: &str = "(() => Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6'))\
+             .map(h => [h.textContent.replace(/\\s+/g, ' ').trim(), h.getBoundingClientRect().height])\
+             .filter(([text, height]) => text && height > 0))()";
+        let answer = self
+            .session()
+            .send(
+                "Runtime.evaluate",
+                json!({ "expression": EXPRESSION, "returnByValue": true }),
+            )
+            .await?;
+        if let Some(message) = thrown(&answer) {
+            return Err(Error::Script {
+                source: "measuring the headings".to_string(),
+                message,
+            });
+        }
+        Ok(answer["result"]["value"]
+            .as_array()
+            .map(|boxes| {
+                boxes
+                    .iter()
+                    .filter_map(|pair| {
+                        Some(HeadingBox {
+                            title: pair.get(0)?.as_str()?.to_string(),
+                            height: pair.get(1)?.as_f64()?,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+}
+
 /// Put the user stylesheet into the document.
 ///
 /// A file is read here and inlined rather than left to the browser to fetch:

@@ -116,7 +116,7 @@ pub fn entries(
 ///
 /// A destination past the top of the page is not an error: a reader clamps it,
 /// and lands at the top, which is where the table's own heading is.
-const TOP_OF_THE_PAGE: f64 = 10_000.0;
+pub(crate) const TOP_OF_THE_PAGE: f64 = 10_000.0;
 
 /// Every outline entry, in reading order, with the level its nesting gives it.
 fn walk(items: &[OutlineItem], level: usize, visit: &mut impl FnMut(usize, usize, &str, f64, f64)) {
@@ -138,7 +138,11 @@ pub fn document(entries: &[Entry], toc: &TocSettings) -> String {
         "</head>\n<body>\n<h1>{}</h1>\n",
         escape(&toc.header_text)
     );
-    write_level(&mut out, entries, &mut 0, 1, toc.links);
+    // The href is what gives an entry a box on the page, and a back link
+    // needs that box as its destination: under `--disable-toc-links` with
+    // back links on, the marker is still written and the merge takes the
+    // entry's link away again once the back links point at it (D57).
+    write_level(&mut out, entries, &mut 0, 1, toc.links || toc.back_links);
     out.push_str("</body>\n</html>\n");
     out
 }
@@ -390,6 +394,7 @@ mod tests {
             text_size_shrink: 0.5,
             dotted_lines: false,
             links: true,
+            back_links: false,
         };
         let html = document(&[entry(1, "One", 1)], &toc);
         assert!(html.contains("<h1>Sommaire</h1>"), "{html}");
@@ -449,6 +454,20 @@ mod tests {
             html.contains("<a>One </a>"),
             "the entry is still there: {html}"
         );
+    }
+
+    /// With back links on, the entries keep their markers even under
+    /// `--disable-toc-links`: the merge needs each entry's box to point a
+    /// heading back at it, and takes the forward link away itself (D57).
+    #[test]
+    fn back_links_keep_the_markers_the_merge_needs_even_without_links() {
+        let toc = TocSettings {
+            links: false,
+            back_links: true,
+            ..TocSettings::default()
+        };
+        let html = document(&[entry(1, "One", 2)], &toc);
+        assert!(html.contains("href=\"rchtmltopdf-contents:"), "{html}");
     }
 
     /// A factor that is not a round percentage keeps its digits rather than
