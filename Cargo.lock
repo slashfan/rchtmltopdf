@@ -404,7 +404,7 @@ checksum = "a611d15b50743feb4c76b7d03edcb0e64f399c26961e4efe6975bc398be6aa3d"
 
 [[package]]
 name = "rchtmltopdf"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rchtmltopdf-browser",
  "rchtmltopdf-core",
@@ -414,7 +414,7 @@ dependencies = [
 
 [[package]]
 name = "rchtmltopdf-browser"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64",
  "libc",
@@ -426,7 +426,7 @@ dependencies = [
 
 [[package]]
 name = "rchtmltopdf-conformance"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64",
  "lopdf",
@@ -438,11 +438,11 @@ dependencies = [
 
 [[package]]
 name = "rchtmltopdf-core"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "rchtmltopdf-pdf"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "lopdf",
  "rchtmltopdf-core",
