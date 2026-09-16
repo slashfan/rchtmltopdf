@@ -569,6 +569,167 @@ struct ContentsTarget {
     top: f64,
 }
 
+/// One table of contents of the finished file, for [`contents_back_links`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentsPart {
+    /// The 1-based page of the file it starts on.
+    pub first_page: usize,
+    pub pages: usize,
+    /// Whether its entries keep their own links. Off is `--disable-toc-links`,
+    /// which with back links on still writes the markers, for their boxes.
+    pub keep_links: bool,
+}
+
+/// A heading that links back to its entry in the table of contents.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackLink {
+    /// Where the heading is: the destination its entry points at, exactly as
+    /// the outline wrote it, which is what pairs the two.
+    pub page: usize,
+    pub left: f64,
+    pub top: f64,
+    /// The box the annotation covers: from `left` to `right`, `height` down
+    /// from `top`, in points.
+    pub right: f64,
+    pub height: f64,
+}
+
+/// `--enable-toc-back-links`: an annotation over every heading, pointing at
+/// its own entry in the table of contents (D57).
+///
+/// wkhtmltopdf posed the annotation on the heading's box and pointed it at
+/// the anchor it had planted on the entry. Here the entry is found by what
+/// it points at: its own link carries the heading's destination, so a
+/// heading whose page and position match one is linked back to that entry's
+/// box on the table's page. A heading no entry names gets nothing. Where a
+/// table asked for no links of its own, they are taken away here, after
+/// their boxes have served.
+///
+/// Runs on the finished file, because the pages of both sides are numbered
+/// only then.
+pub fn contents_back_links(
+    pdf: &[u8],
+    contents: &[ContentsPart],
+    headings: &[BackLink],
+) -> Result<Vec<u8>, Error> {
+    let mut document = Document::load_mem(pdf).map_err(fail)?;
+    let pages: Vec<ObjectId> = document.page_iter().collect();
+    let numbers: BTreeMap<ObjectId, usize> = pages
+        .iter()
+        .enumerate()
+        .map(|(index, id)| (*id, index + 1))
+        .collect();
+
+    // Every entry of every table: what it points at, and where it is.
+    struct Entry {
+        target: (usize, f64, f64),
+        page: ObjectId,
+        left: f64,
+        top: f64,
+    }
+    let mut entries: Vec<Entry> = Vec::new();
+    for part in contents {
+        for number in part.first_page..part.first_page + part.pages {
+            let Some(page) = pages.get(number.wrapping_sub(1)) else {
+                continue;
+            };
+            let annotations = page_annotations(&document, *page);
+            let mut kept = Vec::with_capacity(annotations.len());
+            for annotation in annotations {
+                let dictionary = document.get_dictionary(annotation).map_err(fail)?;
+                let is_link =
+                    dictionary.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Link");
+                let target = dictionary
+                    .get(b"Dest")
+                    .ok()
+                    .and_then(|dest| document.dereference(dest).ok())
+                    .and_then(|(_, dest)| dest.as_array().ok().cloned())
+                    .and_then(|array| {
+                        let page = numbers.get(&array.first()?.as_reference().ok()?)?;
+                        Some((*page, number_of(array.get(2)?), number_of(array.get(3)?)))
+                    });
+                if let (true, Some(target)) = (is_link, target) {
+                    let (left, top) = rect_corner(dictionary.get(b"Rect").ok());
+                    entries.push(Entry {
+                        target,
+                        page: *page,
+                        left,
+                        top,
+                    });
+                }
+                if !is_link || part.keep_links {
+                    kept.push(Object::Reference(annotation));
+                }
+            }
+            if !part.keep_links {
+                document
+                    .get_dictionary_mut(*page)
+                    .map_err(fail)?
+                    .set("Annots", Object::Array(kept));
+            }
+        }
+    }
+
+    let close = |a: f64, b: f64| (a - b).abs() < 0.05;
+    for heading in headings {
+        let Some(entry) = entries.iter().find(|entry| {
+            entry.target.0 == heading.page
+                && close(entry.target.1, heading.left)
+                && close(entry.target.2, heading.top)
+        }) else {
+            continue;
+        };
+        let Some(page) = pages.get(heading.page.wrapping_sub(1)) else {
+            continue;
+        };
+        let annotation = document.add_object(Object::Dictionary(dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Link",
+            "Rect" => Object::Array(vec![
+                Object::Real(heading.left as f32),
+                Object::Real((heading.top - heading.height) as f32),
+                Object::Real(heading.right as f32),
+                Object::Real(heading.top as f32),
+            ]),
+            "Border" => Object::Array(vec![0.into(), 0.into(), 0.into()]),
+            "Dest" => Object::Array(vec![
+                Object::Reference(entry.page),
+                Object::Name(b"XYZ".to_vec()),
+                Object::Real(entry.left as f32),
+                Object::Real(entry.top as f32),
+                Object::Integer(0),
+            ]),
+        }));
+        let mut annotations: Vec<Object> = page_annotations(&document, *page)
+            .into_iter()
+            .map(Object::Reference)
+            .collect();
+        annotations.push(Object::Reference(annotation));
+        document
+            .get_dictionary_mut(*page)
+            .map_err(fail)?
+            .set("Annots", Object::Array(annotations));
+    }
+
+    let mut out = Vec::with_capacity(pdf.len());
+    document.save_to(&mut out).map_err(fail)?;
+    Ok(out)
+}
+
+/// A number written as an integer or a real, as nought when it is neither.
+fn number_of(object: &Object) -> f64 {
+    object.as_float().map(f64::from).unwrap_or(0.0)
+}
+
+/// The top-left corner of a `Rect`, whichever way round it was written.
+fn rect_corner(rect: Option<&Object>) -> (f64, f64) {
+    let Some(array) = rect.and_then(|rect| rect.as_array().ok()) else {
+        return (0.0, 0.0);
+    };
+    let at = |index: usize| array.get(index).map(number_of).unwrap_or(0.0);
+    (at(0).min(at(2)), at(1).max(at(3)))
+}
+
 /// Judge every link on these pages: resolve what names an anchor, point a
 /// link to another document of the conversion into it, make a relative link
 /// relative again when asked, and drop the kinds that were switched off.
@@ -1743,6 +1904,141 @@ mod tests {
     fn a_part_that_is_not_a_pdf_is_named_by_position() {
         let error = merge_all(&[&two_pages(), b"not a PDF"]).expect_err("should refuse");
         assert!(error.to_string().contains("document 2"), "{error}");
+    }
+
+    // --- back links -----------------------------------------------------------
+
+    /// Two pages: a table of contents whose one entry points at a heading on
+    /// the second page, the way the merge leaves it.
+    fn table_and_heading() -> Vec<u8> {
+        let mut document = Document::load_mem(&pages(&["T", "H"], None)).expect("should parse");
+        let page_ids: Vec<ObjectId> = document.page_iter().collect();
+        let entry = document.add_object(Object::Dictionary(dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Link",
+            "Rect" => Object::Array(vec![40.into(), 700.into(), 200.into(), 712.into()]),
+            "Dest" => Object::Array(vec![
+                Object::Reference(page_ids[1]),
+                Object::Name(b"XYZ".to_vec()),
+                Object::Real(34.5),
+                Object::Real(803.25),
+                Object::Integer(0),
+            ]),
+        }));
+        document
+            .get_dictionary_mut(page_ids[0])
+            .expect("a page")
+            .set("Annots", Object::Array(vec![Object::Reference(entry)]));
+        let mut out = Vec::new();
+        document.save_to(&mut out).expect("should save");
+        out
+    }
+
+    fn table(keep_links: bool) -> ContentsPart {
+        ContentsPart {
+            first_page: 1,
+            pages: 1,
+            keep_links,
+        }
+    }
+
+    /// Every link annotation on a page: its rectangle and where it goes.
+    fn rects_and_targets(pdf: &[u8], page: usize) -> Vec<(Vec<f64>, usize, f64, f64)> {
+        let document = Document::load_mem(pdf).expect("should parse");
+        let numbers: BTreeMap<ObjectId, usize> = document
+            .get_pages()
+            .into_iter()
+            .map(|(number, id)| (id, number as usize))
+            .collect();
+        let id = document.get_pages()[&(page as u32)];
+        page_annotations(&document, id)
+            .into_iter()
+            .map(|annotation| {
+                let dictionary = document.get_dictionary(annotation).expect("an annotation");
+                let rect: Vec<f64> = dictionary
+                    .get(b"Rect")
+                    .and_then(Object::as_array)
+                    .expect("a rect")
+                    .iter()
+                    .map(number_of)
+                    .collect();
+                let dest = dictionary
+                    .get(b"Dest")
+                    .and_then(Object::as_array)
+                    .expect("a dest");
+                (
+                    rect,
+                    numbers[&dest[0].as_reference().expect("a page")],
+                    number_of(&dest[2]),
+                    number_of(&dest[3]),
+                )
+            })
+            .collect()
+    }
+
+    /// **The point of D57.** The heading the entry points at gets a link
+    /// over its box, back to the entry's own corner on the table's page.
+    #[test]
+    fn a_heading_links_back_to_the_entry_that_names_it() {
+        let out = contents_back_links(
+            &table_and_heading(),
+            &[table(true)],
+            &[BackLink {
+                page: 2,
+                left: 34.5,
+                top: 803.25,
+                right: 561.0,
+                height: 22.0,
+            }],
+        )
+        .expect("should rewrite");
+        assert_eq!(
+            rects_and_targets(&out, 2),
+            [(vec![34.5, 781.25, 561.0, 803.25], 1, 40.0, 712.0)]
+        );
+        // The entry's own link is untouched.
+        assert_eq!(rects_and_targets(&out, 1).len(), 1);
+    }
+
+    /// A heading no entry names is left alone: nothing to point back at.
+    #[test]
+    fn a_heading_without_an_entry_gets_no_link() {
+        let out = contents_back_links(
+            &table_and_heading(),
+            &[table(true)],
+            &[BackLink {
+                page: 2,
+                left: 34.5,
+                top: 500.0,
+                right: 561.0,
+                height: 22.0,
+            }],
+        )
+        .expect("should rewrite");
+        assert!(rects_and_targets(&out, 2).is_empty());
+    }
+
+    /// `--disable-toc-links --enable-toc-back-links`: the entry's box served
+    /// as the destination, and its own link goes.
+    #[test]
+    fn a_table_that_asked_for_no_links_loses_them_after_they_have_served() {
+        let out = contents_back_links(
+            &table_and_heading(),
+            &[table(false)],
+            &[BackLink {
+                page: 2,
+                left: 34.5,
+                top: 803.25,
+                right: 561.0,
+                height: 22.0,
+            }],
+        )
+        .expect("should rewrite");
+        assert!(
+            rects_and_targets(&out, 1).is_empty(),
+            "the entry's link is gone"
+        );
+        assert_eq!(rects_and_targets(&out, 2).len(), 1, "the back link stays");
     }
 
     // --- the outline ----------------------------------------------------------

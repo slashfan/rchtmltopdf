@@ -288,6 +288,8 @@ pub fn apply_object(
         "toc-text-size-shrink" => object.toc.text_size_shrink = number(occurrence)?,
         "disable-dotted-lines" => object.toc.dotted_lines = false,
         "disable-toc-links" => object.toc.links = false,
+        "enable-toc-back-links" => object.toc.back_links = true,
+        "disable-toc-back-links" => object.toc.back_links = false,
 
         // --- the browser's own plumbing --------------------------------------
         "bypass-proxy-for" => web.bypass_proxy_for.push(value(occurrence).to_string()),

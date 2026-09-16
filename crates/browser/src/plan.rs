@@ -215,6 +215,10 @@ pub struct Finishing {
     /// recognised afterwards and a link to another document of the same
     /// conversion can be pointed into it.
     pub document_url: String,
+    /// `--enable-toc-back-links`: every heading of this document gets a link
+    /// back to its entry in the table of contents, which needs the heading's
+    /// box measured before printing (D57).
+    pub back_links: bool,
 }
 
 /// One document's bands: what is drawn on every page of it.
@@ -289,6 +293,7 @@ pub fn finish(global: &GlobalSettings, object: &ObjectSettings, document_url: &s
         },
         links: object.links.clone(),
         document_url: document_url.to_string(),
+        back_links: object.toc.back_links,
     }
 }
 

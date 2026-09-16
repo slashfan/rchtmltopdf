@@ -357,6 +357,104 @@ fn the_entries_link_to_the_headings_they_name() {
     assert!(pdf.links(2).is_empty() && pdf.links(3).is_empty());
 }
 
+/// **`--enable-toc-back-links` links every heading back to its entry** (D57).
+/// Measured on wkhtmltopdf 0.12.6.1 over a table and a three-level document:
+/// every heading gets one annotation, on its own box — the container's full
+/// width, the heading's height — pointing at its line in the table, and the
+/// table's own heading gets one too, pointing at the entry it makes of
+/// itself. Nothing in the file changes otherwise.
+#[test]
+fn enable_toc_back_links_links_each_heading_to_its_entry() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("contents-back-links");
+    let (chapters, _) = fixtures(&scratch);
+
+    let pdf = convert(&["--enable-toc-back-links", "toc", &chapters]);
+    assert_eq!(pdf.page_count(), 3, "{}", pdf.describe());
+    // The table's page: its four entries, and the back link of its own
+    // heading, which goes to page 1 like the entry for it does.
+    assert_eq!(
+        pdf.links(1),
+        [
+            Link::Internal { page: 1 },
+            Link::Internal { page: 2 },
+            Link::Internal { page: 2 },
+            Link::Internal { page: 3 },
+            Link::Internal { page: 1 },
+        ],
+        "{}",
+        pdf.describe()
+    );
+    // The chapter and its section on page 2, the next chapter on page 3,
+    // each back to the table.
+    assert_eq!(
+        pdf.links(2),
+        [Link::Internal { page: 1 }, Link::Internal { page: 1 }]
+    );
+    assert_eq!(pdf.links(3), [Link::Internal { page: 1 }]);
+
+    // The annotation is the heading's box: it starts where the heading
+    // does, runs to the right edge of the content, and is as tall as the
+    // heading's line. The section's box is below the chapter's and shorter.
+    let rects = pdf.link_rects(2);
+    let media = pdf.media_box(2);
+    let content_right = media.right - 10.0 * 72.0 / 25.4;
+    let chapter = rects[0];
+    let section = rects[1];
+    assert!((chapter.right - content_right).abs() < 1.0, "{chapter:?}");
+    assert!(
+        chapter.left > media.left && chapter.left < 60.0,
+        "{chapter:?}"
+    );
+    assert!(
+        chapter.height() > 20.0 && chapter.height() < 45.0,
+        "{chapter:?}"
+    );
+    assert!(section.top < chapter.bottom, "{chapter:?} then {section:?}");
+    assert!(
+        section.height() < chapter.height(),
+        "{chapter:?} then {section:?}"
+    );
+    assert!(
+        chapter.top > media.top - 80.0,
+        "near the top of the page: {chapter:?}"
+    );
+}
+
+/// The two link options are independent, as they are in wkhtmltopdf: with
+/// the table's own links off, a heading still links back to its line, and
+/// the table's page carries only its heading's back link.
+#[test]
+fn back_links_stay_when_the_tables_own_links_are_off() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("contents-back-links-only");
+    let (chapters, _) = fixtures(&scratch);
+
+    // `--disable-toc-links` is the table's own option and follows `toc`;
+    // the back links are asked for on the pages, so that one goes first.
+    let pdf = convert(&[
+        "--enable-toc-back-links",
+        "toc",
+        "--disable-toc-links",
+        &chapters,
+    ]);
+    assert_eq!(
+        pdf.links(1),
+        [Link::Internal { page: 1 }],
+        "{}",
+        pdf.describe()
+    );
+    assert_eq!(
+        pdf.links(2),
+        [Link::Internal { page: 1 }, Link::Internal { page: 1 }]
+    );
+    assert_eq!(numbers(&pdf, 1..=1), [1, 2, 2, 3], "the list is untouched");
+}
+
 /// `--disable-toc-links` writes the entries without a link, so there is no
 /// annotation at all rather than one that goes nowhere.
 #[test]

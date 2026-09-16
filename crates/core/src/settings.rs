@@ -467,6 +467,10 @@ pub struct TocSettings {
     /// Whether an entry links to the heading it names. Off under
     /// `--disable-toc-links`.
     pub links: bool,
+    /// Whether a heading links back to its entry in the table. On under
+    /// `--enable-toc-back-links` (D57). Inherited by every object like the
+    /// rest of these, and read on the object whose headings are in question.
+    pub back_links: bool,
 }
 
 impl Default for TocSettings {
@@ -478,6 +482,7 @@ impl Default for TocSettings {
             text_size_shrink: 0.8,
             dotted_lines: true,
             links: true,
+            back_links: false,
         }
     }
 }

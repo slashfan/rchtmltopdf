@@ -43,7 +43,7 @@ use rchtmltopdf_browser::intercept;
 use rchtmltopdf_browser::locate::{SystemEnvironment, locate};
 use rchtmltopdf_browser::placeholder;
 use rchtmltopdf_browser::plan::{self, Plan};
-use rchtmltopdf_browser::render::{Failed, LoadReport, Progress};
+use rchtmltopdf_browser::render::{Failed, HeadingBox, LoadReport, Progress};
 use rchtmltopdf_core::settings::{Band, ObjectKind, ObjectSettings, Settings};
 use rchtmltopdf_core::{ExitCode, Input, LoadErrorHandling, NetworkError, is_media_file};
 use std::collections::{HashMap, HashSet};
@@ -152,6 +152,9 @@ struct Piece {
     /// prints, what the file's title falls back to, and what names the
     /// object's item in `--dump-outline`.
     title: String,
+    /// Its headings' boxes, measured before printing when this document's
+    /// headings link back to the table of contents (D57). Empty otherwise.
+    headings: Vec<HeadingBox>,
 }
 
 /// What came out of the browser for the documents that made it.
@@ -352,11 +355,16 @@ async fn contents(
                 }
                 .into());
             }
+            let headings = match job.plans[*index].finish.back_links {
+                true => page.heading_boxes().await?,
+                false => Vec::new(),
+            };
             printed.push((
                 *index,
                 Piece {
                     pdf: page.print_to_pdf(&job.plans[*index].print).await?,
                     title: report.title,
+                    headings,
                 },
             ));
         }
@@ -398,6 +406,63 @@ fn moved(
         running += pages;
     }
     page
+}
+
+/// The back links of one document: its headings in the finished file, each
+/// with the box measured for it before printing (D57).
+///
+/// `items` is the whole outline with the file's page numbers, and the
+/// document's headings are the top-level entries on its pages, walked in
+/// reading order, which is the order the boxes were measured in. The two
+/// are paired by title, advancing through the boxes: a heading Chromium left
+/// out of the outline is skipped over, and one the measurement did not see
+/// gets no back link rather than another heading's box.
+fn back_links_of(
+    items: &[rchtmltopdf_pdf::OutlineItem],
+    pages: std::ops::RangeInclusive<usize>,
+    boxes: &[HeadingBox],
+    scale: f64,
+    right: f64,
+) -> Vec<rchtmltopdf_pdf::BackLink> {
+    fn walk<'a>(
+        items: &'a [rchtmltopdf_pdf::OutlineItem],
+        out: &mut Vec<&'a rchtmltopdf_pdf::OutlineItem>,
+    ) {
+        for item in items {
+            out.push(item);
+            walk(&item.children, out);
+        }
+    }
+    let own: Vec<rchtmltopdf_pdf::OutlineItem> = items
+        .iter()
+        .filter(|item| pages.contains(&item.page))
+        .cloned()
+        .collect();
+    let mut headings = Vec::new();
+    walk(&own, &mut headings);
+    let collapse = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    let mut next = 0usize;
+    let mut out = Vec::new();
+    for heading in headings {
+        let title = collapse(&heading.title);
+        let Some(found) = boxes[next.min(boxes.len())..]
+            .iter()
+            .position(|measured| collapse(&measured.title) == title)
+        else {
+            continue;
+        };
+        let measured = &boxes[next + found];
+        next += found + 1;
+        out.push(rchtmltopdf_pdf::BackLink {
+            page: heading.page,
+            left: heading.left,
+            top: heading.top,
+            right,
+            height: measured.height * scale,
+        });
+    }
+    out
 }
 
 /// Convert, or say why not.
@@ -693,11 +758,18 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
                 }
             }
 
+            // The headings' boxes, for their back links (D57): read now,
+            // while the document is still on screen, and only when asked.
+            let headings = match plan.finish.back_links && !report.navigation_failed {
+                true => page.heading_boxes().await?,
+                false => Vec::new(),
+            };
             printed.documents.push((
                 index,
                 Piece {
                     pdf: page.print_to_pdf(&print).await?,
                     title: report.title.clone(),
+                    headings,
                 },
             ));
 
@@ -981,6 +1053,58 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
         };
 
         // Asked to leave rather than killed, so it can finish writing.
+        // `--enable-toc-back-links`: an annotation over every heading of a
+        // document that asked for it, back to its entry in the table (D57).
+        // After the bands, so the pages it annotates are the finished ones.
+        let pdf = if ordered
+            .iter()
+            .any(|(index, _)| plans[*index].finish.back_links)
+        {
+            let paper = settings.global.page.effective_size();
+            let to_points = |mm: f64| mm * 72.0 / 25.4;
+            let right = to_points(paper.width.to_mm() - settings.global.page.margins.right.to_mm());
+            let mut contents_parts = Vec::new();
+            let mut back_links = Vec::new();
+            let mut before = 0usize;
+            for ((index, piece), pages) in ordered.iter().zip(&merged.pages) {
+                let object = objects[*index];
+                if object.kind == ObjectKind::Toc {
+                    contents_parts.push(rchtmltopdf_pdf::ContentsPart {
+                        first_page: before + 1,
+                        pages: *pages,
+                        keep_links: object.toc.links,
+                    });
+                }
+                if plans[*index].finish.back_links {
+                    // Chromium prints CSS pixels at three quarters of a point,
+                    // scaled by `--zoom` like everything else on the page.
+                    let scale = 0.75 * object.web.zoom;
+                    let mut own = back_links_of(
+                        &items,
+                        before + 1..=before + pages,
+                        &piece.headings,
+                        scale,
+                        right,
+                    );
+                    // A table's own heading is listed by an entry made before
+                    // the table was printed, aimed at the top of its page
+                    // (D41): the back link answers to that entry, so it is
+                    // aimed the same way.
+                    if object.kind == ObjectKind::Toc
+                        && let Some(first) = own.first_mut()
+                    {
+                        first.left = 0.0;
+                        first.top = toc::TOP_OF_THE_PAGE;
+                    }
+                    back_links.extend(own);
+                }
+                before += pages;
+            }
+            rchtmltopdf_pdf::contents_back_links(&pdf, &contents_parts, &back_links)?
+        } else {
+            pdf
+        };
+
         if let Some(browser) = browser {
             browser.close().await?;
         }
@@ -1218,6 +1342,68 @@ mod tests {
     fn one_page_or_several_are_what_gets_converted() {
         assert_eq!(pages(&with(vec![page()])).unwrap().len(), 1);
         assert_eq!(pages(&with(vec![page(), page(), page()])).unwrap().len(), 3);
+    }
+
+    fn heading(
+        title: &str,
+        page: usize,
+        top: f64,
+        children: Vec<rchtmltopdf_pdf::OutlineItem>,
+    ) -> rchtmltopdf_pdf::OutlineItem {
+        rchtmltopdf_pdf::OutlineItem {
+            title: title.into(),
+            page,
+            left: 34.0,
+            top,
+            children,
+        }
+    }
+
+    fn measured(title: &str, height: f64) -> HeadingBox {
+        HeadingBox {
+            title: title.into(),
+            height,
+        }
+    }
+
+    /// The boxes pair with the outline by title, in reading order, and only
+    /// on the document's own pages (D57).
+    #[test]
+    fn back_links_pair_headings_with_their_measured_boxes() {
+        let items = [
+            heading("Before", 1, 800.0, vec![]),
+            heading("One", 2, 803.0, vec![heading("One A", 2, 700.0, vec![])]),
+            heading("Two", 3, 790.0, vec![]),
+            heading("After", 4, 800.0, vec![]),
+        ];
+        let boxes = [
+            measured("One", 40.0),
+            measured("One  A", 30.0),
+            measured("Two", 40.0),
+        ];
+        let links = back_links_of(&items, 2..=3, &boxes, 0.75, 561.0);
+        let summary: Vec<(usize, f64, f64)> =
+            links.iter().map(|l| (l.page, l.top, l.height)).collect();
+        assert_eq!(
+            summary,
+            [(2, 803.0, 30.0), (2, 700.0, 22.5), (3, 790.0, 30.0)]
+        );
+        assert!(links.iter().all(|l| l.right == 561.0 && l.left == 34.0));
+    }
+
+    /// A heading the measurement did not see gets nothing, and does not take
+    /// the next heading's box.
+    #[test]
+    fn a_heading_without_a_box_gets_no_back_link() {
+        let items = [
+            heading("One", 1, 803.0, vec![]),
+            heading("Hidden", 1, 750.0, vec![]),
+            heading("Two", 1, 700.0, vec![]),
+        ];
+        let boxes = [measured("One", 40.0), measured("Two", 20.0)];
+        let links = back_links_of(&items, 1..=1, &boxes, 1.0, 500.0);
+        let summary: Vec<(f64, f64)> = links.iter().map(|l| (l.top, l.height)).collect();
+        assert_eq!(summary, [(803.0, 40.0), (700.0, 20.0)]);
     }
 
     #[test]
