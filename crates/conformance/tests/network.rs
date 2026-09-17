@@ -213,3 +213,41 @@ fn the_same_address_fails_without_the_proxy() {
         .output()
         .failed();
 }
+
+/// **An image is asked for the way wkhtmltopdf asked for it** (D63).
+///
+/// Measured against 0.12.6.1: it sends `Accept: */*` for an image, where
+/// Chromium offers `image/avif,image/webp,image/apng,image/svg+xml,image/*`.
+/// A server that negotiates on `Accept` — serving WebP from a `.jpeg` URL is
+/// the ordinary way to do it — therefore answered wkhtmltopdf with a JPEG,
+/// which it copied straight into the file, and answered us with a WebP, which
+/// no PDF can carry: the picture was decoded and re-embedded losslessly. On a
+/// measured document from a reference project (#32) that was 3 MB against
+/// 450 kB.
+///
+/// The server records what the image request carried and a second conversion
+/// reads it back, because a subresource has no voice in the document it is
+/// part of.
+#[test]
+fn an_image_is_asked_for_the_way_wkhtmltopdf_asks() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let server = server::Server::start();
+    let scratch = Scratch::new("network-image-accept");
+    let page = fixture::write(
+        scratch.path(),
+        "page.html",
+        &format!("<img src=\"{}\">", server.url(server::PROBE_IMAGE)),
+    );
+
+    let asked = Run::new().arg(page.display().to_string()).arg("-").output();
+    asked.succeeded();
+
+    let (report, _) = fetch(&server.url(server::SEEN_ACCEPT), &[]);
+    let seen = flat(&report);
+    assert!(
+        seen.contains("*/*") && !seen.contains("image/webp"),
+        "the image request carried {seen:?}"
+    );
+}

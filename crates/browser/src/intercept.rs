@@ -15,8 +15,15 @@
 //! So `Fetch.enable` pauses each request before it goes out, and this decides
 //! what to do with it.
 //!
-//! A fifth thing needs a say in a request, and it comes from no option at all:
-//! a **web font from another origin** (D58). Chromium fetches a font in CORS
+//! Two more things need a say in a request, and neither comes from an option.
+//!
+//! An **image is asked for the way wkhtmltopdf asked for it** (D63). Chromium
+//! offers `image/avif,image/webp,…`, a server that negotiates on `Accept`
+//! answers in one of those, and a PDF can carry neither: the picture is decoded
+//! and re-embedded losslessly, nine times the size. wkhtmltopdf sends `*/*` and
+//! gets the JPEG it can copy straight through.
+//!
+//! And a **web font from another origin** (D58). Chromium fetches a font in CORS
 //! mode and refuses the face unless the server allows the document's origin;
 //! wkhtmltopdf's Qt never asked, so a document that has always rendered in its
 //! own fonts loses them here — and the failed fetch exits 1 on top. Font
@@ -51,6 +58,21 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
+
+/// What wkhtmltopdf asks for when it fetches an image (D63).
+///
+/// Measured against 0.12.6.1: it sends `*/*`, where Chromium sends
+/// `image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8`. A server
+/// that negotiates on `Accept` — the ordinary way to serve WebP from a `.jpeg`
+/// URL — then answers wkhtmltopdf with the JPEG and us with a WebP, which a PDF
+/// cannot carry: the picture is decoded and re-embedded losslessly, at nine
+/// times the size on a measured document.
+fn image_accept() -> Pair {
+    Pair {
+        name: "Accept".to_string(),
+        value: "*/*".to_string(),
+    }
+}
 
 /// A document to answer ourselves, so it is read as the charset asked for.
 ///
@@ -183,6 +205,15 @@ pub async fn install(session: &Session, rules: Rules) -> Result<Option<Intercept
     let mut patterns = Vec::new();
     if rules.needed() {
         patterns.push(json!({ "urlPattern": "*", "requestStage": "Request" }));
+    } else {
+        // Only the images, when nothing else has a say: their `Accept` is
+        // rewritten on the way out (D63), and pausing every request to reach
+        // them would cost a round trip per subresource.
+        patterns.push(json!({
+            "urlPattern": "*",
+            "resourceType": "Image",
+            "requestStage": "Request",
+        }));
     }
     patterns.push(json!({
         "urlPattern": "*",
@@ -294,6 +325,12 @@ pub async fn install(session: &Session, rules: Rules) -> Result<Option<Intercept
                     let mut params = json!({ "requestId": id });
                     if is_document && !rules.document_headers.is_empty() {
                         params["headers"] = merged_headers(request, &rules.document_headers);
+                    }
+                    // An image is asked for as wkhtmltopdf asked for it (D63).
+                    // A document is never an image, so this cannot fight the
+                    // custom headers above.
+                    if event.params.get("resourceType").and_then(Value::as_str) == Some("Image") {
+                        params["headers"] = merged_headers(request, &[image_accept()]);
                     }
                     let _ = answering.send("Fetch.continueRequest", params).await;
                 }

@@ -19,6 +19,12 @@ which takes that file from 2,095 kB to 677 kB with the same pages and the same t
 
 ### Compatibility
 
+**An image is asked for the way wkhtmltopdf asked for it** (D63). It sends `Accept: */*`;
+Chromium offers `image/avif,image/webp,…`, so a server that negotiates on `Accept` answered
+it with a JPEG and us with a WebP — which no PDF can carry, so every picture was decoded and
+re-embedded losslessly. A measured document went from 450 kB under wkhtmltopdf to 3 MB here
+for that reason alone.
+
 **`--zoom` reaches a header or footer document** (D61). wkhtmltopdf scales a band with the
 document it frames — the same word measures 114.2 pt at `--zoom 1` and 55.0 at `--zoom 0.5`
 — and ours did not move at all. An application zooming to make up for the smart shrinking it
