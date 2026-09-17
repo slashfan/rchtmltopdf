@@ -766,3 +766,22 @@ Après la passe : **18 objets, comme la référence, et le fichier tombe de 2 09
 **Sa place.** Après la fusion, les bandeaux, les liens retour et les métadonnées : c'est la seule passe qui ne change aucune page, seulement le nombre d'objets qui disent la même chose, donc elle ne peut rien casser de ce qui la précède et profite de tout ce qui l'a précédée.
 
 **Écarté.** Charger le document de bandeau une seule fois et le réutiliser : c'est l'architecture de D38 et D39, où chaque page a son cadre parce que les substitutions — `[page]`, `[topage]` — y diffèrent ; les images sont identiques, pas les pages. Déduplicater dans le navigateur : rien dans le protocole ne le permet, et la feuille de bandeaux est imprimée d'un bloc. Ne dédupliquer que les images : les polices sont répétées de la même façon, et une empreinte qui vaut pour l'une vaut pour l'autre. Comparer les seuls octets : un masque doux différent passerait à travers, et le défaut serait invisible jusqu'à ce qu'un document le montre.
+
+## D63 — Une image est demandée comme wkhtmltopdf la demandait
+
+**Choix.** Les requêtes d'image sont mises en pause à l'aller et repartent avec `Accept: */*`, l'en-tête que wkhtmltopdf envoie, à la place de celui de Chromium. Quand aucune autre règle ne réclame de pause, le motif `Fetch` se limite à `resourceType: Image` : interrompre chaque requête pour atteindre les images coûterait un aller-retour par sous-ressource.
+
+**Pourquoi.** Mesuré contre wkhtmltopdf 0.12.6.1, pour une requête d'image :
+
+| Binaire | `Accept` envoyé |
+| --- | --- |
+| wkhtmltopdf | `*/*` |
+| rchtmltopdf avant | `image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8` |
+
+Un serveur qui négocie sur `Accept` — servir du WebP depuis une URL en `.jpeg` est la façon ordinaire de le faire — répondait donc à wkhtmltopdf par le JPEG, qu'il recopie tel quel dans le fichier, et à nous par un WebP, **qu'aucun PDF ne sait porter** : l'image était décodée et réembarquée sans perte, à neuf fois la taille. Sur un inventaire d'un projet de référence (#32), dix-huit photos : 3 033 ko contre 450.
+
+**Comment on y est arrivé, parce que la piste était trompeuse.** Les mêmes octets passaient tels quels depuis un fichier local, et depuis un serveur de test ; ils étaient réencodés depuis l'hôte de l'application. Ni les octets, ni le transport, ni les en-têtes de réponse rejoués un à un ne reproduisaient. C'est le journal réseau de Chromium — `--log-net-log` — qui a montré ce que `curl` ne montrait pas : `Content-Type: image/webp`, 19 242 octets, là où `curl`, qui n'annonce pas le WebP, recevait `image/jpeg` et 25 167.
+
+**Ce que ça coûte.** Un serveur qui aurait envoyé un WebP plus léger envoie maintenant un JPEG plus lourd sur le réseau. C'est le prix de la parité, et c'est celui que wkhtmltopdf paie depuis toujours ; le fichier produit, lui, est plus petit.
+
+**Écarté.** `Network.setExtraHTTPHeaders` : il pose l'en-tête sur **toutes** les requêtes, document compris, et la négociation de contenu d'un document HTML n'a rien à voir avec celle d'une image. Réencoder les images dans `crates/pdf`, ce que `--image-quality` ferait : c'est une transformation avec perte et une dépendance de codec, à décider pour elle-même. Ne rien faire et le documenter : le document pèse sept fois trop pour une raison qu'aucun utilisateur ne peut voir depuis sa ligne de commande.
