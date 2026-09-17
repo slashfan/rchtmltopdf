@@ -659,11 +659,17 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
             };
             let print = plan::reserve(
                 &plan.print,
-                reserved_inches(&object.header, page_setup.named.top, &heights[index].header),
+                reserved_inches(
+                    &object.header,
+                    page_setup.named.top,
+                    &heights[index].header,
+                    plan::zoom(&object.web),
+                ),
                 reserved_inches(
                     &object.footer,
                     page_setup.named.bottom,
                     &heights[index].footer,
+                    plan::zoom(&object.web),
                 ),
             );
 
@@ -982,6 +988,7 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
                             edge,
                             &settings.global.page,
                             measured,
+                            plan::zoom(&objects[index].web),
                         ),
                         None => band::row(band, edge, left, right, context, numbers),
                     };
@@ -1237,9 +1244,13 @@ async fn measure(
 
 /// How much a band document adds to the print margin on its side, in inches:
 /// its height when it sizes the margin, nothing when it is fitted into one.
-fn reserved_inches(band: &Band, named: bool, measured: &Measured) -> f64 {
+///
+/// Times the zoom, because that is the height that lands on the paper (D61).
+/// The measurement was taken in a viewport the zoom widened, so it is in that
+/// layout's millimetres and not the paper's.
+fn reserved_inches(band: &Band, named: bool, measured: &Measured, zoom: f64) -> f64 {
     match plan::sized_by_its_document(band, named) {
-        true => measured.height_mm / 25.4,
+        true => measured.height_mm * zoom / 25.4,
         false => 0.0,
     }
 }

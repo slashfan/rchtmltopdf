@@ -12,6 +12,12 @@ behaves. If you are migrating, that is the section to read.
 
 ### Compatibility
 
+**`--zoom` reaches a header or footer document** (D61). wkhtmltopdf scales a band with the
+document it frames — the same word measures 114.2 pt at `--zoom 1` and 55.0 at `--zoom 0.5`
+— and ours did not move at all. An application zooming to make up for the smart shrinking it
+no longer has therefore got a body at the right size and a band a quarter too big, whose
+text wrapped where it never had. At `--zoom 1` nothing changes.
+
 **A document's own `@page` rule no longer decides the margins** (D60). Chromium honours
 `@page`, wkhtmltopdf ignores it, so a print stylesheet carrying `@page { margin: 0 }` — the
 commonest line there is, written because it never did anything under wkhtmltopdf — silently

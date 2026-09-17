@@ -400,6 +400,17 @@ pub fn page_box(print: &Command) -> String {
     )
 }
 
+/// The zoom a band is composed and painted at (D61).
+///
+/// Guarded, because it divides: `--zoom 0` is a command line nobody means and
+/// an infinite viewport is worse than an ignored option.
+pub fn zoom(web: &WebSettings) -> f64 {
+    match web.zoom.is_finite() && web.zoom > 0.0 {
+        true => web.zoom,
+        false => 1.0,
+    }
+}
+
 /// Whether a document is one a cookie can be set for.
 ///
 /// A cookie on a `file://` document is meaningless -- there is no origin to
@@ -639,8 +650,14 @@ pub fn measure_prepare(page: &PageSetup, web: &WebSettings) -> Vec<Command> {
         Command::new(
             "Emulation.setDeviceMetricsOverride",
             json!({
-                "width": (page.content_width_inches() * CSS_PIXELS_PER_INCH).round() as u64,
-                "height": (page.height_inches() * CSS_PIXELS_PER_INCH).round() as u64,
+                // Divided by the zoom, like the document it frames (D61): a
+                // band is composed at a CSS width the zoom stretches, then
+                // painted back down, so measuring it at the paper's own width
+                // would measure a layout that is never printed.
+                "width": (page.content_width_inches() * CSS_PIXELS_PER_INCH / zoom(web))
+                    .round() as u64,
+                "height": (page.height_inches() * CSS_PIXELS_PER_INCH / zoom(web)).round()
+                    as u64,
                 "deviceScaleFactor": 1,
                 "mobile": false,
             }),
