@@ -445,3 +445,37 @@ fn a_bad_number_and_a_bad_viewport_are_reported() {
     assert!(settings_err("--viewport-size wide a.html out.pdf").contains("expected 1024x768"));
     assert!(settings_err("--viewport-size 1024xtall a.html out.pdf").contains("expected 1024x768"));
 }
+
+/// **An option that names a file to read, given nothing, is not set** (D59).
+///
+/// `--header-html ""` is what a template engine writes when the document has
+/// no header, and a real application does write it. Measured on wkhtmltopdf
+/// 0.12.6.1: `--header-html ""`, `--footer-html ""` and `--user-style-sheet
+/// ""` all convert and exit 0. Read literally the empty string is a file that
+/// is not there, and the conversion fails over an option nobody meant to set.
+#[test]
+fn an_empty_file_option_is_the_same_as_not_passing_it() {
+    let settings = settings(
+        "wkhtmltopdf --header-html '' --footer-html '' --user-style-sheet '' in.html out.pdf",
+    );
+    let object = &settings.objects[0];
+    assert_eq!(object.header.html, None);
+    assert_eq!(object.footer.html, None);
+    assert_eq!(object.load.user_style_sheet, None);
+}
+
+/// The same options with something in them still carry it, so the rule above
+/// is about emptiness and not about the options being ignored.
+#[test]
+fn a_file_option_with_a_path_keeps_it() {
+    let settings =
+        settings("wkhtmltopdf --header-html head.html --user-style-sheet s.css in.html out.pdf");
+    assert_eq!(
+        settings.objects[0].header.html.as_deref(),
+        Some("head.html")
+    );
+    assert_eq!(
+        settings.objects[0].load.user_style_sheet.as_deref(),
+        Some("s.css")
+    );
+}

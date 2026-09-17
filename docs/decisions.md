@@ -693,3 +693,21 @@ La dernière ligne décide de la portée : wkhtmltopdf est indifférent à l'ori
 **Ce qui n'avait pas à bouger.** Mesuré dans la foulée : une police qui échoue vraiment — 404 — sort en 1 **des deux côtés**, et une image ou une feuille de style qui échoue sort en 0 des deux côtés. La sémantique des codes de sortie était déjà juste ; seul le refus CORS, qui n'est un échec que chez nous, la déclenchait à tort.
 
 **Écarté.** `--disable-web-security` : un seul drapeau, mais il emporte la politique d'origine unique pour les scripts et les XHR avec lui, ce que le modèle de menace de D10 — du HTML non fiable — ne paie pas pour une police. Ne relâcher que pour un document local : la mesure dit wkhtmltopdf indifférent, et la règle qui distingue serait une règle de plus à expliquer. Télécharger les polices nous-mêmes et les inliner dans le document : il faudrait lire le CSS, et D42 a déjà refusé de toucher au document. Étendre l'indulgence à toutes les requêtes en mode CORS — XHR, modules, images marquées `crossorigin` — : ce serait sans doute encore wkhtmltopdf, mais ce n'est pas mesuré, et chaque élargissement est une part de la politique d'origine en moins ; à revoir si un projet de référence le demande.
+
+## D59 — Une option qui nomme un fichier, vide, n'est pas un fichier appelé « »
+
+**Choix.** `--header-html`, `--footer-html` et `--user-style-sheet` reçus avec une valeur vide sont traités comme non passés. La règle tient en une fonction, `apply::file`, appliquée aux trois bras concernés : la valeur vide ne remplit pas le modèle, donc le plan ne décrit aucune lecture, donc rien n'échoue plus tard.
+
+**Pourquoi.** Mesuré sur wkhtmltopdf 0.12.6.1 dans `debian:bookworm-slim` :
+
+| Ligne de commande | wkhtmltopdf | rchtmltopdf avant |
+| --- | --- | --- |
+| `--header-html ''` | convertit, sortie 0 | `could not read : no such file`, sortie 1 |
+| `--footer-html ''` | convertit, sortie 0 | idem |
+| `--user-style-sheet ''` | convertit, sortie 0 | `could not read the user stylesheet`, sortie 1 |
+
+Un moteur de gabarits qui rend son en-tête dans une chaîne écrit la chaîne vide quand le document n'a pas d'en-tête, et Snappy la transmet telle quelle. C'est la forme la plus banale qui soit, et elle venait d'un projet de référence (#32) où **aucune facture ni feuille de route ne sortait** : la famille entière échouait sur une option que personne n'avait voulu poser.
+
+**Ce qui n'est pas dans la famille.** Mesuré dans la même série : `cover ''` est refusé des deux côtés — la référence en `HostNotFoundError` —, parce qu'un objet sans URL n'est pas une option sans valeur ; `--xsl-style-sheet ''` est refusé des deux côtés aussi ; `--header-left ''`, `--title ''` et `--encoding ''` sont acceptés des deux côtés, et la chaîne vide y est une valeur légitime plutôt qu'une absence. La règle porte donc sur les options qui nomment **un fichier à lire**, et sur rien d'autre.
+
+**Écarté.** Ignorer toute valeur vide quelle que soit l'option : `--header-left ''` veut dire un en-tête vide, ce qui n'est pas la même chose qu'aucun en-tête, et la mesure sépare déjà les deux. Améliorer le message d'erreur : le message n'est pas le problème, la référence convertit. Laisser la vérification au moment de la lecture, dans `browser` : le réglage serait quand même entré dans le modèle, et le plan — qui est la description de ce qu'une conversion fera (#19) — annoncerait la lecture d'un fichier sans nom.

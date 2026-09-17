@@ -359,3 +359,36 @@ fn a_missing_band_document_fails_like_a_missing_input() {
         outcome.stderr
     );
 }
+
+/// **An empty band option converts, and changes nothing** (D59).
+///
+/// A template engine that renders a header into a string writes
+/// `--header-html ""` when the document has no header, and Snappy passes it
+/// on. Measured on wkhtmltopdf 0.12.6.1: the conversion succeeds and the page
+/// is what it would have been without the option. Here it used to be read as
+/// a file called "", which is not there, so a whole class of real documents
+/// failed with `exit 1` over an option nobody meant to set.
+///
+/// The content's top edge is the instrument, as everywhere in this file: an
+/// ignored band leaves the margin alone, a band that was taken seriously would
+/// push the content down.
+#[test]
+fn an_empty_band_document_is_ignored_rather_than_read() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("band-documents-empty");
+    let page = fixture::write(scratch.path(), "page.html", BODY);
+
+    let plain = convert(&[], &[&page]);
+    let empty = convert(&["--header-html", "", "--footer-html", ""], &[&page]);
+
+    assert_eq!(empty.page_count(), plain.page_count());
+    let top = |pdf: &Pdf| pdf.largest_painted_box(1).top;
+    assert!(
+        (top(&empty) - top(&plain)).abs() < 1.0,
+        "an ignored band should leave the content where it was: {} against {}",
+        top(&empty),
+        top(&plain)
+    );
+}
