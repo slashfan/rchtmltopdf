@@ -174,6 +174,11 @@ dit.
 * taille du fichier quand plusieurs documents sont assemblés : chaque document embarque son
   propre sous-ensemble de chaque police, là où wkhtmltopdf partageait les siennes (voir
   [D34](decisions.md)).
+* taille du fichier d'une table des matières : le filet pointillé sous chaque entrée est
+  dessiné par Chromium tiret par tiret, un sous-chemin par tiret, là où Qt posait un motif
+  sur un trait. Il pèse de 17 ko pour une table d'une page à 137 ko pour une table de
+  quinze, soit un cinquième à la moitié du fichier ; `--disable-dotted-lines` le retire
+  (voir [D64](decisions.md)).
 
 Si une différence vous bloque, ouvrez un rapport de compatibilité. Le formulaire demande la
 sortie de `--dump-parse`, qui résout la plupart des cas immédiatement.

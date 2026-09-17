@@ -785,3 +785,38 @@ Un serveur qui négocie sur `Accept` — servir du WebP depuis une URL en `.jpeg
 **Ce que ça coûte.** Un serveur qui aurait envoyé un WebP plus léger envoie maintenant un JPEG plus lourd sur le réseau. C'est le prix de la parité, et c'est celui que wkhtmltopdf paie depuis toujours ; le fichier produit, lui, est plus petit.
 
 **Écarté.** `Network.setExtraHTTPHeaders` : il pose l'en-tête sur **toutes** les requêtes, document compris, et la négociation de contenu d'un document HTML n'a rien à voir avec celle d'une image. Réencoder les images dans `crates/pdf`, ce que `--image-quality` ferait : c'est une transformation avec perte et une dépendance de codec, à décider pour elle-même. Ne rien faire et le documenter : le document pèse sept fois trop pour une raison qu'aucun utilisateur ne peut voir depuis sa ligne de commande.
+
+## D64 — Les tirets d'une table des matières coûtent, et aucune façon de les reprendre ne vaut son prix
+
+**Choix.** Le filet sous chaque entrée reste `border-bottom: 1px dashed rgb(200,200,200)` (D41, `crates/cli/src/toc.rs`), et aucune passe de `crates/pdf` ne réécrit ce que Chromium en dessine. Ce qu'il pèse est documenté dans `migration.md`, à côté des sous-ensembles de polices de D34 ; `--disable-dotted-lines` le retire pour qui préfère le fichier au filet.
+
+**Pourquoi.** Chromium dessine une bordure `dashed` comme une suite de sous-chemins de quatre points remplis d'un coup — un par tiret — là où Qt posait un motif de tirets sur un trait. Le fait était connu et sert même d'instrument : les tests de conformance lisent l'indentation d'une entrée sur ces sous-chemins (`contents.rs`). Ce qu'il coûte ne l'était pas. Mesuré sur les 72 cas du harnais Symfony/Snappy à `bec1d1d`, contre wkhtmltopdf 0.12.6.1, le poids des tirets étant obtenu en retirant le motif du flux et en le recompressant :
+
+| Cas | Nous | Référence | Sous-chemins | Les tirets | Sans eux |
+| --- | --- | --- | --- | --- | --- |
+| `toc/longer-than-one-page` | 276 ko | 77 ko | 12 426 | 137 ko | 1,80x |
+| `toc/default` | 99 ko | 32 ko | 3 012 | 34 ko | 2,07x |
+| `toc/between-two-documents` | 92 ko | 28 ko | 2 202 | 25 ko | 2,36x |
+| `toc/behind-a-cover` | 87 ko | 25 ko | 1 515 | 17 ko | 2,84x |
+| `toc/options` | 55 ko | 25 ko | 0 | — | 2,19x |
+
+Le flux le plus lourd du premier compte 7 380 sous-chemins pour 437 opérateurs de texte : du texte, il n'y a presque rien. La compression n'y est pour rien — recompressé au niveau 9, ce flux ne rend pas un octet. Et `toc/options`, seul cas du corpus à passer `--disable-dotted-lines`, est le seul sans un sous-chemin.
+
+**L'ordre de grandeur décide.** D62 et D63 venaient d'un projet de référence et reprenaient 1,4 Mo et 2,5 Mo sur des documents que quelqu'un imprimait pour de bon. Ici, une table d'une ou deux pages — le cas ordinaire — porte 17 à 34 ko de tirets ; les 137 ko demandent une table de quinze pages, qui est un cas de test. Et le titre ne bougerait pas : à zéro tiret, un fichier reste à 1,8–2,8x la référence, et à 1,6x sur un document simple. Ce qui tient ce chiffre, c'est la verbosité des flux de contenu de Chromium, que rien de tout ceci ne touche.
+
+**Écarté.** Mesuré hors harnais sur une table de 200 entrées, binaire de `bec1d1d`, Chrome 153.0.8010.47 (le pin est .36) :
+
+| Filet | Fichier | Ce que Chromium émet |
+| --- | --- | --- |
+| `1px dashed`, l'actuel | 303 ko | 24 124 sous-chemins, 257 ko de flux de contenu |
+| `repeating-linear-gradient` | 163 ko | 200 motifs de remplissage, un par entrée |
+| tuile SVG en `background-repeat` | 175 ko | 200 motifs et 24 images |
+| points en caractères | 87 ko | du texte |
+| `1px solid` | 58 ko | un rectangle par entrée |
+| aucun filet | 57 ko | — |
+
+Un fond dégradé ou une tuile pèsent moins que les tirets — et pèseraient bien plus sans D62 — mais toujours trois fois le trait plein : le filet de chaque entrée a sa largeur, donc son motif, et deux cents motifs restent deux cents objets. Ils remplacent en prime un trait vectoriel par un remplissage rastérisé, dont la finesse à l'impression ne dépend plus du lecteur de PDF. Des points en caractères sont le seul rendu vraiment léger, et ils entrent dans le texte extrait — ce que le harnais compare et ce qu'un lecteur copie : sept cas identiques deviendraient sept cas différents pour gagner des kilo-octets.
+
+Une passe dans `crates/pdf` effondrant une suite de rectangles alignés en un trait pointillé : c'est la seule voie qui reprenne vraiment les octets — 137 ko sur 276 pour le pire fichier —, et la plus chère. Elle s'appliquerait à tous les fichiers du binaire, à la bordure `dashed` du tableau d'un utilisateur comme à notre filet, que rien ne distingue de l'autre. D62 pouvait se démontrer : mêmes octets, moins d'objets, mêmes pages ; celle-ci approxime un dessin. Et elle retirerait à la conformance l'instrument avec lequel elle mesure l'indentation des entrées, pour financer l'optimisation qui l'a cassé.
+
+`--disable-dotted-lines` par défaut : la ligne de commande décide ce que le document montre, et wkhtmltopdf dessine ce filet.
