@@ -732,3 +732,21 @@ Un moteur de gabarits qui rend son en-tête dans une chaîne écrit la chaîne v
 **Dérivée de la commande, pas des réglages.** Les marges haute et basse ne sont arrêtées qu'après que `reserve` y a ajouté la hauteur mesurée d'un bandeau qui est un document (D39). Recalculer depuis les réglages donnerait un second chiffre, qui dériverait du premier ; la règle lit donc l'appel d'impression qui part.
 
 **Écarté.** `@page { margin: auto }` ou `initial` pour rendre la main aux réglages d'impression : mesuré, les deux valent zéro dans ce contexte et ne changent rien. `preferCSSPageSize` : il gouverne le papier, pas les marges, et il est déjà à `false`. Retirer la règle du document en réécrivant son CSS : il faudrait analyser des feuilles de style que nous ne contrôlons pas, pour un résultat que la cascade donne gratuitement. Ne rien faire et documenter le contournement dans le guide de migration : un utilisateur qui remplace son binaire ne change pas ses feuilles de style, c'est toute la promesse du projet.
+
+## D61 — `--zoom` met aussi à l'échelle un bandeau qui est un document
+
+**Choix.** Un bandeau qui est un document est composé à la largeur du contenu **divisée par le zoom**, puis peint par `transform: scale(zoom)` d'origine haut-gauche ; la hauteur qu'il réserve dans la marge est sa hauteur mesurée multipliée par le zoom. `plan::zoom` garde le facteur — un zoom nul ou non fini vaut 1, parce que la valeur divise —, `plan::measure_prepare` élargit d'autant le viewport de mesure, `band::frame` pose l'échelle, `reserved_inches` multiplie.
+
+**Pourquoi.** Mesuré sur wkhtmltopdf 0.12.6.1 dans `debian:bookworm-slim`, largeur du même mot dans un document d'en-tête :
+
+| `--zoom` | wkhtmltopdf | rchtmltopdf avant |
+| --- | --- | --- |
+| 1 | 114,2 pt | 141,1 pt |
+| 0,75 | 84,6 pt | 141,1 pt |
+| 0,5 | 55,0 pt | 141,1 pt |
+
+Le bandeau suit le document chez wkhtmltopdf et ne suivait rien chez nous. Le rapport 141,1 / 114,2 = 0,81 est le smart shrinking, le même facteur que partout ailleurs. La conséquence s'est vue dans un projet de référence (#32) : l'application pose `--zoom 0.8` pour retrouver la pagination que le smart shrinking lui donnait, le corps rétrécit, l'en-tête reste grand, et son texte — qui tenait sur une ligne depuis toujours — passe à la ligne.
+
+**À zoom 1, rien ne bouge.** `scale(1)` sur un cadre de la largeur du contenu : chaque nombre est celui d'avant, et les neuf tests de bandeaux existants le vérifient ligne à ligne. C'est ce qui rend ce correctif tenable dans le territoire le plus finement mesuré du projet (D39, D40).
+
+**Écarté.** Imprimer la feuille de bandeaux à l'échelle du zoom : cette feuille porte la géométrie de la page — positions des boîtes, format du papier — qui n'est pas au zoom, et tout se décalerait. Utiliser la propriété CSS `zoom` sur l'iframe plutôt que `transform` : `zoom` change la mise en page elle-même, donc la hauteur mesurée ne serait plus celle du rendu et les deux dériveraient. Mesurer à la largeur du papier puis peindre à l'échelle sans rien changer à la mesure : c'est mesurer une mise en page qui n'est jamais imprimée, et la hauteur réservée serait fausse d'un facteur zoom. Ne rien faire et le documenter dans le guide de migration : le bandeau est précisément l'endroit où l'écart se voit, parce qu'une ligne qui passe à la ligne ne se rattrape pas.

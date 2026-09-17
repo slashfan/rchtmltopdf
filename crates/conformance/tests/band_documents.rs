@@ -392,3 +392,70 @@ fn an_empty_band_document_is_ignored_rather_than_read() {
         top(&plain)
     );
 }
+
+/// **`--zoom` reaches a band document** (D61).
+///
+/// Measured on wkhtmltopdf 0.12.6.1: the same word in a header document is
+/// 114.2 pt wide at `--zoom 1` and 55.0 pt at `--zoom 0.5` — a band is scaled
+/// with the document it frames. Here it was not, so an application that zooms
+/// to make up for the smart shrinking it no longer has got a body at the right
+/// size and a header a quarter too big, whose text then wrapped where it never
+/// had.
+///
+/// The instrument is a block of a known size inside the band: what it measures
+/// on the paper is the scale the band was painted at.
+#[test]
+fn zoom_scales_a_band_document() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("band-documents-zoom");
+    let page = fixture::write(scratch.path(), "page.html", BODY);
+    let header = fixture::write(
+        scratch.path(),
+        "header.html",
+        "<div style=\"background:#000;width:200pt;height:20pt\"></div>",
+    );
+
+    // The mark is the only black box narrower than half the paper, on either
+    // run: the page's own content fills its width.
+    let mark = |pdf: &Pdf| {
+        let paper = pdf.media_box(1);
+        pdf.painted_boxes(1)
+            .into_iter()
+            .filter(|painted| painted.width() < paper.width() * 0.5)
+            .max_by(|a, b| a.width().total_cmp(&b.width()))
+            .unwrap_or_else(|| panic!("the band's mark was not painted: {}", pdf.describe()))
+    };
+
+    let plain = convert(
+        &[
+            "--margin-top",
+            "30mm",
+            "--header-html",
+            &header.display().to_string(),
+        ],
+        &[&page],
+    );
+    let zoomed = convert(
+        &[
+            "--margin-top",
+            "30mm",
+            "--zoom",
+            "0.5",
+            "--header-html",
+            &header.display().to_string(),
+        ],
+        &[&page],
+    );
+
+    let (whole, half) = (mark(&plain).width(), mark(&zoomed).width());
+    assert!(
+        (whole - 200.0).abs() < 4.0,
+        "the band's 200 pt mark measured {whole:.1} pt at zoom 1"
+    );
+    assert!(
+        (half - whole / 2.0).abs() < 4.0,
+        "at zoom 0.5 the band's mark measured {half:.1} pt against {whole:.1} at zoom 1"
+    );
+}

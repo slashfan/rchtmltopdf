@@ -179,9 +179,22 @@ pub struct Measured {
 /// width, inset by the side margins like a text band, and sits where
 /// wkhtmltopdf drew it: from the paper edge when the margin was not written,
 /// fitted into the margin when it was (see the module documentation).
-pub fn frame(url: &str, edge: Edge, paper: &PageSetup, measured: &Measured) -> String {
+///
+/// **`--zoom` reaches the band** (D61). Measured on wkhtmltopdf 0.12.6.1, the
+/// same word in a header document is 114.2 pt wide at `--zoom 1` and 55.0 at
+/// `--zoom 0.5`: a band is scaled with the document it frames. So the frame is
+/// laid out at the content width **divided** by the zoom — the width the band
+/// was measured at — and painted back down by `scale`, which is what a zoom is.
+/// At `--zoom 1` that is `scale(1)` on a frame of the content width, and every
+/// number below is the one it was before.
+pub fn frame(url: &str, edge: Edge, paper: &PageSetup, measured: &Measured, zoom: f64) -> String {
     let (left, right) = (paper.margins.left.to_mm(), paper.margins.right.to_mm());
     let width = (paper.effective_size().width.to_mm() - left - right).max(0.0);
+    // The band was measured in a viewport the zoom widened, so its measurements
+    // are in that layout's millimetres. What lands on the paper is those times
+    // the zoom; what the frame is laid out at is the layout's own numbers.
+    let laid_out = (width / zoom).max(0.0);
+    let painted = measured.height_mm * zoom;
 
     let (named, margin) = match edge {
         Edge::Header => (paper.named.top, paper.margins.top.to_mm()),
@@ -189,7 +202,7 @@ pub fn frame(url: &str, edge: Edge, paper: &PageSetup, measured: &Measured) -> S
     };
     // The box the band gets: the margin if one was asked for, its own height
     // if not.
-    let box_mm = if named { margin } else { measured.height_mm };
+    let box_mm = if named { margin } else { painted };
 
     // The box is anchored to the paper edge whatever the container does with
     // its free space, and the frame within the box is aligned to the content
@@ -197,7 +210,7 @@ pub fn frame(url: &str, edge: Edge, paper: &PageSetup, measured: &Measured) -> S
     // header that is an offset from the box's top, negative when the document
     // is taller than the margin it was fitted into.
     let (anchor, offset) = match edge {
-        Edge::Header => ("margin-bottom:auto;", box_mm - measured.height_mm),
+        Edge::Header => ("margin-bottom:auto;", box_mm - painted),
         Edge::Footer => ("margin-top:auto;", 0.0),
     };
 
@@ -205,7 +218,8 @@ pub fn frame(url: &str, edge: Edge, paper: &PageSetup, measured: &Measured) -> S
         "<div style=\"box-sizing:border-box;width:100%;height:{box_mm}mm;\
          padding-left:{left}mm;padding-right:{right}mm;{anchor}\">\
          <iframe src=\"{}\" style=\"display:block;border:0;margin:{offset}mm 0 0 0;\
-         padding:0;width:{width}mm;height:{}mm\"></iframe>\
+         padding:0;width:{laid_out}mm;height:{}mm;\
+         transform:scale({zoom});transform-origin:top left\"></iframe>\
          </div>",
         placeholder::escape(url),
         measured.extent_mm,
@@ -398,6 +412,24 @@ mod tests {
         }
     }
 
+    /// **The zoom reaches the frame** (D61): the band is laid out at the
+    /// content width divided by it and painted back down, and the box it
+    /// takes is its measured height times it. At 1 every number is the one
+    /// the tests above measure.
+    #[test]
+    fn the_frame_is_laid_out_wide_and_painted_down_by_the_zoom() {
+        let whole = frame("file:///h.html", Edge::Header, &paper(), &measured(), 1.0);
+        assert!(whole.contains("transform:scale(1)"), "{whole}");
+
+        let half = frame("file:///h.html", Edge::Header, &paper(), &measured(), 0.5);
+        assert!(half.contains("transform:scale(0.5)"), "{half}");
+        // The paper is 210mm wide with 10mm margins, so the content is 190mm
+        // and the frame twice that.
+        assert!(half.contains("width:380mm"), "{half}");
+        // The box is the measured 20mm painted at a half.
+        assert!(half.contains("height:10mm;"), "{half}");
+    }
+
     /// The URL is somebody's path, and it lands in an attribute.
     #[test]
     fn the_frame_names_the_document_escaped() {
@@ -406,19 +438,20 @@ mod tests {
             Edge::Header,
             &paper(),
             &measured(),
+            1.0,
         );
         assert!(
             html.contains("<iframe src=\"file:///h.html?title=a%20%26%20b\""),
             "{html}"
         );
-        let nasty = frame("x\" onload=\"y", Edge::Header, &paper(), &measured());
+        let nasty = frame("x\" onload=\"y", Edge::Header, &paper(), &measured(), 1.0);
         assert!(!nasty.contains("onload=\""), "{nasty}");
     }
 
     /// Like a text band, the frame spans the content and not the paper.
     #[test]
     fn the_frame_is_inset_to_the_content_width() {
-        let html = frame("file:///h.html", Edge::Footer, &paper(), &measured());
+        let html = frame("file:///h.html", Edge::Footer, &paper(), &measured(), 1.0);
         assert!(
             html.contains("padding-left:10mm;padding-right:10mm"),
             "{html}"
@@ -430,10 +463,11 @@ mod tests {
     /// starts at the paper edge, and is as tall as the body reaches.
     #[test]
     fn an_unnamed_margin_is_replaced_by_the_documents_height() {
-        let html = frame("file:///h.html", Edge::Header, &paper(), &measured());
+        let html = frame("file:///h.html", Edge::Header, &paper(), &measured(), 1.0);
         assert!(html.contains("height:20mm;"), "{html}");
         assert!(html.contains("margin:0mm 0 0 0"), "{html}");
-        assert!(html.contains("height:22mm\""), "{html}");
+        // The extent, which the transform now follows rather than ends.
+        assert!(html.contains("height:22mm;"), "{html}");
         assert!(html.contains("margin-bottom:auto"), "{html}");
     }
 
@@ -449,13 +483,13 @@ mod tests {
             },
             ..paper()
         };
-        let header = frame("file:///h.html", Edge::Header, &named, &measured());
+        let header = frame("file:///h.html", Edge::Header, &named, &measured(), 1.0);
         assert!(header.contains("height:15mm;"), "{header}");
         assert!(header.contains("margin:-5mm 0 0 0"), "{header}");
 
         // A footer's top is on the margin line either way, so it needs no
         // offset: the box, 20mm, is anchored to the paper's bottom.
-        let footer = frame("file:///h.html", Edge::Footer, &named, &measured());
+        let footer = frame("file:///h.html", Edge::Footer, &named, &measured(), 1.0);
         assert!(footer.contains("height:20mm;"), "{footer}");
         assert!(footer.contains("margin:0mm 0 0 0"), "{footer}");
         assert!(footer.contains("margin-top:auto"), "{footer}");
