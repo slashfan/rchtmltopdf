@@ -957,6 +957,111 @@ pub fn stamp(document: &[u8], overlay: &[u8]) -> Result<Vec<u8>, Error> {
     Ok(out)
 }
 
+/// Share the streams a file repeats, rather than carrying each copy (D62).
+///
+/// A band that is a document is framed once per page (D39), so the browser
+/// draws the header's logo on page one and draws it again on page two, and
+/// emits a fresh image for each. Measured on an eighteen-page quotation from a
+/// reference project (#32): 69 image objects for 18 distinct images, the copies
+/// costing 1.2 MB of a 2.1 MB file. wkhtmltopdf loads its header once and
+/// points every page at the one object.
+///
+/// So identical streams are collapsed into the first of them and every
+/// reference is repointed. What makes two streams identical is the dictionary
+/// **and** the bytes: two images can share their pixels and differ by their
+/// soft mask or their colour space, and merging those would silently change
+/// the page.
+///
+/// **Run to a fixed point.** A copy's dictionary points at its own copies —
+/// an image at its own `/SMask`, that mask at its own colour space — so two
+/// images are byte-identical only once their children have been shared. Each
+/// pass makes the next one possible, and the loop is bounded because every
+/// pass that changes anything removes at least one object.
+pub fn share_repeated_streams(pdf: &[u8]) -> Result<Vec<u8>, Error> {
+    let mut document = Document::load_mem(pdf).map_err(fail)?;
+
+    // Bounded rather than `while`: a malformed file that somehow never settles
+    // must not hang a conversion. Eight is far past what a nesting of image,
+    // mask and colour space needs.
+    for _ in 0..8 {
+        let mut first: BTreeMap<Vec<u8>, ObjectId> = BTreeMap::new();
+        let mut replaced: BTreeMap<ObjectId, ObjectId> = BTreeMap::new();
+        for (id, object) in &document.objects {
+            let Object::Stream(stream) = object else {
+                continue;
+            };
+            match first.get(&fingerprint(stream)) {
+                Some(keeper) => {
+                    replaced.insert(*id, *keeper);
+                }
+                None => {
+                    first.insert(fingerprint(stream), *id);
+                }
+            }
+        }
+        if replaced.is_empty() {
+            break;
+        }
+        for object in document.objects.values_mut() {
+            repoint(object, &replaced);
+        }
+        repoint_dictionary(&mut document.trailer, &replaced);
+        for id in replaced.keys() {
+            document.objects.remove(id);
+        }
+    }
+
+    let mut out = Vec::with_capacity(pdf.len());
+    document.save_to(&mut out).map_err(fail)?;
+    Ok(out)
+}
+
+/// What makes two streams the same one: every entry of the dictionary, by a
+/// name sorted so the writing order cannot matter, and then the bytes.
+fn fingerprint(stream: &Stream) -> Vec<u8> {
+    let mut key = Vec::new();
+    let mut entries: Vec<(&[u8], &Object)> = stream
+        .dict
+        .iter()
+        .map(|(name, value)| (name.as_slice(), value))
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, value) in entries {
+        key.extend_from_slice(name);
+        key.push(b'=');
+        key.extend_from_slice(format!("{value:?}").as_bytes());
+        key.push(b';');
+    }
+    key.push(b'|');
+    key.extend_from_slice(&stream.content);
+    key
+}
+
+/// Point every reference in an object at the copy that was kept.
+fn repoint(object: &mut Object, replaced: &BTreeMap<ObjectId, ObjectId>) {
+    match object {
+        Object::Reference(id) => {
+            if let Some(keeper) = replaced.get(id) {
+                *id = *keeper;
+            }
+        }
+        Object::Array(items) => {
+            for item in items {
+                repoint(item, replaced);
+            }
+        }
+        Object::Dictionary(dictionary) => repoint_dictionary(dictionary, replaced),
+        Object::Stream(stream) => repoint_dictionary(&mut stream.dict, replaced),
+        _ => {}
+    }
+}
+
+fn repoint_dictionary(dictionary: &mut Dictionary, replaced: &BTreeMap<ObjectId, ObjectId>) {
+    for (_, value) in dictionary.iter_mut() {
+        repoint(value, replaced);
+    }
+}
+
 /// The resource categories whose entries are named by operators.
 ///
 /// `ProcSet` is an array rather than names, and nothing reads it; it is left
@@ -1904,6 +2009,112 @@ mod tests {
     fn a_part_that_is_not_a_pdf_is_named_by_position() {
         let error = merge_all(&[&two_pages(), b"not a PDF"]).expect_err("should refuse");
         assert!(error.to_string().contains("document 2"), "{error}");
+    }
+
+    // --- sharing repeated streams ---------------------------------------------
+
+    /// Two pages carrying the same image, the way a band document framed once
+    /// per page leaves them.
+    fn twice_the_same_image(second_dictionary: Dictionary) -> Vec<u8> {
+        let mut document = Document::load_mem(&pages(&["one", "two"], None)).expect("should parse");
+        let page_ids: Vec<ObjectId> = document.page_iter().collect();
+        let pixels = b"\x01\x02\x03\x04".to_vec();
+        let plain = dictionary! {
+            "Type" => "XObject",
+            "Subtype" => "Image",
+            "Width" => 2,
+            "Height" => 2,
+            "ColorSpace" => "DeviceRGB",
+            "BitsPerComponent" => 8,
+        };
+        let first = document.add_object(Stream::new(plain, pixels.clone()));
+        let second = document.add_object(Stream::new(second_dictionary, pixels));
+        for (page, image) in page_ids.iter().zip([first, second]) {
+            document.get_dictionary_mut(*page).expect("a page").set(
+                "Resources",
+                dictionary! { "XObject" => dictionary! { "Im0" => Object::Reference(image) } },
+            );
+        }
+        let mut out = Vec::new();
+        document.save_to(&mut out).expect("should save");
+        out
+    }
+
+    fn image_objects(pdf: &[u8]) -> usize {
+        let document = Document::load_mem(pdf).expect("should parse");
+        document
+            .objects
+            .values()
+            .filter(|object| match object {
+                Object::Stream(stream) => {
+                    stream.dict.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Image")
+                }
+                _ => false,
+            })
+            .count()
+    }
+
+    /// **The copies collapse into one** (D62), and both pages still name an
+    /// image: sharing must repoint, not merely delete.
+    #[test]
+    fn the_same_image_on_two_pages_becomes_one_object() {
+        let same = dictionary! {
+            "Type" => "XObject",
+            "Subtype" => "Image",
+            "Width" => 2,
+            "Height" => 2,
+            "ColorSpace" => "DeviceRGB",
+            "BitsPerComponent" => 8,
+        };
+        let before = twice_the_same_image(same);
+        assert_eq!(image_objects(&before), 2);
+
+        let after = share_repeated_streams(&before).expect("should share");
+        assert_eq!(image_objects(&after), 1);
+
+        let document = Document::load_mem(&after).expect("should parse");
+        for page in document.page_iter() {
+            let resources = document
+                .get_dictionary(page)
+                .ok()
+                .and_then(|page| page.get(b"Resources").ok())
+                .and_then(|resources| document.dereference(resources).ok())
+                .and_then(|(_, resources)| resources.as_dict().ok().cloned())
+                .expect("the page should have resources");
+            let xobjects = resources.get(b"XObject").expect("XObject").clone();
+            let named = document
+                .dereference(&xobjects)
+                .ok()
+                .and_then(|(_, xobjects)| xobjects.as_dict().ok().cloned())
+                .expect("the page should still name an image");
+            let target = named
+                .get(b"Im0")
+                .expect("Im0")
+                .as_reference()
+                .expect("a reference");
+            assert!(
+                document.get_object(target).is_ok(),
+                "the page points at an object that is gone"
+            );
+        }
+    }
+
+    /// **The same pixels are not the same image.** A copy that differs by its
+    /// soft mask, or by anything else in its dictionary, is a different image
+    /// and merging the two would change the page.
+    #[test]
+    fn the_same_bytes_under_a_different_dictionary_stay_apart() {
+        let masked = dictionary! {
+            "Type" => "XObject",
+            "Subtype" => "Image",
+            "Width" => 2,
+            "Height" => 2,
+            "ColorSpace" => "DeviceGray",
+            "BitsPerComponent" => 8,
+        };
+        let before = twice_the_same_image(masked);
+        let after = share_repeated_streams(&before).expect("should share");
+        assert_eq!(image_objects(&after), 2, "two different images were merged");
     }
 
     // --- back links -----------------------------------------------------------

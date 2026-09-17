@@ -10,6 +10,13 @@ behaves. If you are migrating, that is the section to read.
 
 ## [Unreleased]
 
+### Performance
+
+**A file no longer carries the same stream twice** (D62). A band that is a document is framed
+once per page, so the browser emitted the header's logo again for every page: a measured
+eighteen-page document carried 69 image objects for 18 distinct images. They are now shared,
+which takes that file from 2,095 kB to 677 kB with the same pages and the same text.
+
 ### Compatibility
 
 **`--zoom` reaches a header or footer document** (D61). wkhtmltopdf scales a band with the
