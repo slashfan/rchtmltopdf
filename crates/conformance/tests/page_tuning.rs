@@ -178,3 +178,88 @@ fn encoding_says_it_does_not_apply_to_a_document_from_the_network() {
         outcome.stderr
     );
 }
+
+/// **A document's own `@page` rule does not decide the margins** (D60).
+///
+/// wkhtmltopdf ignores `@page` altogether — measured on 0.12.6.1, a document
+/// saying `margin: 0` still gets the margin from the command line, and one
+/// saying `margin: 30mm` with no option still gets wkhtmltopdf's 10mm default.
+/// Chromium honours the rule, so a print stylesheet carrying the commonest
+/// line there is — `@page { margin: 0 }`, written precisely because it never
+/// did anything under wkhtmltopdf — silently took the margins away, and
+/// anything the bands draw then landed on the content instead of beside it.
+///
+/// The instrument is a block filling the content area: where it lands is the
+/// margin, as everywhere else in this suite.
+#[test]
+fn a_documents_own_page_rule_does_not_decide_the_margins() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("page-rule-margins");
+    let block = "<div style=\"background:#000;width:100%;height:120pt\"></div>";
+    let plain = fixture::write(scratch.path(), "plain.html", block);
+    let declaring = fixture::write(
+        scratch.path(),
+        "declaring.html",
+        &format!("<style>@page {{ margin: 0; }}</style>{block}"),
+    );
+
+    let options = ["--margin-top", "22mm", "--margin-left", "15mm"];
+    let expected = convert(&plain, &options);
+    let measured = convert(&declaring, &options);
+
+    let top = |pdf: &Pdf| pdf.media_box(1).top - pdf.largest_painted_box(1).top;
+    let left = |pdf: &Pdf| pdf.largest_painted_box(1).left;
+    assert!(
+        (top(&measured) - top(&expected)).abs() < 1.0,
+        "top margin: {:.2} pt with the rule against {:.2} pt without it",
+        top(&measured),
+        top(&expected)
+    );
+    assert!(
+        (left(&measured) - left(&expected)).abs() < 1.0,
+        "left margin: {:.2} pt with the rule against {:.2} pt without it",
+        left(&measured),
+        left(&expected)
+    );
+}
+
+/// The other half of the same rule: a document asking for another paper size
+/// does not get it, and does not get its *layout* either (D60). The paper was
+/// already protected by `preferCSSPageSize: false`; the boxes the content is
+/// broken into were not, and a page laid out for A5 on A4 paper breaks in the
+/// wrong places.
+#[test]
+fn a_documents_own_page_size_does_not_decide_the_layout() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("page-rule-size");
+    let block = "<div style=\"background:#000;width:100%;height:120pt\"></div>";
+    let plain = fixture::write(scratch.path(), "plain.html", block);
+    let declaring = fixture::write(
+        scratch.path(),
+        "declaring.html",
+        &format!("<style>@page {{ size: A5; }}</style>{block}"),
+    );
+
+    let expected = convert(&plain, &[]);
+    let measured = convert(&declaring, &[]);
+
+    assert!(
+        measured.media_box(1).is_about(
+            expected.media_box(1).width(),
+            expected.media_box(1).height()
+        ),
+        "the paper should be the one asked for: {}",
+        measured.describe()
+    );
+    let width = |pdf: &Pdf| pdf.largest_painted_box(1).width();
+    assert!(
+        (width(&measured) - width(&expected)).abs() < 1.0,
+        "content width: {:.2} pt laid out with the rule against {:.2} pt without it",
+        width(&measured),
+        width(&expected)
+    );
+}

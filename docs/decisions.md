@@ -711,3 +711,24 @@ Un moteur de gabarits qui rend son en-tête dans une chaîne écrit la chaîne v
 **Ce qui n'est pas dans la famille.** Mesuré dans la même série : `cover ''` est refusé des deux côtés — la référence en `HostNotFoundError` —, parce qu'un objet sans URL n'est pas une option sans valeur ; `--xsl-style-sheet ''` est refusé des deux côtés aussi ; `--header-left ''`, `--title ''` et `--encoding ''` sont acceptés des deux côtés, et la chaîne vide y est une valeur légitime plutôt qu'une absence. La règle porte donc sur les options qui nomment **un fichier à lire**, et sur rien d'autre.
 
 **Écarté.** Ignorer toute valeur vide quelle que soit l'option : `--header-left ''` veut dire un en-tête vide, ce qui n'est pas la même chose qu'aucun en-tête, et la mesure sépare déjà les deux. Améliorer le message d'erreur : le message n'est pas le problème, la référence convertit. Laisser la vérification au moment de la lecture, dans `browser` : le réglage serait quand même entré dans le modèle, et le plan — qui est la description de ce qu'une conversion fera (#19) — annoncerait la lecture d'un fichier sans nom.
+
+## D60 — La règle `@page` du document ne décide ni les marges ni la mise en page
+
+**Choix.** Avant chaque impression, une règle `@page { size: auto; margin: … }` portant **les marges de l'appel d'impression lui-même** est injectée comme dernier nœud du document. `plan::page_box` la fabrique à partir de la commande `Page.printToPDF`, et `Page::print_to_pdf` la pose. Les marges du document, s'il en déclare, sont donc écrasées par les nôtres ; son `size` aussi.
+
+**Pourquoi.** wkhtmltopdf ignore `@page` de bout en bout : ses marges — celles de la ligne de commande, ou ses 10 mm par défaut — gagnent toujours. Chromium honore la règle du document. Mesuré sur 0.12.6.1 :
+
+| Document | Ligne de commande | wkhtmltopdf | rchtmltopdf avant |
+| --- | --- | --- | --- |
+| `@page { margin: 0 }` | `--margin-top 22mm` | 62,6 pt | −0,2 pt |
+| `@page { margin: 30mm }` | aucune | 28,8 pt (son défaut) | 84,6 pt |
+| `@page { margin: 30mm }` | `--margin-top 5mm` | 14,6 pt | 84,6 pt |
+| `@page { size: A5 }` | aucune | papier **et** mise en page A4 | papier A4, mise en page A5 |
+
+`@page { margin: 0 }` est la ligne la plus banale d'une feuille de style d'impression, écrite précisément parce que sous wkhtmltopdf elle ne faisait rien. Le document migré perd alors ses marges, et tout ce que les bandeaux dessinent atterrit **sur** le contenu au lieu d'à côté : c'est ainsi que le défaut s'est présenté dans un projet de référence (#32), où le haut de chaque page disparaissait sous l'en-tête. La dernière ligne du tableau est l'autre moitié : `preferCSSPageSize: false` protégeait déjà le papier, rien ne protégeait les boîtes dans lesquelles le contenu est découpé.
+
+**La place de l'injection.** Le dernier nœud de `documentElement`, pas la fin du `<head>` : un document peut déclarer son `@page` dans le corps, et la première version de ce correctif — qui posait la règle dans la tête — était battue par exactement ce cas, qu'un test de conformité a attrapé. Une règle `!important` du document gagne encore ; c'est la limite que la feuille de style utilisateur porte déjà, et aucune commande du protocole n'offre une origine plus forte.
+
+**Dérivée de la commande, pas des réglages.** Les marges haute et basse ne sont arrêtées qu'après que `reserve` y a ajouté la hauteur mesurée d'un bandeau qui est un document (D39). Recalculer depuis les réglages donnerait un second chiffre, qui dériverait du premier ; la règle lit donc l'appel d'impression qui part.
+
+**Écarté.** `@page { margin: auto }` ou `initial` pour rendre la main aux réglages d'impression : mesuré, les deux valent zéro dans ce contexte et ne changent rien. `preferCSSPageSize` : il gouverne le papier, pas les marges, et il est déjà à `false`. Retirer la règle du document en réécrivant son CSS : il faudrait analyser des feuilles de style que nous ne contrôlons pas, pour un résultat que la cascade donne gratuitement. Ne rien faire et documenter le contournement dans le guide de migration : un utilisateur qui remplace son binaire ne change pas ses feuilles de style, c'est toute la promesse du projet.

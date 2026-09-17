@@ -12,6 +12,13 @@ behaves. If you are migrating, that is the section to read.
 
 ### Compatibility
 
+**A document's own `@page` rule no longer decides the margins** (D60). Chromium honours
+`@page`, wkhtmltopdf ignores it, so a print stylesheet carrying `@page { margin: 0 }` — the
+commonest line there is, written because it never did anything under wkhtmltopdf — silently
+took the margins away, and whatever the bands drew landed on the content. The margins of the
+print call are now written into the document last, where the document's own rule cannot
+reach them. The paper was already protected; its layout now is too.
+
 **An empty value for an option that names a file is ignored** (D59). `--header-html ""`,
 `--footer-html ""` and `--user-style-sheet ""` are what a template engine writes when there
 is nothing to put there, and wkhtmltopdf ignores them. They were read as a file called "",
