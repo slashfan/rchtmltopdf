@@ -750,3 +750,19 @@ Le bandeau suit le document chez wkhtmltopdf et ne suivait rien chez nous. Le ra
 **À zoom 1, rien ne bouge.** `scale(1)` sur un cadre de la largeur du contenu : chaque nombre est celui d'avant, et les neuf tests de bandeaux existants le vérifient ligne à ligne. C'est ce qui rend ce correctif tenable dans le territoire le plus finement mesuré du projet (D39, D40).
 
 **Écarté.** Imprimer la feuille de bandeaux à l'échelle du zoom : cette feuille porte la géométrie de la page — positions des boîtes, format du papier — qui n'est pas au zoom, et tout se décalerait. Utiliser la propriété CSS `zoom` sur l'iframe plutôt que `transform` : `zoom` change la mise en page elle-même, donc la hauteur mesurée ne serait plus celle du rendu et les deux dériveraient. Mesurer à la largeur du papier puis peindre à l'échelle sans rien changer à la mesure : c'est mesurer une mise en page qui n'est jamais imprimée, et la hauteur réservée serait fausse d'un facteur zoom. Ne rien faire et le documenter dans le guide de migration : le bandeau est précisément l'endroit où l'écart se voit, parce qu'une ligne qui passe à la ligne ne se rattrape pas.
+
+## D62 — Les flux qu'un fichier répète sont partagés, sur le fichier fini
+
+**Choix.** Une dernière passe, `rchtmltopdf_pdf::share_repeated_streams`, effondre les flux identiques du fichier fini en un seul objet et repointe toutes les références. Deux flux sont le même quand **le dictionnaire et les octets** coïncident, et la passe tourne jusqu'à point fixe, bornée à huit tours.
+
+**Pourquoi.** Un bandeau qui est un document est encadré une fois par page (D39), donc le navigateur dessine le logo de l'en-tête à la page une, le redessine à la page deux, et émet une image neuve à chaque fois. Mesuré sur un devis de dix-huit pages d'un projet de référence (#32) : **69 objets image pour 18 images distinctes**, les copies coûtant 1,2 Mo d'un fichier de 2,1. wkhtmltopdf charge son en-tête une fois et fait pointer chaque page sur le même objet — il a 18 objets pour 18 images.
+
+Après la passe : **18 objets, comme la référence, et le fichier tombe de 2 095 ko à 677 ko**, à pagination et texte identiques.
+
+**Le dictionnaire compte autant que les octets.** Deux images peuvent partager leurs pixels et différer par leur masque doux ou leur espace colorimétrique ; les fondre changerait la page. L'empreinte prend donc chaque entrée du dictionnaire, triée par nom pour que l'ordre d'écriture ne compte pas, puis le contenu.
+
+**Le point fixe.** Le dictionnaire d'une copie pointe sur ses propres copies — une image sur son `/SMask`, ce masque sur son espace colorimétrique —, donc deux images ne deviennent identiques qu'une fois leurs enfants partagés. Chaque tour rend le suivant possible. La borne existe parce qu'un fichier malformé ne doit pas faire tourner une conversion en rond, pas parce qu'un tour supplémentaire serait utile : tout tour qui change quelque chose retire au moins un objet.
+
+**Sa place.** Après la fusion, les bandeaux, les liens retour et les métadonnées : c'est la seule passe qui ne change aucune page, seulement le nombre d'objets qui disent la même chose, donc elle ne peut rien casser de ce qui la précède et profite de tout ce qui l'a précédée.
+
+**Écarté.** Charger le document de bandeau une seule fois et le réutiliser : c'est l'architecture de D38 et D39, où chaque page a son cadre parce que les substitutions — `[page]`, `[topage]` — y diffèrent ; les images sont identiques, pas les pages. Déduplicater dans le navigateur : rien dans le protocole ne le permet, et la feuille de bandeaux est imprimée d'un bloc. Ne dédupliquer que les images : les polices sont répétées de la même façon, et une empreinte qui vaut pour l'une vaut pour l'autre. Comparer les seuls octets : un masque doux différent passerait à travers, et le défaut serait invisible jusqu'à ce qu'un document le montre.

@@ -1145,6 +1145,12 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
         },
     )?;
 
+    // Last, on the finished file: a band that is a document is framed once per
+    // page, so the browser emits the header's logo again for every one of them
+    // (D62). Sharing them is the only pass here that changes no page — it
+    // changes how many objects say the same thing.
+    let pdf = rchtmltopdf_pdf::share_repeated_streams(&pdf)?;
+
     // Written before the media errors are judged, because D14 says a subresource
     // that failed under `abort` produces the document *and* exits 1. A wrapper
     // that raises on the exit code still has the PDF to look at.
