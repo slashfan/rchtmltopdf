@@ -362,6 +362,44 @@ pub fn rules(object: &ObjectSettings, document_url: &str) -> Rules {
     }
 }
 
+/// The `@page` rule that keeps a document's own from taking the margins (D60).
+///
+/// wkhtmltopdf ignores `@page` altogether: its margins, from the command line
+/// or from its defaults, always win. Chromium honours the document's rule, and
+/// `@page { margin: 0 }` is the commonest line in a print stylesheet —
+/// precisely because under wkhtmltopdf it never did anything. A migrated
+/// document therefore loses its margins here, and anything the bands draw lands
+/// on top of the content rather than beside it.
+///
+/// `preferCSSPageSize: false` already keeps the paper out of the document's
+/// hands (see [`print()`]); nothing kept the margins. So the numbers the print
+/// call carries are written back as a rule of our own, injected last, which
+/// wins on cascade order. `size: auto` goes with them: telling Chromium the
+/// paper does not stop a document's `size: A5` from deciding the boxes the
+/// content is broken into, and a page laid out for A5 on A4 paper is measurably
+/// wrong.
+///
+/// **Derived from the command, not from the settings.** The top and bottom
+/// margins are not final until [`reserve`] has added a band document's measured
+/// height, and a second computation from the settings would drift from the one
+/// that is actually printed.
+pub fn page_box(print: &Command) -> String {
+    let inches = |name: &str| {
+        print
+            .params
+            .get(name)
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0)
+    };
+    format!(
+        "@page {{ size: auto; margin: {}in {}in {}in {}in; }}",
+        inches("marginTop"),
+        inches("marginRight"),
+        inches("marginBottom"),
+        inches("marginLeft"),
+    )
+}
+
 /// Whether a document is one a cookie can be set for.
 ///
 /// A cookie on a `file://` document is meaningless -- there is no origin to
