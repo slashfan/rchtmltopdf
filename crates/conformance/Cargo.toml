@@ -12,7 +12,7 @@ publish = false
 [dependencies]
 # Resolved the way the product resolves it, so the harness cannot drift from
 # D09's ladder by testing against a browser the product would not have found.
-rchtmltopdf-browser = { version = "0.2.0", path = "../browser" }
+rchtmltopdf-browser = { version = "0.3.0", path = "../browser" }
 rchtmltopdf-core.workspace = true
 # Already in the lock through `browser`. The vendored font rides inside each
 # fixture as a `data:` URI, which has to be base64.
