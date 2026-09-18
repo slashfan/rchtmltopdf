@@ -10,6 +10,14 @@ behaves. If you are migrating, that is the section to read.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-18
+
+Seven compatibility changes and one that takes weight off every file, each measured against
+wkhtmltopdf 0.12.6.1 and recorded as a decision (D56 to D63), and nothing else: the caveats
+at the top of the README still apply. Three of the seven came from a production Symfony
+application rather than from a test corpus, and two of those ended in `exit 1` on documents
+that had always converted.
+
 ### Performance
 
 **A file no longer carries the same stream twice** (D62). A band that is a document is framed
