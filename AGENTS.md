@@ -160,8 +160,9 @@ Read these before changing behaviour they describe. Both are in French; the code
 and everything on GitHub are in English.
 
 - `docs/brief.md` — scope, V0 through V3, and what compatibility does and does not mean
-- `docs/decisions.md` — D01 to D43, binding, with the alternatives that were rejected
+- `docs/decisions.md` — D01 to D65, binding, with the alternatives that were rejected
 - `docs/migration.md` — why a migrated document changes size, for anything touching layout
+- `docs/compat-targets.md` — the projects compatibility is measured against, and what each one found
 - `CONTRIBUTING.md` — the branch, pull request and Conventional Commit workflow
 
 Module documentation carries the traps that cost real time: the descriptor plumbing in

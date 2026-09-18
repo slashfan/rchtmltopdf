@@ -108,6 +108,11 @@ A merge that does not touch the version publishes nothing: the workflow sees the
 exists and stops without building. A hand-pushed tag is still accepted, to republish, but it
 must match `Cargo.toml`.
 
+**Before raising it, re-measure.** The Symfony/Snappy harness (D65,
+`docs/compat-targets.md`) is the only thing that compares this binary to a real wkhtmltopdf,
+and its report records the commit it measured. A version published over a report older than
+the compatibility work it ships is a claim nobody checked.
+
 The release notes are the README's caveats followed by that version's section of
 `CHANGELOG.md`, which is why the changelog is kept as it is written: the **Compatibility**
 section is the one a migrating user reads first.
