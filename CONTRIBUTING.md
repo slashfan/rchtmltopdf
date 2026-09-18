@@ -85,9 +85,11 @@ like any other change; the merge does the rest: tag, four binaries, the Docker i
 release, the checksums.
 
 ```bash
-git switch -c version-0.2.0 main
-# raise `version` in the workspace manifest and the three internal dependency pins that
-# repeat it, move the `[Unreleased]` section of CHANGELOG.md under the new number, then
+git switch -c version-0.4.0 main
+# every place a manifest carries the old number — `version` itself and the four internal
+# dependency pins that repeat it, one of which is in the workspace manifest:
+grep -rn '0\.3\.0' Cargo.toml crates/*/Cargo.toml
+# raise them, move the `[Unreleased]` section of CHANGELOG.md under the new number, then
 # reflect the version in Cargo.lock:
 cargo update --workspace
 ```
