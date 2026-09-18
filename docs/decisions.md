@@ -820,3 +820,53 @@ Un fond dégradé ou une tuile pèsent moins que les tirets — et pèseraient b
 Une passe dans `crates/pdf` effondrant une suite de rectangles alignés en un trait pointillé : c'est la seule voie qui reprenne vraiment les octets — 137 ko sur 276 pour le pire fichier —, et la plus chère. Elle s'appliquerait à tous les fichiers du binaire, à la bordure `dashed` du tableau d'un utilisateur comme à notre filet, que rien ne distingue de l'autre. D62 pouvait se démontrer : mêmes octets, moins d'objets, mêmes pages ; celle-ci approxime un dessin. Et elle retirerait à la conformance l'instrument avec lequel elle mesure l'indentation des entrées, pour financer l'optimisation qui l'a cassé.
 
 `--disable-dotted-lines` par défaut : la ligne de commande décide ce que le document montre, et wkhtmltopdf dessine ce filet.
+
+## D65 — La matrice de compatibilité de D15 n'est pas un fichier de ce dépôt
+
+**Choix.** La clause « matrice » de D15 est remplacée. Aucun test piloté par table ne
+rejouera ici des jeux d'options étiquetés KnpSnappy / Laravel Snappy / manuel wkhtmltopdf.
+Ce qui tient la promesse est en deux endroits : `crates/conformance`, 150 tests structurels
+contre le Chromium épinglé, en CI ; et le harnais Symfony/Snappy hors dépôt, 72 cas et 55
+options distinctes par-dessus les trois que Snappy pose toujours, qui compare au binaire
+réel dans le même conteneur. Tout le reste de D15 tient : assertions structurelles sur le
+PDF, Chromium réel et épinglé en CI, pas de comparaison pixel. Les cibles sont enregistrées
+dans `compat-targets.md`.
+
+**Pourquoi. Une matrice écrite ici n'aurait pas de référence.** Ses valeurs attendues
+seraient notre lecture du manuel, gelée dans une table — et c'est exactement là que nous
+avions tort. Les dix défauts que le harnais a trouvés (#107 à #115, #122) l'ont été en
+comparant à ce que le binaire fait, pas à ce qu'on croyait qu'il faisait : `[section]`
+nommait le dernier titre de la page et D38 documentait cette règle comme un choix (#109) ;
+une couverture ne comptait pas dans `[page]` et D38 comme D40 le disaient ainsi (#108). Une
+table écrite de notre main aurait porté ces deux lignes-là comme attendues, et elle aurait
+été verte. Le corpus a même appris une chose qu'aucune lecture ne donnait : `knp-snappy`
+passe `--lowquality` sur toutes les lignes de commande qu'il construit, sur toutes les
+applications qui l'utilisent.
+
+**Et la référence ne peut pas entrer dans `cargo test`.** Le `.deb` officiel demande un Qt
+patché, une image bookworm et un jeu de polices figé — `fonts-liberation` est porteur, c'est
+ce sur quoi les bandeaux de wkhtmltopdf retombent quand ils demandent Arial, et une métrique
+qui diffère déplace chaque césure puis le nombre de pages. Là où la référence existe, dans
+l'image du harnais, l'instrument est meilleur qu'une table : personne n'y écrit la valeur
+attendue, donc personne ne peut l'écrire fausse.
+
+**Ce que #30 avait raison d'exiger, et qui reste tenu.** Chaque cas porte le code de sortie
+attendu **et** si stderr doit être vide : c'est le couple que KnpSnappy lit pour lever une
+exception (D14), et une assertion qui ignore l'un des deux teste autre chose. Il est tenu
+par `crates/cli/tests/binary.rs` et `crates/conformance/tests/failures.rs`, et une option
+nouvelle qui peut échouer y ajoute son cas. La ligne de commande en forme de KnpSnappy
+reste dans `grammar.rs`.
+
+**Écarté.** La construire telle que décrite : verte, et fausse aux endroits ci-dessus.
+Faire entrer le `.deb` de référence dans cette CI : une seconde image, un Qt patché, un jeu
+de polices, une question de licence et deux minutes par exécution, pour refaire ce que le
+harnais fait déjà — à reconsidérer comme tâche planifiée le jour où le harnais cesserait
+d'être rejoué. Rapatrier le harnais dans ce dépôt : une application PHP et un `docker
+compose` dans un espace de travail Rust, dont la porte d'entrée ne décrirait plus ce qu'elle
+garde. Fermer #30 sans décision : le registre de ce qui a été écarté est la raison d'être de
+ce fichier.
+
+**Ce qui le garde honnête.** Chaque rapport du harnais inscrit le commit rchtmltopdf mesuré
+et la version de Chromium, et le rapport est commité chez lui : un rapport plus vieux que ce
+qu'il défend le dit de lui-même. La règle qui va avec, portée par `CONTRIBUTING.md` : on
+rejoue le harnais avant de lever la version (D50).

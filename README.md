@@ -22,10 +22,12 @@ recent headless Chromium driven over the Chrome DevTools Protocol.
 
 The promise is **functional CLI compatibility, not pixel-perfect output**. See
 [docs/brief.md](docs/brief.md) for the scope, [docs/decisions.md](docs/decisions.md) for
-the design decisions and the alternatives that were rejected, and
-[docs/migration.md](docs/migration.md) for what changes when you switch.
+the design decisions and the alternatives that were rejected,
+[docs/migration.md](docs/migration.md) for what changes when you switch, and
+[docs/compat-targets.md](docs/compat-targets.md) for the projects that compatibility is
+measured against.
 
-Those two design documents are written in French; the code, the tests and everything on
+Those documents are written in French; the code, the tests and everything on
 GitHub are in English.
 
 ## State
