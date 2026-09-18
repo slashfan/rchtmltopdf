@@ -43,9 +43,10 @@ nothing below rustdoc will tell you.
 
 The version in `Cargo.toml` commands (D50): a merge to `main` that raises it publishes that
 version, and nothing else does. CI builds with `--locked`, so raising the version means
-`cargo update --workspace` in the same commit, and the pins in `crates/cli/Cargo.toml` and
-`crates/conformance/Cargo.toml` repeat the number. Never push a tag by hand. CONTRIBUTING.md
-has the guards.
+`cargo update --workspace` in the same commit, and four internal dependency pins repeat the
+number: `rchtmltopdf-core` in the workspace manifest itself, `rchtmltopdf-browser` and
+`rchtmltopdf-pdf` in `crates/cli/Cargo.toml`, and `rchtmltopdf-browser` in
+`crates/conformance/Cargo.toml`. Never push a tag by hand. CONTRIBUTING.md has the guards.
 
 ## Five rules the code will not tell you
 
