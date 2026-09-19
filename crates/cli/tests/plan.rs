@@ -221,6 +221,18 @@ fn an_option_that_is_not_built_may_still_be_understood() {
     assert!(!changes_the_conversion(copies));
 }
 
+/// An option of our own is held to the same bar as one of wkhtmltopdf's.
+///
+/// `--tagged-pdf` is the first extension that decides something about the file
+/// rather than about the browser or about this program's own reporting (D66),
+/// so it is the first one a plan can see at all.
+#[test]
+fn asking_for_the_accessibility_structure_changes_the_conversion() {
+    let spec = table::lookup_long("tagged-pdf").expect("in the table");
+    assert_eq!(spec.support, Support::Extension);
+    assert!(changes_the_conversion(spec));
+}
+
 /// The exemption list is a promise about tests elsewhere. An entry naming an
 /// option that no longer exists, or one the table no longer advertises, is a
 /// promise about nothing.

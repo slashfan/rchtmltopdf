@@ -1145,6 +1145,16 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
         },
     )?;
 
+    // Chromium tags every file it prints, and builds the outline out of the
+    // tags, so they are asked for and then dropped: wkhtmltopdf wrote no
+    // structure tree, and on a measured document it was a fifth of the weight
+    // (D66). `--tagged-pdf` keeps it. A merge has already left it behind, so
+    // this is the single-document path taking off what the merge would have.
+    let pdf = match settings.global.tagged_pdf {
+        true => pdf,
+        false => rchtmltopdf_pdf::drop_structure_tree(&pdf)?,
+    };
+
     // Last, on the finished file: a band that is a document is framed once per
     // page, so the browser emits the header's logo again for every one of them
     // (D62). Sharing them is the only pass here that changes no page — it

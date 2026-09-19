@@ -237,6 +237,13 @@ pub struct GlobalSettings {
     /// so the last `--page-offset` written on the line wins wherever it was
     /// written (D51). Nought, as in wkhtmltopdf.
     pub page_offset: i64,
+    /// `--tagged-pdf`: keep the accessibility structure tree Chromium writes.
+    ///
+    /// Ours, not wkhtmltopdf's, and off by default because wkhtmltopdf never
+    /// wrote one: a tagged file is the browser's default and the heavier of
+    /// the two, and a drop-in replacement that silently doubled a file would
+    /// be the surprise (D66).
+    pub tagged_pdf: bool,
 }
 
 impl Default for GlobalSettings {
@@ -253,6 +260,7 @@ impl Default for GlobalSettings {
             log_level: LogLevel::default(),
             browser: BrowserSettings::default(),
             page_offset: 0,
+            tagged_pdf: false,
         }
     }
 }

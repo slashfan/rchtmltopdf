@@ -600,6 +600,7 @@ fn our_own_options_are_not_position_sensitive() {
         "in.html --timeout 5 out.pdf",
         "in.html out.pdf --dump-parse",
         "page in.html --no-sandbox out.pdf",
+        "in.html --tagged-pdf out.pdf",
     ] {
         assert!(tokenize(split(line)).is_ok(), "`{line}` should be accepted");
     }

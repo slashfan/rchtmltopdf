@@ -10,6 +10,24 @@ behaves. If you are migrating, that is the section to read.
 
 ## [Unreleased]
 
+### Performance
+
+**The accessibility structure Chromium writes is no longer carried** (D66). It tags every
+file it prints — an object per paragraph, per table row and per cell — and wkhtmltopdf wrote
+none. On a nine-page table that was 3,595 structure objects out of 3,641, and 512 kB against
+48 kB without them; on an eighteen-page quotation from a reference project, a fifth of the
+file. Same pages, same text, same bookmarks.
+
+The tags cannot simply not be asked for: Chromium derives the document outline from them, so
+a print with tagging off comes back with no bookmarks at all. The browser tags, the outline
+is built, and the tree it was built from is dropped from the finished file.
+
+### Added
+
+**`--tagged-pdf`** keeps that structure, for a PDF that has to be read by a screen reader or
+meet an accessibility requirement. Ours, not wkhtmltopdf's. A conversion of several documents
+does not keep it either way: the merge leaves it behind, as it always has.
+
 ## [0.3.0] - 2026-09-18
 
 Seven compatibility changes and one that takes weight off every file, each measured against

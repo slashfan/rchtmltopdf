@@ -218,6 +218,7 @@ pub fn apply_global(
             .extra_args
             .push(value(occurrence).to_string()),
         "no-sandbox" => global.browser.no_sandbox = true,
+        "tagged-pdf" => global.tagged_pdf = true,
 
         // --- the outline ------------------------------------------------------
         "outline" => global.outline.enabled = true,

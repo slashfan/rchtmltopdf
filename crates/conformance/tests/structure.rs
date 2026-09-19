@@ -248,3 +248,51 @@ fn margins_put_the_content_where_it_was_asked_for() {
     close(paper.right - painted.right, mm(right_mm), "right margin");
     close(paper.top - painted.top, mm(top_mm), "top margin");
 }
+
+// --- what the file carries besides its pages ---------------------------------
+
+/// Chromium tags every file it prints, wkhtmltopdf never tagged one, and the
+/// tags are most of what a text-heavy file weighs: a nine-page table came to
+/// 3,595 structure objects of 3,641, and 512 kB against 48 kB without them
+/// (D66). So the default is a file shaped like wkhtmltopdf's, and
+/// `--tagged-pdf` is how the structure is asked for.
+///
+/// **The outline is the thing that could break.** Chromium builds it out of
+/// the tags, and a bookmark points at its structure element as well as at its
+/// page, so a file that loses the tree and keeps its bookmarks is the whole
+/// claim of this pass.
+#[test]
+fn a_file_carries_the_accessibility_structure_only_when_it_is_asked_for() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("tagged");
+    let body = "<h1>Heading</h1><p>A paragraph.</p>\
+                <h1 style=\"page-break-before:always\">Second</h1><p>More.</p>";
+
+    let plain = convert(&scratch, "untagged", body, &[]);
+    assert!(
+        !plain.is_tagged(),
+        "the default file should carry no structure tree: {}",
+        plain.describe()
+    );
+    let bookmarks: Vec<String> = plain
+        .outline()
+        .into_iter()
+        .map(|entry| entry.title)
+        .collect();
+    assert_eq!(
+        bookmarks,
+        ["Heading", "Second"],
+        "dropping the tree took the bookmarks with it: {}",
+        plain.describe()
+    );
+
+    let tagged = convert(&scratch, "tagged", body, &["--tagged-pdf"]);
+    assert!(
+        tagged.is_tagged(),
+        "--tagged-pdf should keep the structure tree: {}",
+        tagged.describe()
+    );
+    assert_eq!(tagged.page_count(), plain.page_count());
+}

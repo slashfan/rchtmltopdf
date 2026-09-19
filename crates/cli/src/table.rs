@@ -1160,6 +1160,13 @@ pub const EXTENSION_OPTIONS: &[OptionSpec] = &[
         Extension,
         "Print how the command line was understood, then exit without converting",
     ),
+    OptionSpec::flag(
+        "tagged-pdf",
+        None,
+        Global,
+        Extension,
+        "Keep the accessibility structure Chromium generates (a heavier file)",
+    ),
 ];
 
 /// The table, section by section, in the order wkhtmltopdf's help prints them.

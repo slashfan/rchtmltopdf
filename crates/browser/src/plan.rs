@@ -178,7 +178,7 @@ impl Plan {
             launch: launch(global, object),
             prepare: prepare(object, document_url),
             load: LoadPlan::new(&object.load),
-            print: print(&global.page, object, &global.outline),
+            print: print(&global.page, object, &global.outline, global.tagged_pdf),
             context,
             deadline: global.timeout,
             requests: rules(object, document_url),
@@ -549,7 +549,16 @@ pub fn viewport(web: &WebSettings) -> Command {
 /// No bands: since D38 they are printed afterwards as a document of their own
 /// and stamped onto the pages, so the browser is told to draw none and the
 /// margins are all that is decided here.
-pub fn print(page: &PageSetup, object: &ObjectSettings, outline: &OutlineSettings) -> Command {
+///
+/// `tagged` is `--tagged-pdf`, and it is global because the file is one: it
+/// travels on its own rather than inside `object`, which carries what
+/// wkhtmltopdf lets a document decide for itself.
+pub fn print(
+    page: &PageSetup,
+    object: &ObjectSettings,
+    outline: &OutlineSettings,
+    tagged: bool,
+) -> Command {
     let web = &object.web;
 
     // A band is anchored to the paper edge and reaches towards the content, so
@@ -599,6 +608,13 @@ pub fn print(page: &PageSetup, object: &ObjectSettings, outline: &OutlineSetting
             // depth is cut afterwards (`Finishing`), and a document kept out
             // of the outline is one that was never asked for it.
             "generateDocumentOutline": outline_wanted(outline, object),
+            // **Chromium derives the outline from the tags.** Turning tagging
+            // off returns a file with no bookmarks at all, whatever
+            // `generateDocumentOutline` says — measured, not read. So the tags
+            // are asked for whenever an outline is wanted, and it is the
+            // *tree* that is dropped from the finished file, by the pdf crate,
+            // unless `--tagged-pdf` keeps it (D66).
+            "generateTaggedPDF": tagged || outline_wanted(outline, object),
             // Not the default. The default returns the whole document
             // base64-encoded inside one protocol message, and a document of any
             // size exceeds the message limit.
@@ -754,6 +770,10 @@ pub fn band_print(page: &PageSetup) -> Command {
             "preferCSSPageSize": false,
             "displayHeaderFooter": false,
             "generateDocumentOutline": false,
+            // Never, whatever `--tagged-pdf` says: a sheet of bands is stamped
+            // onto the pages and its catalog is left behind, so a structure
+            // tree here is work nobody would ever read (D66).
+            "generateTaggedPDF": false,
             "transferMode": "ReturnAsStream",
         }),
     )
@@ -897,6 +917,7 @@ mod tests {
             &PageSetup::default(),
             &with_header_document(),
             &OutlineSettings::default(),
+            false,
         );
         assert!((margin_top(&command) - 5.0).abs() < 1e-9, "{command:?}");
         // Untouched on the side that has no document.
@@ -925,7 +946,12 @@ mod tests {
             },
             ..PageSetup::default()
         };
-        let command = print(&named, &with_header_document(), &OutlineSettings::default());
+        let command = print(
+            &named,
+            &with_header_document(),
+            &OutlineSettings::default(),
+            false,
+        );
         assert!((margin_top(&command) - 20.0).abs() < 1e-9, "{command:?}");
         assert!(!sized_by_its_document(&with_header_document().header, true));
         assert!(sized_by_its_document(&with_header_document().header, false));
@@ -941,6 +967,41 @@ mod tests {
         };
         assert!(!outline_wanted(&none, &page_object()));
         assert!(outline_wanted(&none, &with_header_document()));
+    }
+
+    /// The browser is asked to tag for two different reasons, and only one of
+    /// them is `--tagged-pdf`: it builds the outline out of the tags, so a
+    /// print that wants bookmarks has to ask for them even though the tree is
+    /// dropped from the finished file afterwards (D66).
+    #[test]
+    fn the_tags_are_asked_for_when_the_outline_or_the_reader_needs_them() {
+        let no_outline = OutlineSettings {
+            enabled: false,
+            ..OutlineSettings::default()
+        };
+
+        // Neither wanted: the browser does the work of tagging for nobody.
+        let bare = print(&PageSetup::default(), &page_object(), &no_outline, false);
+        assert_eq!(bare.params["generateTaggedPDF"], json!(false));
+
+        // Asked for on its own.
+        let kept = print(&PageSetup::default(), &page_object(), &no_outline, true);
+        assert_eq!(kept.params["generateTaggedPDF"], json!(true));
+
+        // The default: an outline is wanted, so the tags are, whatever the
+        // file ends up carrying.
+        let outlined = print(
+            &PageSetup::default(),
+            &page_object(),
+            &OutlineSettings::default(),
+            false,
+        );
+        assert_eq!(outlined.params["generateTaggedPDF"], json!(true));
+
+        // A sheet of bands is stamped onto the pages and its catalog is left
+        // behind, so nothing it tagged could ever be read.
+        let sheet = band_print(&PageSetup::default());
+        assert_eq!(sheet.params["generateTaggedPDF"], json!(false));
     }
 
     /// The document is laid out at the width the frame will give it.
@@ -979,7 +1040,12 @@ mod tests {
             orientation: Orientation::Landscape,
             ..PageSetup::default()
         };
-        let command = print(&landscape, &page_object(), &OutlineSettings::default());
+        let command = print(
+            &landscape,
+            &page_object(),
+            &OutlineSettings::default(),
+            false,
+        );
         assert_eq!(command.params["landscape"], json!(false));
         // 297mm, the long edge, is now the width.
         let width = command.params["paperWidth"].as_f64().unwrap();

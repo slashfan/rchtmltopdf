@@ -257,6 +257,18 @@ impl Pdf {
         }
     }
 
+    /// Whether the file carries the accessibility structure tree.
+    ///
+    /// Read from the catalog, which is where a reader looks for it: a file
+    /// whose `StructTreeRoot` is gone is untagged whatever its pages still
+    /// carry. Chromium writes one unless it is told not to, and wkhtmltopdf
+    /// never wrote any (D66).
+    pub fn is_tagged(&self) -> bool {
+        self.document
+            .catalog()
+            .is_ok_and(|catalog| catalog.get(b"StructTreeRoot").is_ok())
+    }
+
     /// One entry from the document's Info dictionary, the way a reader shows it.
     ///
     /// Decodes the two string encodings a PDF has: Latin-1, or UTF-16 big endian
