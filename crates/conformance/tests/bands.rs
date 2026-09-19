@@ -296,3 +296,41 @@ fn default_header_draws_a_band_with_a_rule() {
         pdf.describe()
     );
 }
+
+/// The sheet stamped onto each page is a stream this program writes, and it
+/// was going out plain where everything the browser hands over is deflated:
+/// 2.7 kB a page, near a tenth of a measured eighteen-page file (D67). What
+/// stays plain is the two-byte `q` and `Q` around the page's own drawing,
+/// which a zlib header would make bigger.
+#[test]
+fn the_sheet_stamped_onto_a_page_is_not_carried_plain() {
+    let Some(_browser) = require_chromium() else {
+        return;
+    };
+    let scratch = Scratch::new("deflate");
+    let header = fixture::write(
+        scratch.path(),
+        "header.html",
+        "<div style=\"border-bottom:1px solid #333\">A header, with a rule under it</div>",
+    );
+    let page = fixture::write(scratch.path(), "body.html", BODY);
+
+    let pdf = convert(
+        &page,
+        &[
+            "--header-html",
+            &header.display().to_string(),
+            "--enable-local-file-access",
+        ],
+    );
+
+    // Not nought: Chromium writes glyph procedures and one-line form contents
+    // of about sixty bytes, which a zlib header would make bigger. The bound is
+    // what nothing worth deflating can hide under.
+    let plain = pdf.plain_streams();
+    assert!(
+        plain.iter().all(|size| *size < 128),
+        "a stream went out plain: {plain:?} in {}",
+        pdf.describe()
+    );
+}

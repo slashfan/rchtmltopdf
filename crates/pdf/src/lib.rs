@@ -1075,6 +1075,39 @@ pub fn share_repeated_streams(pdf: &[u8]) -> Result<Vec<u8>, Error> {
     Ok(out)
 }
 
+/// Deflate the streams that carry no filter, on the finished file (D67).
+///
+/// Everything the browser hands over is already deflated; what is not is what
+/// **this program** writes. A band that is a document is stamped onto every
+/// page (D38), and each stamp adds the sheet's drawing as a stream of its own:
+/// measured on an eighteen-page quotation from a reference project (#32),
+/// 2.7 kB a page written plain, 296 kB of a 532 kB file, which deflates to 62.
+/// Over the project's 21 documents: 274 kB of 4,034, near a tenth of every
+/// quotation.
+///
+/// A stream is left alone when deflating it would not pay — the `q` and `Q`
+/// that wrap a page's own drawing are two bytes, and a zlib header is more
+/// than that.
+///
+/// **After the sharing pass, not before.** Two streams that say the same thing
+/// are collapsed while their bytes are still the bytes they were written as;
+/// deflating first would leave that comparison reading two compressed blobs.
+pub fn deflate_streams(pdf: &[u8]) -> Result<Vec<u8>, Error> {
+    let mut document = Document::load_mem(pdf).map_err(fail)?;
+
+    for object in document.objects.values_mut() {
+        if let Object::Stream(stream) = object {
+            // Skips a stream that already carries a filter, and keeps the
+            // result only when it is smaller than what it replaces.
+            stream.compress().map_err(fail)?;
+        }
+    }
+
+    let mut out = Vec::with_capacity(pdf.len());
+    document.save_to(&mut out).map_err(fail)?;
+    Ok(out)
+}
+
 /// What makes two streams the same one: every entry of the dictionary, by a
 /// name sorted so the writing order cannot matter, and then the bytes.
 fn fingerprint(stream: &Stream) -> Vec<u8> {
@@ -2643,6 +2676,60 @@ mod tests {
             items.first().map(|item| item.title.as_str()),
             Some("Heading"),
             "the bookmarks went with the tree"
+        );
+    }
+
+    /// Everything the browser hands over is deflated already; what goes out
+    /// plain is what this program wrote itself, the band stamped onto every
+    /// page above all (D67). And the two-byte wrappers around a page's own
+    /// drawing are left alone, because a zlib header is bigger than they are.
+    #[test]
+    fn the_streams_this_program_wrote_go_out_deflated() {
+        let mut document = Document::load_mem(&two_pages()).expect("should parse");
+        let drawing = "BT (a line of a band, drawn again and again) Tj ET\n".repeat(64);
+        let band = document.add_object(Stream::new(dictionary! {}, drawing.clone().into_bytes()));
+        let wrapper = document.add_object(Stream::new(dictionary! {}, b"q\n".to_vec()));
+        let page = document.page_iter().next().expect("a page");
+        let own = document
+            .get_dictionary(page)
+            .and_then(|page| page.get(b"Contents"))
+            .expect("a page draws something")
+            .clone();
+        document.get_dictionary_mut(page).expect("a page").set(
+            "Contents",
+            vec![Object::Reference(wrapper), own, Object::Reference(band)],
+        );
+        let mut before = Vec::new();
+        document.save_to(&mut before).expect("should save");
+
+        let after = deflate_streams(&before).expect("should rewrite");
+        assert!(
+            after.len() < before.len(),
+            "{} bytes for {}",
+            after.len(),
+            before.len()
+        );
+
+        let written = Document::load_mem(&after).expect("should parse");
+        let stream = |id: ObjectId| {
+            written
+                .get_object(id)
+                .and_then(Object::as_stream)
+                .expect("a stream")
+        };
+        let deflated = stream(band);
+        assert_eq!(
+            deflated.dict.get(b"Filter").and_then(Object::as_name).ok(),
+            Some(b"FlateDecode".as_slice())
+        );
+        assert_eq!(
+            deflated.decompressed_content().expect("should inflate"),
+            drawing.as_bytes(),
+            "the drawing came back changed"
+        );
+        assert!(
+            stream(wrapper).dict.get(b"Filter").is_err(),
+            "two bytes were deflated into more than two"
         );
     }
 
