@@ -22,6 +22,11 @@ The tags cannot simply not be asked for: Chromium derives the document outline f
 a print with tagging off comes back with no bookmarks at all. The browser tags, the outline
 is built, and the tree it was built from is dropped from the finished file.
 
+**The streams this program writes are deflated too** (D67). Everything the browser hands over
+is compressed already; a band that is a document is stamped onto every page, and each stamp
+was adding the sheet's drawing as a plain stream — 2.7 kB a page, 296 kB of a 532 kB
+quotation, which deflate to 62. Across a reference project's 21 documents, 274 kB of 4,034.
+
 ### Added
 
 **`--tagged-pdf`** keeps that structure, for a PDF that has to be read by a screen reader or

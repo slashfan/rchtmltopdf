@@ -1161,6 +1161,12 @@ pub async fn convert(settings: &Settings) -> Result<ExitCode, ConvertError> {
     // changes how many objects say the same thing.
     let pdf = rchtmltopdf_pdf::share_repeated_streams(&pdf)?;
 
+    // And after that, the streams this program wrote itself: the browser
+    // deflates everything it hands over, the band stamped onto each page was
+    // going out plain, and on a measured quotation that was near a tenth of
+    // the file (D67).
+    let pdf = rchtmltopdf_pdf::deflate_streams(&pdf)?;
+
     // Written before the media errors are judged, because D14 says a subresource
     // that failed under `abort` produces the document *and* exits 1. A wrapper
     // that raises on the exit code still has the PDF to look at.

@@ -257,6 +257,24 @@ impl Pdf {
         }
     }
 
+    /// The size of every stream carrying no filter, largest first.
+    ///
+    /// The browser deflates everything it hands over, so what comes back plain
+    /// is what this program wrote itself (D67). The two-byte `q` and `Q` that
+    /// wrap a page's own drawing are the ones worth leaving alone.
+    pub fn plain_streams(&self) -> Vec<usize> {
+        let mut sizes: Vec<usize> = self
+            .document
+            .objects
+            .values()
+            .filter_map(|object| object.as_stream().ok())
+            .filter(|stream| stream.dict.get(b"Filter").is_err())
+            .map(|stream| stream.content.len())
+            .collect();
+        sizes.sort_unstable_by(|a, b| b.cmp(a));
+        sizes
+    }
+
     /// Whether the file carries the accessibility structure tree.
     ///
     /// Read from the catalog, which is where a reader looks for it: a file

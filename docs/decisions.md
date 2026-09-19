@@ -923,3 +923,32 @@ changer. En faire une option par objet : le fichier est un, et l'arbre est une p
 fichier. Fusionner les arbres de plusieurs documents pour que `--tagged-pdf` tienne sur une
 conversion multiple : c'est le projet à part que l'en-tête du crate `pdf` annonce, et rien
 ne l'a demandé jusqu'ici.
+
+## D67 — Les flux que ce programme écrit sortent dégonflés
+
+**Choix.** Une passe de plus sur le fichier fini, `rchtmltopdf_pdf::deflate_streams`, dégonfle
+tout flux qui ne porte pas de filtre, et ne garde le résultat que s'il est plus petit que ce
+qu'il remplace. Elle tourne **après** le partage de D62 : deux flux qui disent la même chose
+sont rapprochés tant que leurs octets sont ceux qu'on a écrits.
+
+**Pourquoi.** Tout ce que le navigateur rend est déjà dégonflé. Ce qui sortait en clair est
+ce que ce programme écrit lui-même : un bandeau qui est un document est tamponné sur chaque
+page (D38), et chaque tampon ajoute le dessin de la feuille comme un flux à lui. Mesuré sur
+le devis de dix-huit pages du projet de référence (#32) : **2,7 ko par page écrits en clair,
+296 ko d'un fichier de 532, qui deviennent 62**. Sur les 21 documents du projet : 274 ko sur
+4 034, près d'un dixième de chaque devis. Les deux octets `q` et `Q` qui encadrent le dessin
+propre de la page restent en clair — un en-tête zlib est plus gros qu'eux, et la passe le
+voit.
+
+**Ce que la mesure a corrigé en route.** La piste de départ disait « Chromium comprime moins
+bien que Qt » : sur les mêmes pages, 167 ko dans le fichier contre 116 en zlib niveau 9. La
+mesure était fausse — elle comparait la somme de flux séparés à un seul bloc concaténé, et un
+bloc unique se comprime toujours mieux que ses morceaux. Recomprimer ce que le navigateur a
+rendu ne rend que 2 %. L'écart entier était dans nos propres flux.
+
+**Écarté.** Fusionner les tableaux `/Contents` d'une page en un flux unique : c'est ce que la
+fausse mesure désignait, il faut réécrire le contenu de chaque page pour les 2 % restants, et
+un flux de page réécrit est une page qui peut changer. Comprimer dans `stamp` au lieu d'une
+passe finale : il faudrait que chaque écrivain futur y pense, et l'oubli est exactement ce
+qui a produit ce défaut. Décoder et recomprimer aussi ce que le navigateur a rendu, images
+comprises : 2 % du fichier pour toucher chaque flux, dont ceux des images.
