@@ -202,3 +202,18 @@ sortie de `--dump-parse`, qui résout la plupart des cas immédiatement.
 n'ont pas d'équivalent Chromium et ne sont pas destinées à en avoir : `--grayscale`,
 `--lowquality`, `--enable-plugins`, les SVG de cases à cocher, entre autres. Elles sont
 acceptées pour ne pas casser les scripts existants, et ignorées.
+
+## PDF accessible : `--tagged-pdf`
+
+Chromium étiquette tout ce qu'il imprime — un objet de structure par paragraphe, par ligne
+de tableau et par cellule — et wkhtmltopdf n'en écrivait aucun. Par défaut le fichier sort
+comme celui de wkhtmltopdf, sans arbre de structure : sur un tableau de neuf pages, l'arbre
+pesait 3 595 objets sur 3 641, soit 512 ko contre 48 ko sans lui.
+
+`--tagged-pdf` le garde. C'est ce qu'il faut écrire si le PDF doit être lu par un lecteur
+d'écran ou répondre à une exigence d'accessibilité — le fichier est alors plus lourd, et
+c'est le prix de la chose. Les signets ne dépendent pas de l'option : ils sont présents dans
+les deux cas ([D66](decisions.md)).
+
+Une conversion de plusieurs documents ne garde pas l'arbre, même avec l'option : la fusion
+le laisse derrière elle, comme elle l'a toujours fait ([D66](decisions.md)).

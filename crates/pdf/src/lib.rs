@@ -19,7 +19,9 @@
 //! is left behind, and a link to another document of the same conversion
 //! pointed into it (#41). Everything else that hung off a catalog — the
 //! structure tree above all — is left behind: merging tagged structure is a
-//! project of its own, and wkhtmltopdf never wrote any.
+//! project of its own, and wkhtmltopdf never wrote any. A conversion of one
+//! document has no merge to lose it in, so [`drop_structure_tree`] is what
+//! takes it off that one (D66).
 //!
 //! **Fonts are not deduplicated (D34).** Chromium subsets a font per document,
 //! so two documents in the same face carry two different subsets under two
@@ -954,6 +956,63 @@ pub fn stamp(document: &[u8], overlay: &[u8]) -> Result<Vec<u8>, Error> {
 
     let mut out = Vec::with_capacity(document.len() + overlay.len());
     target.save_to(&mut out).map_err(fail)?;
+    Ok(out)
+}
+
+/// Drop the accessibility structure tree, keeping the outline built from it
+/// (D66).
+///
+/// Chromium tags every file it prints — a `/StructElem` per paragraph, per
+/// table row and per cell — and wkhtmltopdf never wrote one. The tree is most
+/// of what a text-heavy file weighs: measured on a nine-page table, 3,595
+/// structure objects of a 3,641 object file, 512 kB against 42 kB once they
+/// are gone; and on an eighteen-page quotation from a reference project (#32),
+/// 1,440 objects, a fifth of the file.
+///
+/// **The tags cannot simply not be asked for.** Chromium derives the document
+/// outline from them, so a print with tagging off comes back with no bookmarks
+/// at all, whatever `generateDocumentOutline` says. So the browser tags, the
+/// outline is built, and the tree it was built from is dropped here — after
+/// which the bookmarks are still bookmarks, because they never pointed into
+/// the tree.
+///
+/// What goes: the catalog's `/StructTreeRoot` and `/MarkInfo`, the
+/// `/StructParents` a page carries, the `/StructParent` an annotation or a
+/// form carries, the `/SE` on an outline entry, and then everything that is no
+/// longer reachable from the trailer, which is the tree itself.
+///
+/// **`/SE` is the one that matters.** A bookmark Chromium writes points at the
+/// heading's structure element as well as at the place on the page, so leaving
+/// it there keeps the whole tree reachable through the outline and the sweep
+/// takes nothing at all. A reader follows `/Dest`, which is untouched.
+///
+/// What stays: the marked content
+/// operators inside the page streams, `/P <</MCID 0>> BDC ... EMC`, which are
+/// two percent of a stream and legal with no tree above them — rewriting every content
+/// stream to save that would risk a page to save a rounding error.
+pub fn drop_structure_tree(pdf: &[u8]) -> Result<Vec<u8>, Error> {
+    let mut document = Document::load_mem(pdf).map_err(fail)?;
+
+    if let Ok(catalog) = document.catalog_mut() {
+        catalog.remove(b"StructTreeRoot");
+        catalog.remove(b"MarkInfo");
+    }
+    for object in document.objects.values_mut() {
+        let dictionary = match object {
+            Object::Dictionary(dictionary) => dictionary,
+            Object::Stream(stream) => &mut stream.dict,
+            _ => continue,
+        };
+        dictionary.remove(b"StructParents");
+        dictionary.remove(b"StructParent");
+        dictionary.remove(b"SE");
+    }
+    // Mark and sweep from the trailer: with the catalog entry gone, the tree
+    // is what nothing reaches any more.
+    document.prune_objects();
+
+    let mut out = Vec::with_capacity(pdf.len());
+    document.save_to(&mut out).map_err(fail)?;
     Ok(out)
 }
 
@@ -2485,6 +2544,115 @@ mod tests {
             !String::from_utf8_lossy(&out).contains("Deep"),
             "the cut entry was left in the bytes"
         );
+    }
+
+    /// A tagged document by hand: the tree, the keys that point into it from
+    /// the pages, and the `/SE` a bookmark carries.
+    fn tagged(labels: &[&str], heading: &'static str) -> Vec<u8> {
+        let mut document =
+            Document::load_mem(&outlined(labels, vec![leaf(heading, 0)])).expect("should parse");
+        let root = document.new_object_id();
+        let page_ids: Vec<ObjectId> = document.page_iter().collect();
+        let elements: Vec<Object> = page_ids
+            .iter()
+            .map(|page| {
+                Object::Reference(document.add_object(dictionary! {
+                    "Type" => "StructElem",
+                    "S" => "P",
+                    "P" => root,
+                    "Pg" => *page,
+                    "K" => 0,
+                }))
+            })
+            .collect();
+        let first = elements.first().cloned().expect("a page");
+        document.objects.insert(
+            root,
+            Object::Dictionary(dictionary! {
+                "Type" => "StructTreeRoot",
+                "K" => elements,
+            }),
+        );
+        for page in &page_ids {
+            if let Ok(page) = document.get_object_mut(*page).and_then(Object::as_dict_mut) {
+                page.set("StructParents", 0);
+            }
+        }
+
+        let outlines = document
+            .catalog()
+            .expect("a catalog")
+            .get(b"Outlines")
+            .and_then(Object::as_reference)
+            .expect("an outline");
+        let item = document
+            .get_dictionary(outlines)
+            .and_then(|outlines| outlines.get(b"First"))
+            .and_then(Object::as_reference)
+            .expect("an entry");
+        document
+            .get_object_mut(item)
+            .and_then(Object::as_dict_mut)
+            .expect("an entry")
+            .set("SE", first);
+
+        let catalog = document.catalog_mut().expect("a catalog");
+        catalog.set("StructTreeRoot", Object::Reference(root));
+        catalog.set("MarkInfo", dictionary! { "Marked" => true });
+
+        let mut out = Vec::new();
+        document.save_to(&mut out).expect("should save");
+        out
+    }
+
+    fn structure_elements(document: &Document) -> usize {
+        document
+            .objects
+            .values()
+            .filter(|object| {
+                object
+                    .as_dict()
+                    .and_then(|dictionary| dictionary.get(b"Type"))
+                    .and_then(Object::as_name)
+                    .is_ok_and(|kind| kind == b"StructElem")
+            })
+            .count()
+    }
+
+    /// **The bookmarks are what this could break.** Chromium builds the
+    /// outline out of the tags and points each entry at its structure element
+    /// as well as at its page, so a sweep that leaves `/SE` behind finds the
+    /// whole tree still reachable through the outline and takes nothing at all
+    /// (D66).
+    #[test]
+    fn the_structure_tree_goes_and_the_outline_stays() {
+        let pdf = tagged(&["A", "B"], "Heading");
+        let before = Document::load_mem(&pdf).expect("should parse");
+        assert_eq!(structure_elements(&before), 2);
+
+        let dropped = drop_structure_tree(&pdf).expect("should rewrite");
+        let after = Document::load_mem(&dropped).expect("should parse");
+        let catalog = after.catalog().expect("a catalog");
+        assert!(catalog.get(b"StructTreeRoot").is_err());
+        assert!(catalog.get(b"MarkInfo").is_err());
+        assert_eq!(structure_elements(&after), 0, "the tree survived the sweep");
+        assert_eq!(after.get_pages().len(), 2, "a page went with it");
+
+        let (_, items) = outline(&dropped, &keep(4)).expect("should read");
+        assert_eq!(
+            items.first().map(|item| item.title.as_str()),
+            Some("Heading"),
+            "the bookmarks went with the tree"
+        );
+    }
+
+    /// A document that was never tagged is not worth rewriting differently: the
+    /// pass is safe to run on everything, which is why the conversion does.
+    #[test]
+    fn a_document_with_no_structure_keeps_its_pages() {
+        let dropped = drop_structure_tree(&two_pages()).expect("should rewrite");
+        let after = Document::load_mem(&dropped).expect("should parse");
+        assert_eq!(after.get_pages().len(), 2);
     }
 
     #[test]

@@ -870,3 +870,56 @@ ce fichier.
 et la version de Chromium, et le rapport est commité chez lui : un rapport plus vieux que ce
 qu'il défend le dit de lui-même. La règle qui va avec, portée par `CONTRIBUTING.md` : on
 rejoue le harnais avant de lever la version (D50).
+
+## D66 — L'arbre de structure du navigateur est retiré du fichier fini, et `--tagged-pdf` le garde
+
+**Choix.** Chromium reçoit `generateTaggedPDF` sur chaque impression, vrai dès qu'un plan
+veut un signet ou que `--tagged-pdf` a été écrit. Une passe de plus sur le fichier fini,
+`rchtmltopdf_pdf::drop_structure_tree`, retire ensuite l'arbre : `/StructTreeRoot` et
+`/MarkInfo` du catalogue, les `/StructParents` d'une page, le `/StructParent` d'une
+annotation ou d'un formulaire, le `/SE` d'une entrée de signet, puis tout ce que le
+conteneur n'atteint plus. `--tagged-pdf`, option d'extension globale, saute la passe. Les
+opérateurs de contenu marqué restent dans les flux de page : ils valent 2 % d'un flux et
+sont légaux sans arbre au-dessus d'eux.
+
+**Pourquoi.** wkhtmltopdf n'a jamais écrit d'arbre de structure et Chromium en écrit
+toujours un : un objet par paragraphe, par ligne de tableau, **par cellule**. C'est ce qui
+reste du poids une fois D62 et D63 passés. Mesuré sur un tableau de neuf pages de ce dépôt :
+**3 595 objets de structure sur 3 641, et 512 ko qui tombent à 48**. Sur le devis de dix-huit
+pages du projet de référence (#32) : 1 440 objets, un cinquième du fichier. Le texte, la
+pagination, les polices et les images sont identiques des deux côtés.
+
+**Une option, pas une suppression.** Un PDF étiqueté est un PDF qu'un lecteur d'écran sait
+lire, et c'est un gain réel que le navigateur offre sans qu'on le lui demande. Ce qui est
+retiré, c'est le défaut : une application qui remplace wkhtmltopdf n'a pas commandé un
+fichier dix fois plus lourd, et celle qui veut l'accessibilité l'écrit.
+
+**Ce qui interdit la solution simple.** Ne pas demander les étiquettes du tout —
+`generateTaggedPDF: false` — produit un fichier **sans aucun signet**, quoi que dise
+`generateDocumentOutline` : Chromium dérive le plan du document de l'arbre de structure.
+Mesuré, pas lu. Donc le navigateur étiquette, le plan est construit, et c'est l'arbre qui
+part après. Ce que cela coûte est le travail d'étiquetage du navigateur, sur un document où
+`--no-outline` est écrit et `--tagged-pdf` ne l'est pas : le seul cas où l'impression
+n'étiquette pas.
+
+**Le piège, et il est entier dans `/SE`.** Un signet écrit par Chromium pointe sur l'élément
+de structure du titre autant que sur l'endroit de la page. Laisser cette clé en place garde
+tout l'arbre atteignable **par le plan du document**, et le balayage ne retire alors
+strictement rien — le catalogue est propre, le fichier pèse pareil, et rien ne le dit. Un
+lecteur suit `/Dest`, qui n'est pas touché. `crates/pdf/src/lib.rs` porte le test qui tient
+les deux moitiés : l'arbre part, les signets restent.
+
+**Sa place.** Après les métadonnées, avant le partage des flux de D62 : la passe retire des
+objets, donc celle qui les empreinte ensuite en voit moins. Une fusion de plusieurs
+documents a déjà laissé l'arbre derrière elle, comme le dit l'en-tête du crate `pdf` ; la
+passe est donc le chemin document unique qui retire ce que la fusion aurait retiré, et
+`--tagged-pdf` sur plusieurs documents ne garde rien. L'aide de l'option le dit.
+
+**Écarté.** Garder le défaut de Chromium et documenter le poids : c'est le fichier que
+personne n'a demandé, et l'écart contre la référence était du simple au décuple sur un
+document de tableaux. Retirer aussi les opérateurs de contenu marqué des flux : il faudrait
+réécrire chaque flux de page pour deux pour cent, et un flux réécrit est une page qui peut
+changer. En faire une option par objet : le fichier est un, et l'arbre est une propriété du
+fichier. Fusionner les arbres de plusieurs documents pour que `--tagged-pdf` tienne sur une
+conversion multiple : c'est le projet à part que l'en-tête du crate `pdf` annonce, et rien
+ne l'a demandé jusqu'ici.
